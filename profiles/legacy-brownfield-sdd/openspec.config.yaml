@@ -1,0 +1,16 @@
+schema: legacy-brownfield-sdd
+context: |
+  Proyecto legacy/brownfield gobernado por SistemaMultiagente_SDLC.
+  La investigacion debe declarar fuente primaria, secundaria, evidencia y drift.
+rules:
+  research:
+    - Declarar fuente primaria, secundaria, evidencia revisada y vacios.
+    - Documentar AS-IS y TO-BE cuando cambie un flujo existente.
+  proposal:
+    - Referenciar evidencia legacy y exclusiones de alcance.
+  specs:
+    - No inventar comportamiento no confirmado.
+  design:
+    - Explicar transicion, rollback, paridad y riesgos.
+  tasks:
+    - Incluir validaciones de migracion y readiness.

@@ -1,0 +1,20 @@
+version: 1
+defaultAllowlist:
+  - name: vercel-react-best-practices
+    source: vercel-labs/agent-skills
+    optional: true
+  - name: vercel-composition-patterns
+    source: vercel-labs/agent-skills
+    optional: true
+  - name: web-design-guidelines
+    source: vercel-labs/agent-skills
+    optional: true
+  - name: deploy-to-vercel
+    source: vercel-labs/agent-skills
+    optional: true
+  - name: bash-defensive-patterns
+    source: autoskills
+    optional: true
+rules:
+  - "La allowlist base es ejemplo portable; cada repo puede declarar overrides en sdlc.config.json."
+  - "Las skills externas complementan, no reemplazan, las skills protegidas."

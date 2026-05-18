@@ -1,0 +1,28 @@
+version: 1
+required_fields:
+  - manifestVersion
+  - frameworkVersion
+  - owner
+  - deadline
+  - freezeDate
+  - donors
+  - entries
+entry_fields:
+  - id
+  - sourceRepo
+  - sourceCommit
+  - sourcePath
+  - targetPath
+  - classification
+  - sanitization
+  - status
+classifications:
+  - core
+  - profile
+  - example
+  - exclude
+sanitization:
+  - none
+  - rewrite-generic
+  - sanitize-example
+  - exclude-sensitive

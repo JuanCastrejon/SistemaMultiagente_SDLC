@@ -1,0 +1,11 @@
+version: 1
+protected:
+  - commit
+  - enrich-us
+  - openspec-*
+  - contexto-proyecto
+  - orquestacion-multiagente
+  - documentacion-viva
+  - backend-audit
+policy:
+  rule: "Ninguna skill externa puede reemplazar estas capacidades internas sin ADR."

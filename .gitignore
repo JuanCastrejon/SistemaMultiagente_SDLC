@@ -1,0 +1,7 @@
+node_modules/
+.sdlc/backups/
+.sdlc/tmp/
+coverage/
+dist/
+*.log
+

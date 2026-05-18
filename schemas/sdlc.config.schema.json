@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/sistema-multiagente-sdlc/sdlc.config.schema.json",
+  "title": "SistemaMultiagente_SDLC config",
+  "type": "object",
+  "required": ["schemaVersion", "frameworkVersion", "project", "mode", "surfaces", "gitFlow", "openspec"],
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "frameworkVersion": { "type": "string" },
+    "project": {
+      "type": "object",
+      "required": ["name", "slug"],
+      "properties": {
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "organization": { "type": "string" }
+      }
+    },
+    "mode": { "type": "string", "enum": ["greenfield", "legacy"] },
+    "surfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "owner"],
+        "properties": {
+          "id": { "type": "string" },
+          "path": { "type": "string" },
+          "owner": { "type": "string" }
+        }
+      }
+    },
+    "gitFlow": {
+      "type": "object",
+      "required": ["integrationBranch", "stableBranch"],
+      "properties": {
+        "integrationBranch": { "type": "string" },
+        "stableBranch": { "type": "string" },
+        "branchPrefixes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "openspec": {
+      "type": "object",
+      "required": ["profile"],
+      "properties": {
+        "profile": { "type": "string", "enum": ["minimal", "expanded", "custom"] },
+        "customProfile": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["name", "workflows"],
+              "properties": {
+                "name": { "type": "string" },
+                "workflows": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

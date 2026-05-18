@@ -1,0 +1,15 @@
+schema: greenfield-sdd
+context: |
+  Proyecto nuevo gobernado por SistemaMultiagente_SDLC.
+  Investigar docs, backlog y prior art antes de proponer capacidades.
+rules:
+  research:
+    - Declarar objetivo, usuarios, KPI principal, riesgos y NFRs minimos.
+  proposal:
+    - Mantener cambios pequenos y trazables.
+  specs:
+    - Escribir comportamiento observable con Given/When/Then.
+  design:
+    - Registrar trade-offs y contratos entre superficies.
+  tasks:
+    - Dividir en slices verificables.

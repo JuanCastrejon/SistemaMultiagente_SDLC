@@ -1,0 +1,61 @@
+manifestVersion: 1
+frameworkVersion: 1.0.0
+owner: orquestador-opus
+deadline: 2026-05-25
+freezeDate: 2026-05-18
+status: v0.9-partial
+criticalFixPolicy:
+  - CVE/security
+  - bug que bloquea CI/CD
+  - regresion que rompe flujo SDLC validado
+  - corrupcion o perdida de datos de continuidad
+donors:
+  - id: donor-mature-sdlc
+    repo: source-of-truth-sdlc
+    commit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    role: source-of-truth maduro F0-F17, readiness, continuidad, Graphify, Obsidian, skills multi-entorno
+  - id: donor-pilot-core-profile-project
+    repo: pilot-core-profile-project
+    commit: de598a1
+    role: piloto del patron core/profile/project y analysis-first-sdd
+entries:
+  - id: core-phase-graph
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agent-state/phase-graph.yaml
+    targetPath: core/agent-state/phase-graph.yaml
+    classification: core
+    sanitization: rewrite-generic
+    status: extracted
+  - id: core-external-tools
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/agents/external-tools-matrix.md
+    targetPath: docs/guides/external-tools.md
+    classification: core
+    sanitization: rewrite-generic
+    status: pending-v1.1
+  - id: core-profile-project-pattern
+    sourceRepo: donor-pilot-core-profile-project
+    sourceCommit: de598a1
+    sourcePath: docs/proceso/template-sdlc-y-bootstrap-de-analisis.md
+    targetPath: docs/guides/core-profile-project.md
+    classification: core
+    sanitization: rewrite-generic
+    status: extracted
+  - id: greenfield-example
+    sourceRepo: synthetic
+    sourceCommit: n/a
+    sourcePath: n/a
+    targetPath: examples/task-manager-saas
+    classification: example
+    sanitization: sanitize-example
+    status: extracted
+  - id: legacy-example
+    sourceRepo: synthetic
+    sourceCommit: n/a
+    sourcePath: n/a
+    targetPath: examples/legacy-inventory-modernization
+    classification: example
+    sanitization: sanitize-example
+    status: extracted

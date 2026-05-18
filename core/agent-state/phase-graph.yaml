@@ -1,0 +1,25 @@
+version: 1
+updated: 2026-05-18
+phases:
+  F0: { name: Bootstrap, forward: [F1] }
+  F1: { name: Analisis requisitos, forward: [F2] }
+  F2: { name: Revision humana del borrador, forward: [F3] }
+  F3: { name: Issue local y validacion, forward: [F3_5] }
+  F3_5: { name: Branch desde integracion, forward: [F4] }
+  F4: { name: Handoff readiness-gate, forward: [F5] }
+  F5: { name: Planificacion SDD, forward: [F6] }
+  F6: { name: Handoff planificador-orquestador, forward: [F7] }
+  F7: { name: Orquestacion, forward: [F8] }
+  F8: { name: Implementacion, forward: [F9] }
+  F9: { name: QA tests, forward: [F10] }
+  F10: { name: Security review, forward: [F11] }
+  F11: { name: Commit y push, forward: [F12] }
+  F12: { name: Pull request, forward: [F13] }
+  F13: { name: Gate humano final, forward: [F14] }
+  F14: { name: Merge a integracion, forward: [F15] }
+  F15: { name: Verify post-merge, forward: [F16] }
+  F16: { name: Archive, forward: [F17] }
+  F17: { name: Doc viva y publish trace, forward: [] }
+escalation:
+  max_rework_attempts_per_phase: 2
+  block_until_human: true

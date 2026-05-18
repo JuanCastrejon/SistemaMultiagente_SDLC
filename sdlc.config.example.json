@@ -1,0 +1,62 @@
+{
+  "$schema": "./schemas/sdlc.config.schema.json",
+  "schemaVersion": 1,
+  "frameworkVersion": "1.0.0",
+  "project": {
+    "name": "Example Project",
+    "slug": "example-project",
+    "organization": "example-org"
+  },
+  "mode": "greenfield",
+  "stack": {
+    "backend": "<BACKEND_STACK>",
+    "frontend": "<FRONTEND_STACK>",
+    "mobile": "<MOBILE_STACK>"
+  },
+  "surfaces": [
+    {
+      "id": "backend",
+      "path": "apps/api",
+      "owner": "api-agent"
+    },
+    {
+      "id": "web",
+      "path": "apps/web",
+      "owner": "web-agent"
+    }
+  ],
+  "agents": {
+    "controlPlane": ["planificador-opus", "orquestador-opus"],
+    "specialistPlane": ["analista-requisitos", "arquitecto", "api-agent", "web-agent", "qa-security-review"]
+  },
+  "gitFlow": {
+    "integrationBranch": "develop",
+    "stableBranch": "main",
+    "branchPrefixes": ["feature/", "fix/", "docs/"]
+  },
+  "readiness": {
+    "defaultLevel": "L2",
+    "levels": ["L1", "L2", "L3"]
+  },
+  "openspec": {
+    "profile": "expanded",
+    "customProfile": null
+  },
+  "graphify": {
+    "enabled": true,
+    "scope": ["docs/", "openspec/", ".github/agents/", ".github/skills/", ".github/agent-state/"]
+  },
+  "obsidian": {
+    "enabled": true,
+    "vaultPath": "${VAULT_PATH}",
+    "memoryWorkspace": "${MEMORY_WORKSPACE}"
+  },
+  "backup": {
+    "keepLast": 5
+  },
+  "externalSkills": {
+    "allowlist": "core/skills/external-allowlist.yaml",
+    "protected": "core/skills/protected.yaml",
+    "overrides": []
+  }
+}
