@@ -1,0 +1,47 @@
+# SistemaMultiagente_SDLC — Template manifest
+#
+# Selectivo: solo los archivos listados aqui se instalan.
+# Walk ciego de templates/ esta prohibido por validator no-inline-managed-content.
+#
+# Campos por entry:
+#   source : path relativo dentro de templates/
+#   target : path destino en el repo consumidor
+#   modes  : opcional, lista de modes permitidos. Ausente = todos.
+version: 1
+templates:
+  - source: AGENTS.md
+    target: AGENTS.md
+  - source: indice-operativo.md
+    target: indice-operativo.md
+  - source: .sdlc/README.md
+    target: .sdlc/README.md
+  - source: .github/AGENTS.md
+    target: .github/AGENTS.md
+  - source: .github/agents/ownership-matrix.md
+    target: .github/agents/ownership-matrix.md
+  - source: .github/agent-state/phase-graph.yaml
+    target: .github/agent-state/phase-graph.yaml
+  - source: .github/agent-state/current-slice.md
+    target: .github/agent-state/current-slice.md
+  - source: .github/agent-state/handoffs/TEMPLATE.md
+    target: .github/agent-state/handoffs/TEMPLATE.md
+  - source: .github/agent-state/templates/phase-gate.md
+    target: .github/agent-state/templates/phase-gate.md
+  - source: .github/agent-state/telemetry/SCHEMA.md
+    target: .github/agent-state/telemetry/SCHEMA.md
+  - source: docs/guides/sdlc-multiagente.md
+    target: docs/guides/sdlc-multiagente.md
+  - source: openspec/config-greenfield.yaml
+    target: openspec/config.yaml
+    modes: [greenfield]
+  - source: openspec/config-legacy.yaml
+    target: openspec/config.yaml
+    modes: [legacy]
+  - source: graphifyignore
+    target: .graphifyignore
+  - source: scripts/continua.ps1
+    target: scripts/continua.ps1
+  - source: scripts/publish-trace.ps1
+    target: scripts/publish-trace.ps1
+  - source: scripts/export-graphify-obsidian.py
+    target: scripts/export-graphify-obsidian.py

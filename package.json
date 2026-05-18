@@ -10,10 +10,11 @@
   "scripts": {
     "sdlc": "node ./bin/sdlc.js",
     "test": "node ./tests/run-regression.mjs",
-    "validate": "npm run validate:config-schema && npm run validate:no-personal-paths && npm run validate:template-sanitization && npm run validate:manifest-integrity",
+    "validate": "npm run validate:config-schema && npm run validate:no-personal-paths && npm run validate:template-sanitization && npm run validate:no-inline-managed-content && npm run validate:manifest-integrity",
     "validate:config-schema": "node ./scripts/validate-config-schema.mjs",
     "validate:no-personal-paths": "node ./scripts/validate-no-personal-paths.mjs",
     "validate:template-sanitization": "node ./scripts/validate-template-sanitization.mjs",
+    "validate:no-inline-managed-content": "node ./scripts/validate-no-inline-managed-content.mjs",
     "validate:manifest-integrity": "node ./scripts/validate-manifest-integrity.mjs --allow-empty"
   },
   "engines": {
