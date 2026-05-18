@@ -45,3 +45,125 @@ templates:
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
     target: scripts/export-graphify-obsidian.py
+
+  # C1 — governance
+  - source: CLAUDE.md
+    target: CLAUDE.md
+
+  # C2 — agent-personas
+  - source: .github/agents/planificador-opus.md
+    target: .github/agents/planificador-opus.md
+  - source: .github/agents/orquestador-opus.md
+    target: .github/agents/orquestador-opus.md
+  - source: .github/agents/analista-requisitos.md
+    target: .github/agents/analista-requisitos.md
+    modes: [legacy]
+  - source: .github/agents/arquitecto.md
+    target: .github/agents/arquitecto.md
+  - source: .github/agents/api-agent.md
+    target: .github/agents/api-agent.md
+  - source: .github/agents/web-agent.md
+    target: .github/agents/web-agent.md
+  - source: .github/agents/qa-security-review.md
+    target: .github/agents/qa-security-review.md
+
+  # C3 — copilot-instructions (mode-specific)
+  - source: .github/copilot-instructions-greenfield.md
+    target: .github/copilot-instructions.md
+    modes: [greenfield]
+  - source: .github/copilot-instructions-legacy.md
+    target: .github/copilot-instructions.md
+    modes: [legacy]
+
+  # C4 — core-skills
+  - source: .claude/skills/contexto-proyecto/SKILL.md
+    target: .claude/skills/contexto-proyecto/SKILL.md
+  - source: .github/skills/contexto-proyecto/SKILL.md
+    target: .github/skills/contexto-proyecto/SKILL.md
+  - source: .github/skills/orquestacion-multiagente/SKILL.md
+    target: .github/skills/orquestacion-multiagente/SKILL.md
+  - source: .claude/skills/enrich-us/SKILL.md
+    target: .claude/skills/enrich-us/SKILL.md
+  - source: .github/skills/enrich-us/SKILL.md
+    target: .github/skills/enrich-us/SKILL.md
+  - source: .claude/skills/commit/SKILL.md
+    target: .claude/skills/commit/SKILL.md
+  - source: .github/skills/commit/SKILL.md
+    target: .github/skills/commit/SKILL.md
+  - source: .github/skills/openspec-propose/SKILL.md
+    target: .github/skills/openspec-propose/SKILL.md
+  - source: .github/skills/openspec-explore/SKILL.md
+    target: .github/skills/openspec-explore/SKILL.md
+  - source: .github/skills/openspec-apply/SKILL.md
+    target: .github/skills/openspec-apply/SKILL.md
+  - source: .github/skills/openspec-archive/SKILL.md
+    target: .github/skills/openspec-archive/SKILL.md
+  - source: .github/skills/openspec-verify/SKILL.md
+    target: .github/skills/openspec-verify/SKILL.md
+  - source: .github/skills/openspec-sync/SKILL.md
+    target: .github/skills/openspec-sync/SKILL.md
+  - source: .github/skills/openspec-ff/SKILL.md
+    target: .github/skills/openspec-ff/SKILL.md
+  - source: .github/skills/openspec-new/SKILL.md
+    target: .github/skills/openspec-new/SKILL.md
+  - source: .github/skills/openspec-continue/SKILL.md
+    target: .github/skills/openspec-continue/SKILL.md
+  - source: .github/skills/documentacion-viva/SKILL.md
+    target: .github/skills/documentacion-viva/SKILL.md
+  - source: .github/skills/operacion-cli-devops/SKILL.md
+    target: .github/skills/operacion-cli-devops/SKILL.md
+
+  # C7 — openspec-schemas
+  - source: openspec/schemas/legacy-brownfield-sdd/schema.yaml
+    target: openspec/schemas/legacy-brownfield-sdd/schema.yaml
+    modes: [legacy]
+  - source: openspec/schemas/legacy-brownfield-sdd/templates/research.md
+    target: openspec/schemas/legacy-brownfield-sdd/templates/research.md
+    modes: [legacy]
+  - source: openspec/schemas/legacy-brownfield-sdd/templates/proposal.md
+    target: openspec/schemas/legacy-brownfield-sdd/templates/proposal.md
+    modes: [legacy]
+  - source: openspec/schemas/legacy-brownfield-sdd/templates/spec.md
+    target: openspec/schemas/legacy-brownfield-sdd/templates/spec.md
+    modes: [legacy]
+  - source: openspec/schemas/legacy-brownfield-sdd/templates/design.md
+    target: openspec/schemas/legacy-brownfield-sdd/templates/design.md
+    modes: [legacy]
+  - source: openspec/schemas/legacy-brownfield-sdd/templates/tasks.md
+    target: openspec/schemas/legacy-brownfield-sdd/templates/tasks.md
+    modes: [legacy]
+  - source: openspec/schemas/greenfield-sdd/schema.yaml
+    target: openspec/schemas/greenfield-sdd/schema.yaml
+    modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/proposal.md
+    target: openspec/schemas/greenfield-sdd/templates/proposal.md
+    modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/spec.md
+    target: openspec/schemas/greenfield-sdd/templates/spec.md
+    modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/design.md
+    target: openspec/schemas/greenfield-sdd/templates/design.md
+    modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/tasks.md
+    target: openspec/schemas/greenfield-sdd/templates/tasks.md
+    modes: [greenfield]
+  - source: openspec/specs/.gitkeep
+    target: openspec/specs/.gitkeep
+  - source: openspec/changes/.gitkeep
+    target: openspec/changes/.gitkeep
+  - source: openspec/specs/business-production-readiness/README.md
+    target: openspec/specs/business-production-readiness/README.md
+  - source: openspec/profiles/minimal.yaml
+    target: openspec/profiles/minimal.yaml
+  - source: openspec/profiles/expanded.yaml
+    target: openspec/profiles/expanded.yaml
+
+  # C9 — docs-guides
+  - source: docs/guides/adopcion_openspec_sdd.md
+    target: docs/guides/adopcion_openspec_sdd.md
+  - source: docs/guides/business-production-readiness.md
+    target: docs/guides/business-production-readiness.md
+  - source: docs/guides/memoria-persistente-multiagente.md
+    target: docs/guides/memoria-persistente-multiagente.md
+  - source: docs/guides/skills-multi-entorno.md
+    target: docs/guides/skills-multi-entorno.md

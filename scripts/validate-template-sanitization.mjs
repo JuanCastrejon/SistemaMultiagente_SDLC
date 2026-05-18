@@ -5,7 +5,8 @@ import { listFiles } from "../src/file-utils.js";
 const root = process.cwd();
 const allowed = [
   /^docs\/extraction\//,
-  /^docs\/adr\//
+  /^docs\/adr\//,
+  /^CHANGELOG\.md$/
 ];
 const forbidden = [
   /\bFacturacionDian\b/i,
