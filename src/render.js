@@ -86,8 +86,5 @@ export function defaultConfig({ target, mode = "greenfield", projectName, projec
 export function buildManagedFiles(config) {
   const files = renderTemplates(config);
   files[".sdlc/config.json"] = `${JSON.stringify(config, null, 2)}\n`;
-  if (config.frameworkVersion === "1.0.1") {
-    files[".sdlc/migrations/1.0.1-applied.txt"] = `Migration 1.0.1 applied by SistemaMultiagente_SDLC.\ngenerated-by-sdlc\n`;
-  }
   return files;
 }
