@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Docs
+
+- README: actualizada tabla `BMAD Comparison` con realidad V6 de BMAD-METHOD (module ecosystem BMM/BMB/TEA/BMGD/CIS, Skills Architecture, Sub-Agent inclusion, scale-adaptive, Discord community) y comparación side-by-side honesta. Datos tomados del README oficial v6 de `bmad-code-org/BMAD-METHOD`.
+- README Roadmap v1.3.0: agregadas entradas `macos-latest` para `regression-install` matrix y bump de `actions/checkout@v5` + `actions/setup-node@v5` con `node-version: 24` antes del deprecation deadline de GitHub (Node 20 deprecated jun 2026, removed sep 2026).
+
 ## [1.2.1] — 2026-05-18
 
 ### UX fix — `init` sin `--target` usa cwd
