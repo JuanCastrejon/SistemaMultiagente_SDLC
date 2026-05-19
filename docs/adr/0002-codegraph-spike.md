@@ -1,9 +1,10 @@
-# ADR 0002: Spike de CodeGraph como complemento o reemplazo de Graphify
+# ADR 0002: Adopción de CodeGraph en coexistencia con Graphify
 
-- Estado: Propuesta
+- Estado: Aceptada (2026-05-19, reemplaza la versión Propuesta original)
 - Fecha: 2026-05-19
 - Decisor: equipo SistemaMultiagente_SDLC
 - Issue de seguimiento: pendiente
+- Reemplaza: la versión inicial de este ADR proponía un spike de 7 días con benchmarks sintéticos obligatorios. La estrategia se simplificó a "instalar y observar" según indicación del decisor: la verificación del ahorro de tokens claimado por CodeGraph (94 % menos tool-calls según su README) se hará por observación natural durante varias sesiones reales, no por benchmark forzado. El histórico de la versión Propuesta queda accesible en el historial git del archivo.
 
 ## Contexto
 
@@ -36,41 +37,58 @@ En 2026-05-19 se evaluó [CodeGraph (`colbymchenry/codegraph`)](https://github.c
 
 ## Decisión
 
-Aprobar un **spike de 7 días calendario** para evaluar CodeGraph sin abandonar Graphify. El spike debe responder con datos medibles si:
+Adoptar CodeGraph **en coexistencia con Graphify**, sin spike sintético previo. El install y la integración MCP se hacen ya; la decisión sobre si CodeGraph se vuelve preferente sobre Graphify (o lo reemplaza) se posterga hasta tener evidencia natural acumulada de varias sesiones reales.
 
-1. El MCP server de CodeGraph reduce realmente el consumo de tokens en flujos típicos del repo (búsqueda de capacidades, navegación cross-module, resolución de impacto).
-2. La extracción de rutas framework cubre NestJS y Next.js de forma usable en este monorepo.
-3. La complejidad operativa adicional (SQLite, MCP wiring) cabe en el flujo `bootstrap-agent-skills.ps1` o si requiere un instalador separado.
+### Qué se hace inmediatamente
 
-El spike NO compromete ninguna migración. Al cierre se decide:
+1. Instalar CodeGraph global vía `npm install -g @colbymchenry/codegraph` en la máquina del decisor.
+2. Inicializar el index en repos consumidores con `codegraph init` + scope narrow en `.codegraph/config.json` (excluir tests, generated, docs, openspec, graphify-out; `maxFileSize=512KB`) para evitar el OOM observado al indexar un monorepo NestJS+Next completo con la config default.
+3. Registrar el MCP server en Claude Code vía `.claude.json` local (per-project).
+4. Commitear los artefactos versionables (`.claude.json`, `.claude/CLAUDE.md`, `.codegraph/config.json`, `.codegraph/.gitignore`) y gitignorar la base SQLite + cache.
+5. Preservar el hook PreToolUse Bash que apunta a `graphify-out/GRAPH_REPORT.md` (Graphify sigue siendo primer paso en `enrich-us` 4.5).
 
-- **Coexistencia**: CodeGraph como MCP-runtime para queries de agentes, Graphify como snapshot persistente + reportes humanos + exportación Obsidian.
-- **Reemplazo total**: descartar Graphify si CodeGraph cubre community detection (vía features de roadmap) y reports markdown.
-- **Descartar CodeGraph**: si los benchmarks no se reproducen sobre el stack NestJS+Next o el costo operativo es alto.
+### Qué NO se hace todavía
 
-## Alcance del spike
+- **No se modifica** `templates/` ni `bootstrap-agent-skills.ps1` del framework reusable. La adopción es local-first en repos consumidores; la canonización en el template viene cuando haya evidencia de coexistencia estable.
+- **No se reemplaza** el paso 4.5 de `enrich-us` (Graphify-first). CodeGraph entra como complemento MCP-runtime.
+- **No se exige benchmark sintético**. La verificación de los claims de ahorro de tokens (94 % menos tool-calls según README de CodeGraph) se hará por observación natural durante uso real.
 
-Branch: `spike/codegraph-evaluation` desde `develop`.
+### Reglas de coexistencia
 
-Entregables obligatorios:
+| Caso | Herramienta preferida | Razón |
+|---|---|---|
+| `enrich-us` paso 4.5, prior art investigation, lectura humana del grafo | Graphify | Genera markdown reports, HTML viewer, community detection con god nodes, export Obsidian. |
+| Queries estructurales dentro de una sesión agentic (símbolos, callers, impact, context) | CodeGraph vía MCP | Sub-milisegundo, devuelve kind+location+signature en una llamada, framework-aware. |
+| Snapshot persistente versionado del grafo para diffs cross-PR | Graphify | `graphify-out/` se commitea para review humano y onboarding. |
+| Refresh incremental tras edits | CodeGraph (`codegraph sync .`, watcher 2 s) | Graphify requiere `graphify update .` manual. |
 
-- `docs/spikes/codegraph/README.md` — protocolo de medición y resultados.
-- `docs/spikes/codegraph/benchmark.md` — comparativa por flujo (`enrich-us`, `cavecrew-investigator`, `analista-requisitos-migracion`):
-  - tokens consumidos por consulta típica
-  - llamadas a herramienta por consulta
-  - latencia end-to-end
-  - cobertura de rutas detectadas para NestJS y Next.js
-- `docs/spikes/codegraph/risks.md` — riesgos identificados (vendor lock, drift, MCP availability).
-- `docs/spikes/codegraph/decision.md` — recomendación final: coexistencia, reemplazo o descarte.
+### Trigger para canonizar el cambio (ADR 0004)
 
-NO se modifica `bootstrap-agent-skills.ps1` ni `agent-skills.manifest.json` durante el spike. Cualquier instalación de CodeGraph queda local en `.codegraph/` y NO se versiona dentro del repo donor.
+Abrir ADR 0004 cuando se cumpla cualquiera:
+
+1. Se observa reducción medible de tool-calls/tokens en sesiones reales del repo `FacturacionDian` (no benchmark sintético — log natural de uso).
+2. Se confirma que la cobertura de rutas framework para NestJS+Next.js es suficientemente alta para sustituir parte del trabajo manual de Graphify.
+3. El costo operativo (OOMs adicionales, drift, MCP availability) supera el beneficio.
+
+En el caso (3) la decisión esperada es retroceso parcial; en (1)+(2) podría canonizarse la preferencia en el template del framework reusable.
 
 ## Consecuencias
 
-- Costo: 7 días calendario, foco en F0-F2 del slice "evaluación tooling".
-- Riesgo: se introduce un MCP server extra en el entorno local del evaluador. Acotado a su máquina; nada se publica al manifest hasta decisión.
-- Reversibilidad: total. El spike no toca `templates/`, `src/` ni `bin/`.
-- Si la decisión es coexistencia o reemplazo, se abrirá ADR 0004 con la implementación concreta.
+- Costo inmediato: bajo. La instalación y wiring están hechos. Sin slice dedicado.
+- Riesgo: bajo. El install es reversible vía `codegraph uninit` + `git rm` de los archivos versionados. El hook Graphify se preserva.
+- Reversibilidad: total. Tanto en el repo consumidor (FacturacionDian) como en este framework (que NO se ha modificado por este ADR).
+- Si la observación natural arroja evidencia clara, ADR 0004 canoniza el cambio en `templates/`. Si no, se mantiene la coexistencia indefinidamente o se documenta el retroceso.
+
+## Implementación en FacturacionDian
+
+La adopción operativa se ejecutó en `FacturacionDian` el 2026-05-19 vía PR `chore(codegraph): instalar CodeGraph local + MCP server Claude Code`. Ver `docs/agents/external-tools-matrix.md` de ese repo para footprint, triggers MCP reales y reglas de coexistencia.
+
+Métricas del index inicial sobre `FacturacionDian` (scope narrow):
+
+- 658 archivos parseados (TypeScript en `apps/` y `packages/`).
+- 7.954 nodes (3.879 method, 2.268 import, 658 file, 492 class, 277 function, 189 interface, 152 constant).
+- 14.869 edges.
+- 14.48 MB native SQLite (better-sqlite3).
 
 ## Referencias
 
