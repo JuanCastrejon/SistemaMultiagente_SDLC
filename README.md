@@ -122,21 +122,35 @@ All external installs are opt-in. Scripts default to dry-run or local-only behav
 
 ## BMAD Comparison
 
-| Feature | BMAD-METHOD | SistemaMultiagente_SDLC |
+Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
+
+| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.2.1 |
 | --- | --- | --- |
-| AI-driven agents | 12+ personas | 8 personas plus extensible roadmap |
-| Workflows | agile | SDD waterfall by slice, agile by release |
-| Scale-adaptive | yes | reserved for v1.3.0 |
-| Party mode | yes | roundtable opt-in planned for v1.3.0 |
-| Help CLI | bmad-help | `sdlc next` planned for v1.3.0 |
-| Modules/packs | yes | packs marketplace planned for v2.0.0 |
-| Governance validators | not core | 14 validators |
-| OpenSpec/SDD | not core | integrated |
-| Readiness L1/L2/L3 | not core | integrated |
-| Multi-agent lock | not core | TTL platform-context lock |
-| Brownfield-first | no | yes |
-| Migration system | not core | backup and rollback |
-| Sanitization validators | not core | no-personal-paths and template-sanitization |
+| License | MIT | MIT |
+| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥18, PowerShell (pwsh/powershell), Git |
+| Install command | `npx bmad-method install` (interactive) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
+| Scope principal | AI-driven agile development | AI-assisted SDLC con governance enterprise y SDD |
+| Workflows | 34+ agile workflows (BMM core) | SDD waterfall por slice + agile por release (F0-F17 phases) |
+| Scale-adaptive | sí, automático (bug → enterprise) | reserved en config v1.2.0; activación adaptive scale en v1.3.0 |
+| Agentes/personas | 12+ personas (PM, Architect, Dev, UX, …) | 8 personas activas + roadmap extensible |
+| Party / collaboration mode | yes (multiple personas en sesión) | roundtable opt-in planned v1.3.0 |
+| Help CLI / next-step coach | `bmad-help` skill | `sdlc doctor` (state checks); `sdlc next` planned v1.3.0 |
+| Modules / ecosystem | BMM (core) + BMB (builder) + TEA (test architect) + BMGD (game dev) + CIS (creative) | mode-based (`greenfield` / `legacy`) + extensible packs planned v2.0.0 |
+| Skills architecture | sí (V6 + Sub-Agent inclusion + Cross-Platform Agent Team) | skills mirroring across `.claude/`, `.agents/`, `.windsurf/` (`bootstrap-agent-skills.ps1`) |
+| Custom agent/workflow builder | BMad Builder v1 | personas `.agent.md` + validators (`validate-agent-persona-schema`) |
+| Dev Loop automation | en roadmap V6 | `phase-graph.yaml` + rework label-driven + lock TTL |
+| Brownfield-first | no | sí (legacy mode con research obligatorio antes de proposal) |
+| Governance validators | not core | 14 validators (config, personal-paths, template-sanitization, manifest-integrity, governance-precedence, …) |
+| OpenSpec / SDD | not core | integrated (capacidades canónicas en `openspec/specs/`) |
+| Readiness L1/L2/L3 + matriz NFR | not core | integrated (`business-production-readiness` spec) |
+| Migration system + rollback | not core | backup automático + `sdlc upgrade --to-version` + `sdlc rollback --to <id>` |
+| Multi-agent lock | not core | TTL `platform-context.json` lock |
+| Sanitization de paths/templates | not core | `validate:no-personal-paths` + `validate:template-sanitization` |
+| Provenance (SLSA) | n/d explícito | sí, SLSA v1 + signatures vía OIDC GitHub (workflow `publish.yml`) |
+| Community | Discord abierto, YouTube, X | GitHub Issues + Discussions (Discord no necesario) |
+| Trademark | BMad / BMAD-METHOD trademarks of BMad Code, LLC | sin restricción explícita más allá de MIT |
+
+Lectura corta: BMAD lidera en agile breadth y community (12+ personas, 34+ workflows, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validators (14) + migration system + readiness L1/L2/L3 + sanitization. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
 
 ## Roadmap
 
@@ -148,6 +162,8 @@ v1.3.0:
 - calibration extensions
 - roundtable opt-in
 - docs site
+- regression-install matrix: agregar `macos-latest` (triple coverage ubuntu + windows + macos)
+- bump `actions/checkout@v5` + `actions/setup-node@v5` con `node-version: 24`; deadline GitHub: Node 20 deprecated jun 2026, removed sep 2026
 
 v2.0.0:
 
