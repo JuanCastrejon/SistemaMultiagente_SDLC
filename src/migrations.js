@@ -1,7 +1,11 @@
 import { up as up_1_0_1 } from "../migrations/1.0.1/up.mjs";
+import { up as up_1_1_0 } from "../migrations/1.1.0/up.mjs";
+import { up as up_1_2_0 } from "../migrations/1.2.0/up.mjs";
 
 const REGISTRY = [
-  { version: "1.0.1", up: up_1_0_1 }
+  { version: "1.0.1", up: up_1_0_1 },
+  { version: "1.1.0", up: up_1_1_0 },
+  { version: "1.2.0", up: up_1_2_0 }
 ];
 
 function semverTuple(v) {
@@ -32,7 +36,7 @@ export function migrationsToRun(fromVersion, toVersion) {
 export function applyMigrations(files, migrations) {
   const result = { ...files };
   for (const migration of migrations) {
-    const extra = migration.up();
+    const extra = migration.up(result);
     Object.assign(result, extra);
   }
   return result;

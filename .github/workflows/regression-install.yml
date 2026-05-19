@@ -1,0 +1,48 @@
+name: Regression Install
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install-${{ matrix.mode }}-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        mode: [greenfield, legacy]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create consumer repo
+        run: node -e "require('fs').mkdirSync('tmp-consumer', { recursive: true })"
+
+      - name: Install template
+        run: node ./bin/sdlc.js init --target ./tmp-consumer --mode ${{ matrix.mode }} --project-name "Regression ${{ matrix.mode }}" --json
+
+      - name: Doctor
+        run: node ./bin/sdlc.js doctor --target ./tmp-consumer --json
+
+      - name: Diff
+        run: node ./bin/sdlc.js diff --target ./tmp-consumer --json

@@ -2,7 +2,7 @@ import path from "node:path";
 import { renderTemplates } from "./template-loader.js";
 export { validateConfigShape } from "./config-validator.js";
 
-export const FRAMEWORK_VERSION = "1.0.0";
+export const FRAMEWORK_VERSION = "1.2.0";
 export const SCHEMA_VERSION = 1;
 export const SUPPORTED_MODES = new Set(["greenfield", "legacy"]);
 
@@ -28,9 +28,12 @@ export function defaultConfig({ target, mode = "greenfield", projectName, projec
       organization: "example-org"
     },
     mode,
+    scale: "feature",
     stack: {
       backend: "<BACKEND_STACK>",
       frontend: "<FRONTEND_STACK>",
+      database: "<DATABASE_STACK>",
+      designSystem: "<DESIGN_SYSTEM>",
       mobile: "<MOBILE_STACK>"
     },
     surfaces: [

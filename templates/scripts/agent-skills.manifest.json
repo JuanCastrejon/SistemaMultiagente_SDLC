@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "sourceDate": "2026-05-18",
+  "installMethod": "mirror",
+  "targetAgents": [
+    "claude-code",
+    "codex",
+    "github-copilot",
+    "windsurf"
+  ],
+  "repoGovernedSkillSourceRoot": ".github/skills",
+  "repoGovernedSkills": [
+    "backend-audit",
+    "commit",
+    "contexto-proyecto",
+    "documentacion-viva",
+    "enrich-us",
+    "openspec-apply",
+    "openspec-archive",
+    "openspec-continue",
+    "openspec-explore",
+    "openspec-ff",
+    "openspec-new",
+    "openspec-propose",
+    "openspec-sync",
+    "openspec-verify",
+    "operacion-cli-devops",
+    "orquestacion-multiagente",
+    "ui-ux-diseno"
+  ],
+  "externalCollections": [
+    {
+      "source": "vercel-labs/agent-skills",
+      "skills": [
+        {
+          "name": "vercel-react-best-practices",
+          "why": "Optional UI and React quality review for web surfaces."
+        },
+        {
+          "name": "web-design-guidelines",
+          "why": "Optional visual and accessibility review for product UI."
+        },
+        {
+          "name": "deploy-to-vercel",
+          "why": "Optional deployment workflow when the consumer uses Vercel."
+        }
+      ],
+      "skippedSkills": []
+    }
+  ],
+  "repoGovernedExternalSkillPolicy": {
+    "doNotReplace": [
+      "commit",
+      "enrich-us",
+      "openspec-*",
+      "contexto-proyecto",
+      "orquestacion-multiagente",
+      "backend-audit",
+      "ui-ux-diseno"
+    ],
+    "reason": "Repo-governed skills are canonical and external skills must not replace them."
+  }
+}

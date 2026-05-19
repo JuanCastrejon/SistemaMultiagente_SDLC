@@ -1,0 +1,32 @@
+version: 1
+updated: 2026-05-18
+current_slice: "bootstrap-{{project.slug}}"
+current_phase: "F0"
+current_phase_name: "Bootstrap"
+
+phases_completed: []
+
+canonical_specs:
+  - "openspec/specs/business-production-readiness/"
+  - "openspec/specs/project-phases/"
+
+phase_owners:
+  definition: "analista-requisitos"
+  design: "arquitecto"
+  api: "api-agent"
+  web: "web-agent"
+  mobile: "mobile-sync"
+  qa: "qa-security-review"
+  human_review: "human-review"
+  deploy: "release-owner"
+
+control_plane:
+  planner: "planificador-opus"
+  orchestrator: "orquestador-opus"
+
+entry_criteria:
+  - "sdlc install completed"
+  - "sdlc doctor reports no errors"
+  - "project mode and readiness defaults confirmed"
+
+follow_ups_open: []

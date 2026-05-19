@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "roots": [
+    "apps/api",
+    "apps/web",
+    "apps/mobile",
+    "database",
+    "docs",
+    "openspec"
+  ],
+  "surfaces": [
+    {
+      "id": "backend",
+      "owner": "api-nestjs",
+      "repoSurface": "{{stack.backend}}",
+      "pathPrefixes": ["apps/api/"],
+      "references": {
+        "requirements": [],
+        "userStories": [],
+        "useCases": [],
+        "adrs": []
+      },
+      "notes": "Backend modules, API contracts and persistence adapters."
+    },
+    {
+      "id": "web",
+      "owner": "web-admin",
+      "repoSurface": "{{stack.frontend}}",
+      "pathPrefixes": ["apps/web/"],
+      "references": {
+        "requirements": [],
+        "userStories": [],
+        "useCases": [],
+        "adrs": []
+      },
+      "notes": "Web UI, admin workflows and API consumption."
+    },
+    {
+      "id": "mobile",
+      "owner": "mobile-sync",
+      "repoSurface": "{{stack.mobile}}",
+      "pathPrefixes": ["apps/mobile/"],
+      "references": {
+        "requirements": [],
+        "userStories": [],
+        "useCases": [],
+        "adrs": []
+      },
+      "notes": "Mobile and offline-sync surfaces when present."
+    }
+  ]
+}

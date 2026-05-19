@@ -1,0 +1,30 @@
+version: 1
+updated: "2026-05-18"
+
+roles:
+  orquestador:
+    primary: claude-opus-4-7
+    fallback: claude-sonnet-4-6
+  planificador:
+    primary: claude-opus-4-7
+    fallback: claude-sonnet-4-6
+  developer:
+    primary: claude-sonnet-4-6
+    fallback: claude-haiku-4-5-20251001
+  reviewer:
+    primary: claude-sonnet-4-6
+    fallback: claude-haiku-4-5-20251001
+
+platforms:
+  claude_code:
+    default: claude-sonnet-4-6
+  codex:
+    default: gpt-5
+  copilot:
+    default: gpt-5
+  windsurf:
+    default: claude-sonnet-4-6
+
+fallbacks:
+  - claude-sonnet-4-6
+  - claude-haiku-4-5-20251001

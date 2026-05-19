@@ -1,0 +1,21 @@
+# active-slices.yaml
+# Index of in-flight slices and the file paths each one has locked or proposes
+# to touch. F5 must read this before closing its plan.
+
+version: 1
+updated: 2026-05-18
+
+active: []
+archive: []
+
+policies:
+  on_overlap_detected:
+    - emit_handoff: "wait-for-slice"
+      when: "active slice phase >= F8"
+      action: "Block new slice F7 until active slice merges at F14."
+    - emit_handoff: "coordinate-shared-types"
+      when: "both slices are in planning phase F5"
+      action: "Resolve shared type or contract decisions in one plan first."
+    - emit_handoff: "serial-execute"
+      when: "both slices are in implementation F8 on the same paths"
+      action: "Pause younger sub-slice until older slice completes F8."
