@@ -25,7 +25,31 @@ for (const platform of ["claude_code", "codex", "copilot", "windsurf"]) {
   requirePattern(new RegExp(`^  ${platform}:\\s*\\n    default:\\s*\\S+`, "m"), `platform ${platform} requires default`);
 }
 
-const allowedTopLevel = new Set(["version", "updated", "roles", "platforms", "fallbacks"]);
+// Optional `phases:` block (v1.3.0+). When present, each phase entry must
+// declare primary and fallback model identifiers, same shape as `roles`.
+if (/^phases:\s*$/m.test(content)) {
+  const phasesBlockRegex = /^phases:\s*$([\s\S]*?)(?=^[A-Za-z0-9_-]+:|\Z)/m;
+  const phasesBlockMatch = phasesBlockRegex.exec(content);
+  if (phasesBlockMatch) {
+    const phasesBody = phasesBlockMatch[1];
+    const phaseEntryRegex = /^  ([A-Za-z0-9_-]+):\s*$/gm;
+    let phaseMatch;
+    let phasesFound = 0;
+    while ((phaseMatch = phaseEntryRegex.exec(phasesBody)) !== null) {
+      phasesFound += 1;
+      const phaseName = phaseMatch[1];
+      const phaseShape = new RegExp(`^  ${phaseName}:\\s*\\n    primary:\\s*\\S+\\n    fallback:\\s*\\S+`, "m");
+      if (!phaseShape.test(phasesBody)) {
+        errors.push(`phase ${phaseName} requires primary and fallback`);
+      }
+    }
+    if (phasesFound === 0) {
+      errors.push("phases block declared but contains no phase entries");
+    }
+  }
+}
+
+const allowedTopLevel = new Set(["version", "updated", "roles", "platforms", "phases", "fallbacks"]);
 for (const line of content.split("\n")) {
   const match = /^([A-Za-z0-9_-]+):/.exec(line);
   if (match && !allowedTopLevel.has(match[1])) {
