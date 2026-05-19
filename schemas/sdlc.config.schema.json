@@ -17,6 +17,12 @@
       }
     },
     "mode": { "type": "string", "enum": ["greenfield", "legacy"] },
+    "scale": {
+      "type": "string",
+      "enum": ["bug", "feature", "epic", "platform"],
+      "default": "feature",
+      "description": "Reserved for v1.3.0 adaptive scale. Not consumed in v1.2.0."
+    },
     "surfaces": {
       "type": "array",
       "items": {

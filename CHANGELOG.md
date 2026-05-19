@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.0] — Unreleased
+
+### Phase 1 — Versionado y migraciones
+
+- Prepara metadata npm publica para `sistema-multiagente-sdlc`.
+- Actualiza `frameworkVersion` a `1.2.0`.
+- Reserva `scale` en config (`bug`, `feature`, `epic`, `platform`) para adaptive scale de v1.3.0.
+- Agrega targets de migracion `1.1.0` y `1.2.0` para cubrir upgrades `1.0.0 -> 1.2.0` y `1.1.0 -> 1.2.0`.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine

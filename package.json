@@ -1,12 +1,40 @@
 {
   "name": "sistema-multiagente-sdlc",
-  "version": "1.1.0",
-  "private": true,
+  "version": "1.2.0",
   "description": "Framework reusable para instalar un SDLC multiagente gobernado en repos greenfield o legacy.",
   "type": "module",
   "bin": {
     "sdlc": "./bin/sdlc.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "schemas/",
+    "templates/",
+    "profiles/",
+    "migrations/",
+    "scripts/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "ai",
+    "sdlc",
+    "multiagent",
+    "claude-code",
+    "openspec",
+    "governance",
+    "template",
+    "brownfield",
+    "sdd"
+  ],
+  "repository": "github:JuanCastrejon/SistemaMultiagente_SDLC",
+  "bugs": "https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/issues",
+  "homepage": "https://github.com/JuanCastrejon/SistemaMultiagente_SDLC#readme",
   "scripts": {
     "sdlc": "node ./bin/sdlc.js",
     "test": "node ./tests/run-regression.mjs",

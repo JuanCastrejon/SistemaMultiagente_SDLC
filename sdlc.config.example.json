@@ -1,13 +1,14 @@
 {
   "$schema": "./schemas/sdlc.config.schema.json",
   "schemaVersion": 1,
-  "frameworkVersion": "1.0.0",
+  "frameworkVersion": "1.2.0",
   "project": {
     "name": "Example Project",
     "slug": "example-project",
     "organization": "example-org"
   },
   "mode": "greenfield",
+  "scale": "feature",
   "stack": {
     "backend": "<BACKEND_STACK>",
     "frontend": "<FRONTEND_STACK>",
