@@ -1,0 +1,24 @@
+schema: greenfield-sdd
+
+context: |
+  Proyecto greenfield gobernado por SistemaMultiagente_SDLC.
+  La fuente normativa vive en AGENTS.md, .github/, docs/ y openspec/.
+  Todo artefacto OpenSpec se escribe en espanol.
+  Los identificadores de capacidades y carpetas permanecen en kebab-case en ingles.
+  Git flow: {{gitFlow.integrationBranch}} -> {{gitFlow.stableBranch}} mediante PR.
+
+rules:
+  research:
+    - Investigar primero en docs, specs y backlog antes de proponer una capacidad nueva.
+    - Separar hallazgos confirmados, inferencias y vacios abiertos.
+    - Declarar objetivo de negocio, KPI principal, readiness L1/L2/L3 y matriz NFR en cambios funcionales no triviales.
+  proposal:
+    - Mantener el change acotado a capacidades trazables.
+    - Declarar impacto operacional, exclusiones, dependencias y rollback cuando aplique.
+  specs:
+    - Usar escenarios Given/When/Then y describir comportamiento observable.
+    - No inventar comportamiento sin evidencia.
+  design:
+    - Explicar trade-offs, secuencia entre superficies, riesgos y observabilidad.
+  tasks:
+    - Descomponer en slices pequenos, verificables y con validaciones explicitas.

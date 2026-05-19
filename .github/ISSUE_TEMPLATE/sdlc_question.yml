@@ -1,0 +1,45 @@
+name: SDLC question
+description: Discusion metodologica sobre fases, agentes, gates, readiness o adopcion.
+title: "question: "
+labels:
+  - question
+  - needs-triage
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: Describe la duda metodologica.
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Relevant phase
+      options:
+        - F0 bootstrap
+        - F1 analysis
+        - F2 human intent gate
+        - F3 local issue
+        - F3.5 branch
+        - F5 planning
+        - F7 orchestration
+        - F8 implementation
+        - F9 QA
+        - F10 security
+        - F13 PR gate
+        - F17 trace/archive
+        - cross-phase
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Incluye links a docs, issues o PRs relacionados.
+  - type: textarea
+    id: desired-outcome
+    attributes:
+      label: Desired outcome
+      description: Que decision o documentacion esperas obtener.

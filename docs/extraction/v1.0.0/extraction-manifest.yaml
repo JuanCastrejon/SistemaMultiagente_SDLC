@@ -3,7 +3,7 @@ frameworkVersion: 1.0.0
 owner: orquestador-opus
 deadline: 2026-05-25
 freezeDate: 2026-05-18
-status: v0.9-partial
+status: complete
 criticalFixPolicy:
   - CVE/security
   - bug que bloquea CI/CD
@@ -11,51 +11,971 @@ criticalFixPolicy:
   - corrupcion o perdida de datos de continuidad
 donors:
   - id: donor-mature-sdlc
-    repo: source-of-truth-sdlc
+    repo: FacturacionDian
     commit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
     role: source-of-truth maduro F0-F17, readiness, continuidad, Graphify, Obsidian, skills multi-entorno
   - id: donor-pilot-core-profile-project
     repo: pilot-core-profile-project
     commit: de598a1
     role: piloto del patron core/profile/project y analysis-first-sdd
+
+# Legend:
+#   block: C1=governance C2=agent-personas C3=copilot-instructions
+#          C4=core-skills C5=stack-skills(deferred) C6=mirrors(deferred)
+#          C7=openspec-schemas C9=docs-guides
+#   sanitization.status:
+#     needs-sanitization         remove donor-specific refs, keep structure
+#     needs-rename-and-sanitize  rename file + sanitize content
+#     new-no-donor               no donor source; scaffold from scratch
+#     deferred                   targeted for v1.2.0
+#     excluded                   project-specific, not portable
 entries:
-  - id: core-phase-graph
+
+  # ───────────────────────────────────────────────
+  # C1 — Governance (4)
+  # ───────────────────────────────────────────────
+
+  - id: c1-agents-md
+    block: C1
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: AGENTS.md
+    targetPath: templates/AGENTS.md.mustache
+    classification: governance
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian-specific tool names and domain references; use {{project.name}} Mustache placeholders
+
+  - id: c1-github-agents-md
+    block: C1
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/AGENTS.md
+    targetPath: templates/.github/AGENTS.md.mustache
+    classification: governance
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian skill inventory section; generalize external-tools-matrix reference
+
+  - id: c1-claude-md
+    block: C1
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: CLAUDE.md
+    targetPath: templates/CLAUDE.md.mustache
+    classification: governance
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Make graphify scope, caveman, obsidian refs generic; use {{project.slug}}/{{project.name}} placeholders
+
+  - id: c1-indice-operativo
+    block: C1
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: indice-operativo.md
+    targetPath: templates/indice-operativo.md.mustache
+    classification: governance
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Replace project-specific section contents with Mustache placeholders; keep index structure
+
+  # ───────────────────────────────────────────────
+  # C2 — Agent personas (7 active + 3 excluded = 10)
+  # ───────────────────────────────────────────────
+
+  - id: c2-planificador-opus
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/planificador-opus.md
+    targetPath: templates/.github/agents/planificador-opus.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian domain context and DIAN-specific planning responsibilities
+
+  - id: c2-orquestador-opus
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/orquestador-opus.md
+    targetPath: templates/.github/agents/orquestador-opus.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian phase references (F0-F17); keep orchestration protocol generic
+
+  - id: c2-analista-requisitos
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/analista-requisitos-migracion.md
+    targetPath: templates/.github/agents/analista-requisitos.md
+    classification: agent-persona
+    modes: [legacy]
+    sanitization:
+      status: needs-rename-and-sanitize
+      notes: Rename analista-requisitos-migracion → analista-requisitos; remove DIAN migration specifics; keep brownfield analysis flow
+
+  - id: c2-arquitecto
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/arquitecto-modular-clean.md
+    targetPath: templates/.github/agents/arquitecto.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-rename-and-sanitize
+      notes: Rename arquitecto-modular-clean → arquitecto; replace NestJS/Next.js specifics with {{stack.backend}}/{{stack.frontend}}
+
+  - id: c2-api-agent
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/api-nestjs.md
+    targetPath: templates/.github/agents/api-agent.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-rename-and-sanitize
+      notes: Rename api-nestjs → api-agent; replace NestJS references with {{stack.backend}}
+
+  - id: c2-web-agent
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/web-admin.md
+    targetPath: templates/.github/agents/web-agent.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-rename-and-sanitize
+      notes: Rename web-admin → web-agent; replace Next.js/admin-panel specifics with {{stack.frontend}}
+
+  - id: c2-qa-security-review
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/qa-security-review.md
+    targetPath: templates/.github/agents/qa-security-review.md
+    classification: agent-persona
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove DIAN/facturas domain references; keep QA+security review flow generic
+
+  - id: c2-excl-contador-publico
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/contador-publico.md
+    targetPath: ~excluded~
+    classification: agent-persona
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Domain-specific — DIAN/contador-publico role has no generic equivalent
+
+  - id: c2-excl-analista-dian
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/analista-dian.md
+    targetPath: ~excluded~
+    classification: agent-persona
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Domain-specific — DIAN regulatory analysis role, no generic equivalent
+
+  - id: c2-excl-experto-pasarela
+    block: C2
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/agents/experto-pasarela-pagos.md
+    targetPath: ~excluded~
+    classification: agent-persona
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Domain-specific — payment gateway expert for DIAN facturacion
+
+  # ───────────────────────────────────────────────
+  # C3 — Copilot instructions (3)
+  # ───────────────────────────────────────────────
+
+  - id: c3-copilot-instructions
+    block: C3
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/copilot-instructions.md
+    targetPath: templates/.github/copilot-instructions.md.mustache
+    classification: copilot-instructions
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian stack specifics; use Mustache stack placeholders; keep multi-agent collaboration rules
+
+  - id: c3-copilot-greenfield
+    block: C3
+    sourceRepo: ~new~
+    sourceCommit: ~new~
+    sourcePath: ~new~
+    targetPath: templates/.github/copilot-instructions-greenfield.md
+    classification: copilot-instructions
+    modes: [greenfield]
+    sanitization:
+      status: new-no-donor
+      notes: New file — greenfield-specific Copilot instructions scaffolded from scratch
+
+  - id: c3-copilot-legacy
+    block: C3
+    sourceRepo: ~new~
+    sourceCommit: ~new~
+    sourcePath: ~new~
+    targetPath: templates/.github/copilot-instructions-legacy.md
+    classification: copilot-instructions
+    modes: [legacy]
+    sanitization:
+      status: new-no-donor
+      notes: New file — legacy/brownfield-specific Copilot instructions scaffolded from scratch
+
+  # ───────────────────────────────────────────────
+  # C4 — Core skills (19)
+  # ───────────────────────────────────────────────
+
+  - id: c4-skill-contexto-proyecto-claude
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .claude/skills/contexto-proyecto/SKILL.md
+    targetPath: templates/.claude/skills/contexto-proyecto/SKILL.md.mustache
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Replace FacturacionDian context with {{project.name}}/{{stack.*}} placeholders
+
+  - id: c4-skill-contexto-proyecto-github
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/contexto-proyecto/SKILL.md
+    targetPath: templates/.github/skills/contexto-proyecto/SKILL.md.mustache
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Same as .claude/ variant; both maintained for multi-agent consistency
+
+  - id: c4-skill-orquestacion-multiagente
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/orquestacion-multiagente/SKILL.md
+    targetPath: templates/.github/skills/orquestacion-multiagente/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian phase references (F0-F17); generalize to abstract SDLC phase structure
+
+  - id: c4-skill-enrich-us-claude
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .claude/skills/enrich-us/SKILL.md
+    targetPath: templates/.claude/skills/enrich-us/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove DIAN/facturacion domain examples; keep prior-art flow and story enrichment process
+
+  - id: c4-skill-enrich-us-github
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/enrich-us/SKILL.md
+    targetPath: templates/.github/skills/enrich-us/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Same as .claude/ variant
+
+  - id: c4-skill-commit-claude
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .claude/skills/commit/SKILL.md
+    targetPath: templates/.claude/skills/commit/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Generalize branch prefixes from gitFlow config; remove FacturacionDian-specific commit examples
+
+  - id: c4-skill-commit-github
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/commit/SKILL.md
+    targetPath: templates/.github/skills/commit/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Same as .claude/ variant
+
+  - id: c4-skill-openspec-propose
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-propose/SKILL.md
+    targetPath: templates/.github/skills/openspec-propose/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian change examples; keep propose flow
+
+  - id: c4-skill-openspec-explore
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-explore/SKILL.md
+    targetPath: templates/.github/skills/openspec-explore/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Generalize to any project domain; remove DIAN feature examples
+
+  - id: c4-skill-openspec-apply
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-apply/SKILL.md
+    targetPath: templates/.github/skills/openspec-apply/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian specifics; keep task-by-task apply loop and DoD structure
+
+  - id: c4-skill-openspec-archive
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-archive/SKILL.md
+    targetPath: templates/.github/skills/openspec-archive/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Generic archive flow; no domain specifics expected
+
+  - id: c4-skill-openspec-verify
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-verify/SKILL.md
+    targetPath: templates/.github/skills/openspec-verify/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Generic verification flow
+
+  - id: c4-skill-openspec-sync
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-sync/SKILL.md
+    targetPath: templates/.github/skills/openspec-sync/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian change examples from sync flow
+
+  - id: c4-skill-openspec-ff
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-ff/SKILL.md
+    targetPath: templates/.github/skills/openspec-ff/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Fast-forward flow; remove domain examples
+
+  - id: c4-skill-openspec-new
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-new/SKILL.md
+    targetPath: templates/.github/skills/openspec-new/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: New change creation flow; generalize change-name conventions
+
+  - id: c4-skill-openspec-continue
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/openspec-continue/SKILL.md
+    targetPath: templates/.github/skills/openspec-continue/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Artefact-by-artefact continue flow; generalize
+
+  - id: c4-skill-documentacion-viva
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/documentacion-viva/SKILL.md
+    targetPath: templates/.github/skills/documentacion-viva/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian doc structure refs; keep living-docs update pattern
+
+  - id: c4-skill-operacion-cli-devops
+    block: C4
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/operacion-cli-devops/SKILL.md
+    targetPath: templates/.github/skills/operacion-cli-devops/SKILL.md
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Generalize CLI/DevOps patterns; remove stack-specific (Turborepo/pnpm) command examples
+
+  - id: c4-phase-graph
+    block: C4
     sourceRepo: donor-mature-sdlc
     sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
     sourcePath: .github/agent-state/phase-graph.yaml
-    targetPath: core/agent-state/phase-graph.yaml
-    classification: core
-    sanitization: rewrite-generic
-    status: extracted
-  - id: core-external-tools
+    targetPath: templates/.github/agent-state/phase-graph.yaml.mustache
+    classification: core-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Parameterize phase names/transitions; remove FacturacionDian F0-F17 sprint structure
+
+  # ───────────────────────────────────────────────
+  # C5 — Stack skills — deferred to v1.2.0 (11)
+  # ───────────────────────────────────────────────
+
+  - id: c5-skill-nestjs
+    block: C5
     sourceRepo: donor-mature-sdlc
     sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
-    sourcePath: docs/agents/external-tools-matrix.md
-    targetPath: docs/guides/external-tools.md
-    classification: core
-    sanitization: rewrite-generic
-    status: pending-v1.1
-  - id: core-profile-project-pattern
-    sourceRepo: donor-pilot-core-profile-project
-    sourceCommit: de598a1
-    sourcePath: docs/proceso/template-sdlc-y-bootstrap-de-analisis.md
-    targetPath: docs/guides/core-profile-project.md
-    classification: core
-    sanitization: rewrite-generic
-    status: extracted
-  - id: greenfield-example
-    sourceRepo: synthetic
-    sourceCommit: n/a
-    sourcePath: n/a
-    targetPath: examples/task-manager-saas
-    classification: example
-    sanitization: sanitize-example
-    status: extracted
-  - id: legacy-example
-    sourceRepo: synthetic
-    sourceCommit: n/a
-    sourcePath: n/a
-    targetPath: examples/legacy-inventory-modernization
-    classification: example
-    sanitization: sanitize-example
-    status: extracted
+    sourcePath: .github/skills/nestjs/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — NestJS skill; deferred until stack-skill profile system designed
+
+  - id: c5-skill-nextjs
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/nextjs/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Next.js skill
+
+  - id: c5-skill-react
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/react/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — React skill
+
+  - id: c5-skill-prisma
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/prisma/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Prisma skill
+
+  - id: c5-skill-turborepo
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/turborepo/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Turborepo monorepo skill
+
+  - id: c5-skill-vitest
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/vitest/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Vitest skill
+
+  - id: c5-skill-playwright
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/playwright/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Playwright e2e skill
+
+  - id: c5-skill-tailwind
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/tailwind/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Tailwind skill
+
+  - id: c5-skill-vercel
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/vercel/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Vercel deployment skill
+
+  - id: c5-skill-accessibility
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/accessibility/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Accessibility skill
+
+  - id: c5-skill-bash-defensive-patterns
+    block: C5
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .github/skills/bash-defensive-patterns/SKILL.md
+    targetPath: ~deferred~
+    classification: stack-skill
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Bash defensive patterns skill
+
+  # ───────────────────────────────────────────────
+  # C6 — Skill mirrors — deferred to v1.2.0 (3)
+  # ───────────────────────────────────────────────
+
+  - id: c6-mirror-agents-skills
+    block: C6
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .agents/skills/
+    targetPath: ~deferred~
+    classification: skill-mirror
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — .agents/skills/ mirror for Codex/GitHub Copilot
+
+  - id: c6-mirror-windsurf-skills
+    block: C6
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .windsurf/skills/
+    targetPath: ~deferred~
+    classification: skill-mirror
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — .windsurf/skills/ mirror for Windsurf
+
+  - id: c6-mirror-cursor-rules
+    block: C6
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .cursorrules
+    targetPath: ~deferred~
+    classification: skill-mirror
+    modes: [greenfield, legacy]
+    sanitization:
+      status: deferred
+      notes: v1.2.0 — Cursor rules mirror
+
+  # ───────────────────────────────────────────────
+  # C7 — OpenSpec schemas (8)
+  # ───────────────────────────────────────────────
+
+  - id: c7-schema-legacy-brownfield-sdd
+    block: C7
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: openspec/schemas/legacy-brownfield-sdd/
+    targetPath: templates/openspec/schemas/legacy-brownfield-sdd/
+    classification: openspec-schema
+    modes: [legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian field examples; parameterize project.name in schema descriptions
+
+  - id: c7-schema-greenfield-sdd
+    block: C7
+    sourceRepo: ~new~
+    sourceCommit: ~new~
+    sourcePath: ~new~
+    targetPath: templates/openspec/schemas/greenfield-sdd/
+    classification: openspec-schema
+    modes: [greenfield]
+    sanitization:
+      status: new-no-donor
+      notes: New schema — derived from legacy-brownfield-sdd; omit research/brownfield sections; add greenfield-specific proposal structure
+
+  - id: c7-openspec-config-yaml
+    block: C7
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: openspec/config.yaml
+    targetPath: templates/openspec/config.yaml.mustache
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Parameterize project slug and workflow list; remove FacturacionDian-specific workflow names
+
+  - id: c7-openspec-specs-scaffold
+    block: C7
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: openspec/specs/
+    targetPath: templates/openspec/specs/.gitkeep
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Only scaffold empty openspec/specs/ directory; no content from donor
+
+  - id: c7-openspec-changes-scaffold
+    block: C7
+    sourceRepo: ~new~
+    sourceCommit: ~new~
+    sourcePath: ~new~
+    targetPath: templates/openspec/changes/.gitkeep
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: new-no-donor
+      notes: Empty openspec/changes/ scaffold
+
+  - id: c7-business-production-readiness-spec
+    block: C7
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: openspec/specs/business-production-readiness/
+    targetPath: templates/openspec/specs/business-production-readiness/
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian L1/L2/L3 concrete examples; keep readiness level structure and NFR matrix
+
+  - id: c7-openspec-profile-minimal
+    block: C7
+    sourceRepo: ~new~
+    sourceCommit: ~new~
+    sourcePath: ~new~
+    targetPath: templates/openspec/profiles/minimal.yaml
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: new-no-donor
+      notes: New file — minimal OpenSpec profile definition (propose, apply, archive only)
+
+  - id: c7-openspec-profile-expanded
+    block: C7
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: openspec/config.yaml
+    targetPath: templates/openspec/profiles/expanded.yaml
+    classification: openspec-schema
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Derive expanded profile from existing config; remove FacturacionDian-specific workflow examples
+
+  # ───────────────────────────────────────────────
+  # C9 — Docs guides (4)
+  # ───────────────────────────────────────────────
+
+  - id: c9-guide-adopcion-openspec-sdd
+    block: C9
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/guides/adopcion_openspec_sdd.md
+    targetPath: templates/docs/guides/adopcion_openspec_sdd.md.mustache
+    classification: docs-guide
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Replace FacturacionDian examples with {{project.name}}; keep SDD adoption guide structure and workflow table
+
+  - id: c9-guide-memoria-persistente-multiagente
+    block: C9
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/guides/memoria-persistente-multiagente.md
+    targetPath: templates/docs/guides/memoria-persistente-multiagente.md.mustache
+    classification: docs-guide
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Remove FacturacionDian path refs (vault, scripts); use {{obsidian.vaultPath}} and {{obsidian.memoryWorkspace}} placeholders
+
+  - id: c9-guide-business-production-readiness
+    block: C9
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/guides/business-production-readiness.md
+    targetPath: templates/docs/guides/business-production-readiness.md.mustache
+    classification: docs-guide
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Replace L1/L2/L3 FacturacionDian examples with generic readiness level placeholders; keep guide structure
+
+  - id: c9-guide-skills-multi-entorno
+    block: C9
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/guides/skills-multi-entorno.md
+    targetPath: templates/docs/guides/skills-multi-entorno.md.mustache
+    classification: docs-guide
+    modes: [greenfield, legacy]
+    sanitization:
+      status: needs-sanitization
+      notes: Replace FacturacionDian skill inventory; keep multi-env skill guide structure (Claude/Copilot/Windsurf/Cursor)
+
+  # ───────────────────────────────────────────────
+  # Explicitly excluded (13)
+  # ───────────────────────────────────────────────
+
+  - id: excl-apps
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: apps/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Build artifacts and domain application code — not reusable as framework assets
+
+  - id: excl-packages
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: packages/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Project-specific monorepo packages (shared DTOs, utils) — not portable
+
+  - id: excl-prisma-schema
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: prisma/schema.prisma
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Domain-specific database schema for DIAN facturacion; not portable
+
+  - id: excl-prisma-migrations
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: prisma/migrations/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Domain-specific DB migration history
+
+  - id: excl-env-files
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: .env*
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Environment-specific secrets and configuration
+
+  - id: excl-obsidian-config-local
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: scripts/obsidian-memory.config.local.json
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Gitignored local config with machine-specific vault paths
+
+  - id: excl-scripts
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: scripts/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Project-specific scripts (bootstrap, sync, export); deferred to C10 continuity block in v1.2.0
+
+  - id: excl-graphify-out
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: graphify-out/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Generated knowledge graph — project-specific; not portable
+
+  - id: excl-docs-legacy
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/legacy/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: FacturacionDian legacy system documentation — domain-specific
+
+  - id: excl-docs-pantallas
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/pantallas/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: FacturacionDian UI screen documentation — domain-specific
+
+  - id: excl-docs-api
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/api/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: FacturacionDian API docs — domain-specific
+
+  - id: excl-docs-requirements
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: docs/requirements/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: FacturacionDian functional requirements — domain-specific
+
+  - id: excl-node-modules
+    block: ~excluded~
+    sourceRepo: donor-mature-sdlc
+    sourceCommit: f1e7acafe7e297dde72659d46b06a6f8ae25685e
+    sourcePath: node_modules/
+    targetPath: ~excluded~
+    classification: excluded
+    modes: []
+    sanitization:
+      status: excluded
+      notes: Build/install artifact
+
+# Summary:
+#   C1  governance              4  active
+#   C2  agent-personas          7  active + 3 excluded
+#   C3  copilot-instructions    3  active (1 donor + 2 new)
+#   C4  core-skills            19  active
+#   C5  stack-skills           11  deferred v1.2.0
+#   C6  skill-mirrors           3  deferred v1.2.0
+#   C7  openspec-schemas        8  active (6 donor + 2 new)
+#   C9  docs-guides             4  active
+#   excl excluded              13
+#   ─────────────────────────────
+#   Total                      75

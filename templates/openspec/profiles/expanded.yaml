@@ -1,0 +1,28 @@
+# OpenSpec profile: expanded
+# Activates full command set including fast-forward, sync, explore/propose,
+# bulk-archive, and brownfield schema.
+# Suitable for mature projects with an established SDLC workflow.
+
+name: expanded
+version: 1
+commands:
+  - opsx:new
+  - opsx:continue
+  - opsx:ff
+  - opsx:apply
+  - opsx:verify
+  - opsx:archive
+  - opsx:bulk-archive
+  - opsx:sync
+  - opsx:explore
+  - opsx:propose
+schemas:
+  default: legacy-brownfield-sdd
+  available:
+    - legacy-brownfield-sdd
+    - greenfield-sdd
+gates:
+  requireBusinessFit: true
+  requireReadinessProfile: true
+  requireNFRMatrix: true
+  requireHumanValidation: true

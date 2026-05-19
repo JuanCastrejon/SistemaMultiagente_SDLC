@@ -15,6 +15,7 @@ import {
   writeText
 } from "./file-utils.js";
 import { buildManagedFiles, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
+import { applyMigrations, migrationsToRun, SUPPORTED_VERSIONS } from "./migrations.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -409,11 +410,13 @@ function commandUpgrade(options) {
   if (!integrity.ok) {
     return { exitCode: EXIT_ERROR, payload: { status: "error", message: integrity.message, integrity } };
   }
-  if (toVersion !== "1.0.0" && toVersion !== "1.0.1") {
+  if (!SUPPORTED_VERSIONS.has(toVersion)) {
     return { exitCode: EXIT_ERROR, payload: { status: "error", message: `Version no soportada: ${toVersion}` } };
   }
+  const fromVersion = config.frameworkVersion;
   const nextConfig = { ...config, frameworkVersion: toVersion };
-  const files = buildManagedFiles(nextConfig);
+  const migrations = migrationsToRun(fromVersion, toVersion);
+  const files = applyMigrations(buildManagedFiles(nextConfig), migrations);
   const conflicts = detectConflicts(target, files, manifest);
   if (conflicts.length > 0) {
     if (!dryRun) {
@@ -428,9 +431,7 @@ function commandUpgrade(options) {
   const backup = createBackup(target, [...new Set([...Object.keys(files), ...manifest.managedFiles.map((entry) => entry.path)])], "upgrade");
   const nextManifest = writeManagedFiles(target, files, nextConfig, {
     ...manifest,
-    migrationsApplied: toVersion === "1.0.1"
-      ? [...new Set([...(manifest.migrationsApplied ?? []), "1.0.1"])]
-      : manifest.migrationsApplied ?? []
+    migrationsApplied: [...new Set([...(manifest.migrationsApplied ?? []), ...migrations.map((m) => m.version)])]
   });
   pruneBackupsInternal(target, nextConfig.backup?.keepLast ?? 5);
   return { exitCode: EXIT_OK, payload: { status: "ok", backup, frameworkVersion: nextManifest.frameworkVersion } };

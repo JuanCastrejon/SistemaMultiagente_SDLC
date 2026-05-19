@@ -1,0 +1,18 @@
+# Scope portable de Graphify
+*
+!AGENTS.md
+!indice-operativo.md
+!.github/agents/
+!.github/agents/**
+!.github/agent-state/
+!.github/agent-state/**
+!.github/skills/
+!.github/skills/**
+!docs/
+!docs/**
+!openspec/
+!openspec/**
+graphify-out/
+node_modules/
+dist/
+coverage/
