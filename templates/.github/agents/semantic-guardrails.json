@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "repo-is-source-of-truth",
+      "title": "Versioned repo state is the source of truth",
+      "references": [
+        "AGENTS.md",
+        ".github/AGENTS.md",
+        ".github/agent-state/README.md"
+      ]
+    },
+    {
+      "id": "business-readiness-is-required",
+      "title": "Functional work declares business goal, KPI, readiness and NFR evidence",
+      "references": [
+        "docs/guides/business-production-readiness.md",
+        "openspec/specs/business-production-readiness/"
+      ]
+    },
+    {
+      "id": "rework-is-label-driven",
+      "title": "Rework routing requires explicit rework labels",
+      "references": [
+        ".github/agent-state/phase-graph.yaml",
+        "docs/agents/triage-labels.md"
+      ]
+    }
+  ]
+}

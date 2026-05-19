@@ -22,6 +22,12 @@
 - Agrega scaffolds de mirrors `.claude/skills`, `.agents/skills` y `.windsurf/skills`.
 - Extiende `stack` con `database` y `designSystem` para las nuevas skills parametrizadas.
 
+### Phase 4 — Gobierno operativo
+
+- Enriquece `.github/agent-state/` con `phase-status`, `active-slices`, decisiones, riesgos, lock TTL, drafts, calibration y templates de rework/handoff.
+- Fortalece `phase-graph.yaml` con rework label-driven, `F3_5` tecnico y `F3.5` display.
+- Agrega personas `.agent.md` validables, README de agentes y trazabilidad/guardrails genericos.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine

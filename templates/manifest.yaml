@@ -21,14 +21,40 @@ templates:
     target: .github/agents/ownership-matrix.md
   - source: .github/agent-state/phase-graph.yaml
     target: .github/agent-state/phase-graph.yaml
+  - source: .github/agent-state/phase-status.yaml
+    target: .github/agent-state/phase-status.yaml
+  - source: .github/agent-state/active-slices.yaml
+    target: .github/agent-state/active-slices.yaml
   - source: .github/agent-state/current-slice.md
     target: .github/agent-state/current-slice.md
+  - source: .github/agent-state/open-decisions.md
+    target: .github/agent-state/open-decisions.md
+  - source: .github/agent-state/open-risks.md
+    target: .github/agent-state/open-risks.md
+  - source: .github/agent-state/platform-context.json
+    target: .github/agent-state/platform-context.json
   - source: .github/agent-state/handoffs/TEMPLATE.md
     target: .github/agent-state/handoffs/TEMPLATE.md
+  - source: .github/agent-state/handoffs/.gitkeep
+    target: .github/agent-state/handoffs/.gitkeep
   - source: .github/agent-state/templates/phase-gate.md
     target: .github/agent-state/templates/phase-gate.md
+  - source: .github/agent-state/templates/issue-rework.md
+    target: .github/agent-state/templates/issue-rework.md
+  - source: .github/agent-state/templates/handoff.md
+    target: .github/agent-state/templates/handoff.md
   - source: .github/agent-state/telemetry/SCHEMA.md
     target: .github/agent-state/telemetry/SCHEMA.md
+  - source: .github/agent-state/telemetry/.gitkeep
+    target: .github/agent-state/telemetry/.gitkeep
+  - source: .github/agent-state/calibration/SCHEMA.md
+    target: .github/agent-state/calibration/SCHEMA.md
+  - source: .github/agent-state/calibration/.gitkeep
+    target: .github/agent-state/calibration/.gitkeep
+  - source: .github/agent-state/drafts/.gitkeep
+    target: .github/agent-state/drafts/.gitkeep
+  - source: .github/agent-state/README.md
+    target: .github/agent-state/README.md
   - source: docs/guides/sdlc-multiagente.md
     target: docs/guides/sdlc-multiagente.md
   - source: openspec/config-greenfield.yaml
@@ -84,6 +110,28 @@ templates:
     target: .github/agents/web-agent.md
   - source: .github/agents/qa-security-review.md
     target: .github/agents/qa-security-review.md
+  - source: .github/agents/planificador-opus.agent.md
+    target: .github/agents/planificador-opus.agent.md
+  - source: .github/agents/orquestador-opus.agent.md
+    target: .github/agents/orquestador-opus.agent.md
+  - source: .github/agents/analista-requisitos.agent.md
+    target: .github/agents/analista-requisitos.agent.md
+  - source: .github/agents/arquitecto-modular-clean.agent.md
+    target: .github/agents/arquitecto-modular-clean.agent.md
+  - source: .github/agents/api-nestjs.agent.md
+    target: .github/agents/api-nestjs.agent.md
+  - source: .github/agents/web-admin.agent.md
+    target: .github/agents/web-admin.agent.md
+  - source: .github/agents/mobile-sync.agent.md
+    target: .github/agents/mobile-sync.agent.md
+  - source: .github/agents/qa-security-review.agent.md
+    target: .github/agents/qa-security-review.agent.md
+  - source: .github/agents/README.md
+    target: .github/agents/README.md
+  - source: .github/agents/semantic-guardrails.json
+    target: .github/agents/semantic-guardrails.json
+  - source: .github/agents/surface-traceability.json
+    target: .github/agents/surface-traceability.json
 
   # C3 — copilot-instructions (mode-specific)
   - source: .github/copilot-instructions-greenfield.md
