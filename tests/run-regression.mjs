@@ -135,6 +135,11 @@ assert.equal(bootstrapSkillsOutput.status, "ok");
 assert.equal(bootstrapSkillsOutput.external.attempted, false);
 assert.ok(bootstrapSkillsOutput.mirrors.some((entry) => entry.status === "written"));
 
+const initAlias = makeRepo("init-alias");
+const initAliasOutput = JSON.parse(run(["init", "--target", initAlias, "--mode", "greenfield", "--project-name", "Init Alias", "--dry-run", "--json"]));
+assert.equal(initAliasOutput.status, "ok");
+assert.ok(initAliasOutput.files.includes(".sdlc/config.json"));
+
 const legacy100 = makeRepo("legacy-upgrade-1-0-0");
 fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization", "README.md"), path.join(legacy100, "README.md"));
 run(["install", "--target", legacy100, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);

@@ -624,7 +624,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <install|upgrade|rollback|doctor|diff|prune-backups|migrate-config> --target <repo> [--json]"
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config> --target <repo> [--json]"
     }
   };
 }
@@ -632,6 +632,7 @@ function commandHelp() {
 export function run(argv) {
   const parsed = parseArgs(argv);
   switch (parsed.command) {
+    case "init":
     case "install":
       return commandInstall(parsed.options);
     case "doctor":

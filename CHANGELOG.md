@@ -50,6 +50,12 @@
 - Verifica agent-state base, specs canonicas, manifest de skills y `scale`.
 - Reporta Obsidian, Graphify y mirrors como checks informativos cuando siguen opt-in.
 
+### Phase 9-11 — E2E, community y CI/CD
+
+- Agrega alias `sdlc init` para `sdlc install` y prueba de regresion `init-alias`.
+- Expande README con quick start `npx`, flujo F0-F17, validators, matriz BMAD y roadmap.
+- Agrega workflows `regression-install`, `release` y `publish` manual con provenance.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine
