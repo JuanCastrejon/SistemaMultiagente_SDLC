@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   copyFilePreservingPath,
   ensureDir,
@@ -328,6 +329,128 @@ function collectDrift(target, config, manifest) {
   return { files, drift, missing, unmanaged };
 }
 
+function checkCommand(command, args = ["--version"]) {
+  const result = spawnSync(command, args, { encoding: "utf8", shell: false });
+  return {
+    ok: result.status === 0,
+    output: (result.stdout || result.stderr || "").trim().split(/\r?\n/)[0] ?? ""
+  };
+}
+
+function checkPowerShell() {
+  for (const command of process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"]) {
+    const result = spawnSync(command, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
+      encoding: "utf8",
+      shell: false
+    });
+    if (result.status === 0) {
+      return { ok: true, command, version: result.stdout.trim() };
+    }
+  }
+  return { ok: false, command: null, version: null };
+}
+
+function daysSince(filePath) {
+  if (!pathExists(filePath)) return null;
+  const ageMs = Date.now() - fs.statSync(filePath).mtimeMs;
+  return Math.floor(ageMs / (24 * 60 * 60 * 1000));
+}
+
+function collectDoctorEnhancements(target, config) {
+  const findings = [];
+  const nodeMajor = Number(process.versions.node.split(".")[0]);
+  findings.push({
+    level: nodeMajor >= 18 ? "info" : "error",
+    code: "runtime-node",
+    message: `Node.js ${process.versions.node}`,
+    required: ">=18"
+  });
+
+  const pwsh = checkPowerShell();
+  findings.push({
+    level: pwsh.ok ? "info" : "error",
+    code: "runtime-pwsh",
+    message: pwsh.ok ? `${pwsh.command} ${pwsh.version}` : "PowerShell runtime not found"
+  });
+
+  const git = checkCommand("git", ["--version"]);
+  findings.push({
+    level: git.ok ? "info" : "error",
+    code: "runtime-git",
+    message: git.ok ? git.output : "git not found"
+  });
+
+  const requiredAgentState = [
+    ".github/agent-state/phase-graph.yaml",
+    ".github/agent-state/phase-status.yaml",
+    ".github/agent-state/active-slices.yaml",
+    ".github/agent-state/current-slice.md",
+    ".github/agent-state/platform-context.json"
+  ];
+  for (const relativePath of requiredAgentState) {
+    if (!pathExists(path.join(target, relativePath))) {
+      findings.push({ level: "error", code: "agent-state-missing", path: relativePath });
+    }
+  }
+
+  if (!config || !config.scale) {
+    findings.push({ level: "error", code: "scale-missing", message: "config.scale is required in v1.2.0" });
+  } else {
+    findings.push({ level: "info", code: "scale-present", message: `scale=${config.scale}` });
+  }
+
+  const canonicalSpecs = [
+    "openspec/specs/business-production-readiness/spec.md",
+    "openspec/specs/project-phases/spec.md"
+  ];
+  for (const relativePath of canonicalSpecs) {
+    if (!pathExists(path.join(target, relativePath))) {
+      findings.push({ level: "error", code: "openspec-canonical-missing", path: relativePath });
+    }
+  }
+
+  const skillsManifest = path.join(target, "scripts", "agent-skills.manifest.json");
+  if (!pathExists(skillsManifest)) {
+    findings.push({ level: "error", code: "skill-manifest-missing", path: "scripts/agent-skills.manifest.json" });
+  }
+
+  const canonicalSkills = path.join(target, ".github", "skills");
+  const mirrorRoots = [".claude/skills", ".agents/skills", ".windsurf/skills"];
+  if (pathExists(canonicalSkills)) {
+    for (const mirrorRoot of mirrorRoots) {
+      const absoluteMirrorRoot = path.join(target, mirrorRoot);
+      if (!pathExists(absoluteMirrorRoot)) {
+        findings.push({ level: "info", code: "skill-mirror-not-generated", path: mirrorRoot });
+        continue;
+      }
+      for (const entry of fs.readdirSync(absoluteMirrorRoot, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const mirror = path.join(absoluteMirrorRoot, entry.name, "SKILL.md");
+        if (!pathExists(mirror)) continue;
+        const canonical = path.join(canonicalSkills, entry.name, "SKILL.md");
+        if (!pathExists(canonical)) {
+          findings.push({ level: "warning", code: "skill-mirror-without-canonical", path: `${mirrorRoot}/${entry.name}/SKILL.md` });
+        }
+      }
+    }
+  }
+
+  const obsidianLocal = path.join(target, "scripts", "obsidian-memory.config.local.json");
+  if (config?.obsidian?.enabled && !pathExists(obsidianLocal)) {
+    findings.push({ level: "info", code: "obsidian-config-not-enabled", message: "Optional memory config not found" });
+  }
+
+  const graphReport = path.join(target, "graphify-out", "GRAPH_REPORT.md");
+  const graphAge = daysSince(graphReport);
+  if (graphAge === null) {
+    findings.push({ level: "info", code: "graphify-report-missing", message: "Optional graphify report not found" });
+  } else if (graphAge > 30) {
+    findings.push({ level: "warning", code: "graphify-report-stale", message: `graphify report is ${graphAge} days old` });
+  }
+
+  return findings;
+}
+
 function commandDoctor(options) {
   const target = requireTarget(options);
   const findings = [];
@@ -360,6 +483,7 @@ function commandDoctor(options) {
       findings.push({ level: "warning", code: "managed-file-drift", ...entry });
     }
   }
+  findings.push(...collectDoctorEnhancements(target, config));
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {

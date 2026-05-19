@@ -44,6 +44,12 @@
 - Agrega 9 validators nuevos: placeholder scripts, politica de herramientas externas, precedencia de gobierno, consistencia de skills, schema de personas, links docs, OpenSpec, Mustache y `models.yaml`.
 - `npm run validate` ahora ejecuta 14 validators en cadena.
 
+### Phase 8 — Doctor
+
+- `sdlc doctor` reporta runtime Node, PowerShell y Git.
+- Verifica agent-state base, specs canonicas, manifest de skills y `scale`.
+- Reporta Obsidian, Graphify y mirrors como checks informativos cuando siguen opt-in.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine
