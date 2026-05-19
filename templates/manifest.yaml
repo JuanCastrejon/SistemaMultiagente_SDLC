@@ -45,6 +45,24 @@ templates:
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
     target: scripts/export-graphify-obsidian.py
+  - source: scripts/bootstrap-agent-skills.ps1
+    target: scripts/bootstrap-agent-skills.ps1
+  - source: scripts/agent-skills.manifest.json
+    target: scripts/agent-skills.manifest.json
+  - source: scripts/claude-to-obsidian.py
+    target: scripts/claude-to-obsidian.py
+  - source: scripts/sync-claude-obsidian.ps1
+    target: scripts/sync-claude-obsidian.ps1
+  - source: scripts/register-claude-sync-task.ps1
+    target: scripts/register-claude-sync-task.ps1
+  - source: scripts/bootstrap-obsidian-vault.ps1
+    target: scripts/bootstrap-obsidian-vault.ps1
+  - source: scripts/obsidian-memory.config.example.json
+    target: scripts/obsidian-memory.config.example.json
+  - source: scripts/models.yaml
+    target: scripts/models.yaml
+  - source: scripts/compute-calibration.ps1
+    target: scripts/compute-calibration.ps1
 
   # C1 — governance
   - source: CLAUDE.md

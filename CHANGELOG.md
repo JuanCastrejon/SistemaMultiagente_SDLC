@@ -9,6 +9,13 @@
 - Reserva `scale` en config (`bug`, `feature`, `epic`, `platform`) para adaptive scale de v1.3.0.
 - Agrega targets de migracion `1.1.0` y `1.2.0` para cubrir upgrades `1.0.0 -> 1.2.0` y `1.1.0 -> 1.2.0`.
 
+### Phase 2 — Scripts operativos
+
+- Reemplaza stubs por 12 scripts sanitizados en `templates/scripts/`.
+- Agrega politica opt-in: `publish-trace` y scheduler requieren `-Apply`; sync externo requiere flags explicitos.
+- Instala `agent-skills.manifest.json`, `models.yaml` routing-only y config ejemplo de memoria Obsidian.
+- Amplia regresion con pruebas golden para `continua`, `publish-trace`, `register-claude-sync-task`, `compute-calibration` y `bootstrap-agent-skills`.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine

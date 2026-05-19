@@ -26,6 +26,30 @@ function runStatus(args) {
   });
 }
 
+function findPowerShell() {
+  const candidates = process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"];
+  for (const command of candidates) {
+    const probe = spawnSync(command, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
+      cwd: repoRoot,
+      encoding: "utf8"
+    });
+    if (probe.status === 0) {
+      return command;
+    }
+  }
+  throw new Error("PowerShell runtime not found. v1.2.0 requires pwsh/powershell for script regression tests.");
+}
+
+function runPowerShellScript(scriptPath, args = [], cwd = repoRoot) {
+  const command = findPowerShell();
+  const prefix = process.platform === "win32" ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] : ["-NoProfile", "-File"];
+  return execFileSync(command, [...prefix, scriptPath, ...args], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+}
+
 function makeRepo(name) {
   const target = path.join(tempRoot, name);
   fs.mkdirSync(target, { recursive: true });
@@ -34,6 +58,10 @@ function makeRepo(name) {
 
 function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function readGolden(name) {
+  return JSON.parse(fs.readFileSync(path.join(repoRoot, "tests", "golden", name), "utf8"));
 }
 
 function simulateInstalledFrameworkVersion(target, version) {
@@ -66,6 +94,46 @@ assert.equal(greenfieldConfig.frameworkVersion, "1.2.0");
 assert.equal(greenfieldConfig.scale, "feature");
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
+
+const continuaOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "continua.ps1"), ["-NoLock", "-Json"], greenfield));
+assert.deepEqual(
+  {
+    status: continuaOutput.status,
+    project: continuaOutput.project,
+    platform: continuaOutput.platform,
+    lock_written: continuaOutput.lock_written
+  },
+  readGolden("continua-output.json")
+);
+
+const publishTraceOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "publish-trace.ps1"), ["-DryRun", "-Json"], greenfield));
+assert.deepEqual(
+  {
+    status: publishTraceOutput.status,
+    dry_run: publishTraceOutput.dry_run,
+    processed: publishTraceOutput.processed
+  },
+  readGolden("publish-trace-dryrun.json")
+);
+
+const registerTaskOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "register-claude-sync-task.ps1"), ["-DryRun", "-Json"], greenfield));
+assert.deepEqual(
+  {
+    status: registerTaskOutput.status,
+    dry_run: registerTaskOutput.dry_run,
+    task_name: registerTaskOutput.task_name
+  },
+  readGolden("register-task-dryrun.json")
+);
+
+const calibrationOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "compute-calibration.ps1"), ["-Json"], greenfield));
+assert.equal(calibrationOutput.status, "ok");
+assert.equal(typeof calibrationOutput.agreement, "number");
+
+const bootstrapSkillsOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "bootstrap-agent-skills.ps1"), ["-SkipExternalInstall", "-Json"], greenfield));
+assert.equal(bootstrapSkillsOutput.status, "ok");
+assert.equal(bootstrapSkillsOutput.external.attempted, false);
+assert.ok(bootstrapSkillsOutput.mirrors.some((entry) => entry.status === "written"));
 
 const legacy100 = makeRepo("legacy-upgrade-1-0-0");
 fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization", "README.md"), path.join(legacy100, "README.md"));

@@ -1,0 +1,39 @@
+{
+  "repoRoot": ".",
+  "workspaceRoot": "{{obsidian.memoryWorkspace}}",
+  "vaultRoot": "{{obsidian.memoryWorkspace}}\\vault",
+  "projectSlug": "{{project.slug}}",
+  "projectName": "{{project.name}}",
+  "sources": {
+    "claudeCode": {
+      "enabled": true,
+      "exportDir": "{{obsidian.memoryWorkspace}}\\exports\\code"
+    },
+    "claudeWeb": {
+      "enabled": false,
+      "exportDir": "{{obsidian.memoryWorkspace}}\\exports\\web"
+    },
+    "codex": {
+      "enabled": true,
+      "sessionRoots": [
+        "{{obsidian.memoryWorkspace}}\\exports\\codex"
+      ]
+    },
+    "copilot": {
+      "enabled": false,
+      "workspaceStorageRoot": "%APPDATA%\\Code\\User\\workspaceStorage",
+      "includeChatSessions": true,
+      "includeEmptyWindow": false
+    }
+  },
+  "exportDirs": {
+    "code": "{{obsidian.memoryWorkspace}}\\exports\\code",
+    "web": "{{obsidian.memoryWorkspace}}\\exports\\web"
+  },
+  "logsDir": "{{obsidian.memoryWorkspace}}\\logs",
+  "graphifyObsidianDir": "{{obsidian.memoryWorkspace}}\\vault\\graphify\\{{project.slug}}",
+  "taskName": "{{project.slug}}-sdlc-memory-sync",
+  "scheduleTime": "22:00",
+  "moveProcessedFiles": true,
+  "obsidianConfigPath": "%APPDATA%\\obsidian\\obsidian.json"
+}
