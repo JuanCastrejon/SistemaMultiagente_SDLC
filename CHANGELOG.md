@@ -28,6 +28,12 @@
 - Fortalece `phase-graph.yaml` con rework label-driven, `F3_5` tecnico y `F3.5` display.
 - Agrega personas `.agent.md` validables, README de agentes y trazabilidad/guardrails genericos.
 
+### Phase 5 — Docs operativas
+
+- Agrega `docs/agents/` con presentacion F0-F17, catalogo de comandos, triage labels, mapa de handoffs, stack map y dominio base.
+- Documenta la instalacion opt-in de Obsidian, Graphify, caveman y sync de memoria en `external-tools-matrix.md`.
+- Agrega matriz de trazabilidad por superficie y guardrails semanticos genericos.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine

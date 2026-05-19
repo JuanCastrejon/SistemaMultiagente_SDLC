@@ -57,6 +57,26 @@ templates:
     target: .github/agent-state/README.md
   - source: docs/guides/sdlc-multiagente.md
     target: docs/guides/sdlc-multiagente.md
+  - source: docs/agents/presentacion-sistema-multiagente-sdlc.md
+    target: docs/agents/presentacion-sistema-multiagente-sdlc.md
+  - source: docs/agents/catalogo-comandos-proyecto.md
+    target: docs/agents/catalogo-comandos-proyecto.md
+  - source: docs/agents/external-tools-matrix.md
+    target: docs/agents/external-tools-matrix.md
+  - source: docs/agents/triage-labels.md
+    target: docs/agents/triage-labels.md
+  - source: docs/agents/mapa-de-agentes-y-handoffs.md
+    target: docs/agents/mapa-de-agentes-y-handoffs.md
+  - source: docs/agents/matriz-de-trazabilidad-por-superficie.md
+    target: docs/agents/matriz-de-trazabilidad-por-superficie.md
+  - source: docs/agents/guardrails-semanticos-del-dominio.md
+    target: docs/agents/guardrails-semanticos-del-dominio.md
+  - source: docs/agents/stack-map.md
+    target: docs/agents/stack-map.md
+  - source: docs/agents/issue-tracker.md
+    target: docs/agents/issue-tracker.md
+  - source: docs/agents/domain.md
+    target: docs/agents/domain.md
   - source: openspec/config-greenfield.yaml
     target: openspec/config.yaml
     modes: [greenfield]
