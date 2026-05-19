@@ -2,9 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+
+- ADR `0002-codegraph-spike.md` cambia de estado **Propuesta → Aceptada**. Se reemplaza la estrategia de "spike 7 días con benchmarks sintéticos obligatorios" por **"instalar y observar"**: la adopción es coexistencia con Graphify desde el día 1, sin slice dedicado, y la verificación del ahorro de tokens claimado por CodeGraph (94 % menos tool-calls según su README) se hará por observación natural durante varias sesiones reales. El ADR ahora documenta:
+  - Reglas concretas de coexistencia (Graphify-first para razonamiento humano y `enrich-us` 4.5; CodeGraph vía MCP para queries estructurales runtime).
+  - Triggers para abrir ADR 0004 (evidencia de ahorro real, cobertura de rutas framework, o costo operativo excesivo).
+  - Implementación operativa ya ejecutada en `FacturacionDian` con scope narrow (`apps/**/src` + `packages/**/src`, `.ts/.tsx`) para evitar el OOM del index default sobre un monorepo grande.
+  - Métricas del index inicial sobre `FacturacionDian`: 658 archivos, 7.954 nodes, 14.869 edges, 14.48 MB native SQLite.
+
 ### Added
 
-- ADR `0002-codegraph-spike.md`: aprobar evaluación de 7 días de [CodeGraph (colbymchenry)](https://github.com/colbymchenry/codegraph) como complemento o reemplazo de Graphify. El spike no toca `templates/`, `src/` ni `bin/`; la decisión va en ADR 0004.
+- ADR `0002-codegraph-spike.md` (versión Propuesta inicial): aprobar evaluación de 7 días de [CodeGraph (colbymchenry)](https://github.com/colbymchenry/codegraph). Esta versión queda en el historial git; la versión vigente es la Aceptada del bloque "Changed" anterior.
 - ADR `0003-per-phase-model-assignment.md`: extender `templates/scripts/models.yaml` con bloque opcional `phases:` para asignar modelos distintos a fases SDD (`sdd-explore`, `sdd-design`, `sdd-implement`, `sdd-review` o F0-F17). Reduce costo en exploración manteniendo precisión en F2-F3. Inspirado por el patrón `--profile-phase` de `gentle-ai`.
 - `templates/scripts/models.yaml`: bloque `phases:` opt-in con defaults documentados (Haiku para `sdd-explore`, Opus para `sdd-design`, Sonnet para `sdd-implement`/`sdd-review`).
 
