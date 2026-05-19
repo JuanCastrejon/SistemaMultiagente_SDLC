@@ -131,6 +131,20 @@ templates:
   - source: .github/skills/operacion-cli-devops/SKILL.md
     target: .github/skills/operacion-cli-devops/SKILL.md
 
+  # C5 — stack-skills
+  - source: .github/skills/backend-audit/SKILL.md
+    target: .github/skills/backend-audit/SKILL.md
+  - source: .github/skills/ui-ux-diseno/SKILL.md
+    target: .github/skills/ui-ux-diseno/SKILL.md
+
+  # C6 — skill mirror scaffolds
+  - source: .claude/skills/.gitkeep
+    target: .claude/skills/.gitkeep
+  - source: .agents/skills/.gitkeep
+    target: .agents/skills/.gitkeep
+  - source: .windsurf/skills/.gitkeep
+    target: .windsurf/skills/.gitkeep
+
   # C7 — openspec-schemas
   - source: openspec/schemas/legacy-brownfield-sdd/schema.yaml
     target: openspec/schemas/legacy-brownfield-sdd/schema.yaml

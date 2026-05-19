@@ -23,6 +23,16 @@
       "default": "feature",
       "description": "Reserved for v1.3.0 adaptive scale. Not consumed in v1.2.0."
     },
+    "stack": {
+      "type": "object",
+      "properties": {
+        "backend": { "type": "string" },
+        "frontend": { "type": "string" },
+        "database": { "type": "string" },
+        "designSystem": { "type": "string" },
+        "mobile": { "type": "string" }
+      }
+    },
     "surfaces": {
       "type": "array",
       "items": {

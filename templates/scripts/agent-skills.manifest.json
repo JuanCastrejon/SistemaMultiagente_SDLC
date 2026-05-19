@@ -10,6 +10,7 @@
   ],
   "repoGovernedSkillSourceRoot": ".github/skills",
   "repoGovernedSkills": [
+    "backend-audit",
     "commit",
     "contexto-proyecto",
     "documentacion-viva",
@@ -24,7 +25,8 @@
     "openspec-sync",
     "openspec-verify",
     "operacion-cli-devops",
-    "orquestacion-multiagente"
+    "orquestacion-multiagente",
+    "ui-ux-diseno"
   ],
   "externalCollections": [
     {
@@ -52,7 +54,9 @@
       "enrich-us",
       "openspec-*",
       "contexto-proyecto",
-      "orquestacion-multiagente"
+      "orquestacion-multiagente",
+      "backend-audit",
+      "ui-ux-diseno"
     ],
     "reason": "Repo-governed skills are canonical and external skills must not replace them."
   }

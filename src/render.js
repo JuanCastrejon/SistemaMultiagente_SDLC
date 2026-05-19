@@ -32,6 +32,8 @@ export function defaultConfig({ target, mode = "greenfield", projectName, projec
     stack: {
       backend: "<BACKEND_STACK>",
       frontend: "<FRONTEND_STACK>",
+      database: "<DATABASE_STACK>",
+      designSystem: "<DESIGN_SYSTEM>",
       mobile: "<MOBILE_STACK>"
     },
     surfaces: [

@@ -16,6 +16,12 @@
 - Instala `agent-skills.manifest.json`, `models.yaml` routing-only y config ejemplo de memoria Obsidian.
 - Amplia regresion con pruebas golden para `continua`, `publish-trace`, `register-claude-sync-task`, `compute-calibration` y `bootstrap-agent-skills`.
 
+### Phase 3 — C5/C6 skills
+
+- Agrega stack-skills canonicas `backend-audit` y `ui-ux-diseno` bajo `.github/skills`.
+- Agrega scaffolds de mirrors `.claude/skills`, `.agents/skills` y `.windsurf/skills`.
+- Extiende `stack` con `database` y `designSystem` para las nuevas skills parametrizadas.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine
