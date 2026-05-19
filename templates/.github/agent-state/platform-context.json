@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "updated_at": null,
+  "lock": null,
+  "current_slice": {
+    "id": "bootstrap-{{project.slug}}",
+    "phase": "F0"
+  },
+  "latest_handoff": null,
+  "vault_checkpoint": null,
+  "_note": "Initial file. Run scripts/continua.ps1 to update with a real TTL lock."
+}

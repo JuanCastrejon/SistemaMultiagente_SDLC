@@ -21,16 +21,62 @@ templates:
     target: .github/agents/ownership-matrix.md
   - source: .github/agent-state/phase-graph.yaml
     target: .github/agent-state/phase-graph.yaml
+  - source: .github/agent-state/phase-status.yaml
+    target: .github/agent-state/phase-status.yaml
+  - source: .github/agent-state/active-slices.yaml
+    target: .github/agent-state/active-slices.yaml
   - source: .github/agent-state/current-slice.md
     target: .github/agent-state/current-slice.md
+  - source: .github/agent-state/open-decisions.md
+    target: .github/agent-state/open-decisions.md
+  - source: .github/agent-state/open-risks.md
+    target: .github/agent-state/open-risks.md
+  - source: .github/agent-state/platform-context.json
+    target: .github/agent-state/platform-context.json
   - source: .github/agent-state/handoffs/TEMPLATE.md
     target: .github/agent-state/handoffs/TEMPLATE.md
+  - source: .github/agent-state/handoffs/.gitkeep
+    target: .github/agent-state/handoffs/.gitkeep
   - source: .github/agent-state/templates/phase-gate.md
     target: .github/agent-state/templates/phase-gate.md
+  - source: .github/agent-state/templates/issue-rework.md
+    target: .github/agent-state/templates/issue-rework.md
+  - source: .github/agent-state/templates/handoff.md
+    target: .github/agent-state/templates/handoff.md
   - source: .github/agent-state/telemetry/SCHEMA.md
     target: .github/agent-state/telemetry/SCHEMA.md
+  - source: .github/agent-state/telemetry/.gitkeep
+    target: .github/agent-state/telemetry/.gitkeep
+  - source: .github/agent-state/calibration/SCHEMA.md
+    target: .github/agent-state/calibration/SCHEMA.md
+  - source: .github/agent-state/calibration/.gitkeep
+    target: .github/agent-state/calibration/.gitkeep
+  - source: .github/agent-state/drafts/.gitkeep
+    target: .github/agent-state/drafts/.gitkeep
+  - source: .github/agent-state/README.md
+    target: .github/agent-state/README.md
   - source: docs/guides/sdlc-multiagente.md
     target: docs/guides/sdlc-multiagente.md
+  - source: docs/agents/presentacion-sistema-multiagente-sdlc.md
+    target: docs/agents/presentacion-sistema-multiagente-sdlc.md
+  - source: docs/agents/catalogo-comandos-proyecto.md
+    target: docs/agents/catalogo-comandos-proyecto.md
+  - source: docs/agents/external-tools-matrix.md
+    target: docs/agents/external-tools-matrix.md
+  - source: docs/agents/triage-labels.md
+    target: docs/agents/triage-labels.md
+  - source: docs/agents/mapa-de-agentes-y-handoffs.md
+    target: docs/agents/mapa-de-agentes-y-handoffs.md
+  - source: docs/agents/matriz-de-trazabilidad-por-superficie.md
+    target: docs/agents/matriz-de-trazabilidad-por-superficie.md
+  - source: docs/agents/guardrails-semanticos-del-dominio.md
+    target: docs/agents/guardrails-semanticos-del-dominio.md
+  - source: docs/agents/stack-map.md
+    target: docs/agents/stack-map.md
+  - source: docs/agents/issue-tracker.md
+    target: docs/agents/issue-tracker.md
+  - source: docs/agents/domain.md
+    target: docs/agents/domain.md
   - source: openspec/config-greenfield.yaml
     target: openspec/config.yaml
     modes: [greenfield]
@@ -45,6 +91,24 @@ templates:
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
     target: scripts/export-graphify-obsidian.py
+  - source: scripts/bootstrap-agent-skills.ps1
+    target: scripts/bootstrap-agent-skills.ps1
+  - source: scripts/agent-skills.manifest.json
+    target: scripts/agent-skills.manifest.json
+  - source: scripts/claude-to-obsidian.py
+    target: scripts/claude-to-obsidian.py
+  - source: scripts/sync-claude-obsidian.ps1
+    target: scripts/sync-claude-obsidian.ps1
+  - source: scripts/register-claude-sync-task.ps1
+    target: scripts/register-claude-sync-task.ps1
+  - source: scripts/bootstrap-obsidian-vault.ps1
+    target: scripts/bootstrap-obsidian-vault.ps1
+  - source: scripts/obsidian-memory.config.example.json
+    target: scripts/obsidian-memory.config.example.json
+  - source: scripts/models.yaml
+    target: scripts/models.yaml
+  - source: scripts/compute-calibration.ps1
+    target: scripts/compute-calibration.ps1
 
   # C1 — governance
   - source: CLAUDE.md
@@ -66,6 +130,28 @@ templates:
     target: .github/agents/web-agent.md
   - source: .github/agents/qa-security-review.md
     target: .github/agents/qa-security-review.md
+  - source: .github/agents/planificador-opus.agent.md
+    target: .github/agents/planificador-opus.agent.md
+  - source: .github/agents/orquestador-opus.agent.md
+    target: .github/agents/orquestador-opus.agent.md
+  - source: .github/agents/analista-requisitos.agent.md
+    target: .github/agents/analista-requisitos.agent.md
+  - source: .github/agents/arquitecto-modular-clean.agent.md
+    target: .github/agents/arquitecto-modular-clean.agent.md
+  - source: .github/agents/api-nestjs.agent.md
+    target: .github/agents/api-nestjs.agent.md
+  - source: .github/agents/web-admin.agent.md
+    target: .github/agents/web-admin.agent.md
+  - source: .github/agents/mobile-sync.agent.md
+    target: .github/agents/mobile-sync.agent.md
+  - source: .github/agents/qa-security-review.agent.md
+    target: .github/agents/qa-security-review.agent.md
+  - source: .github/agents/README.md
+    target: .github/agents/README.md
+  - source: .github/agents/semantic-guardrails.json
+    target: .github/agents/semantic-guardrails.json
+  - source: .github/agents/surface-traceability.json
+    target: .github/agents/surface-traceability.json
 
   # C3 — copilot-instructions (mode-specific)
   - source: .github/copilot-instructions-greenfield.md
@@ -113,6 +199,20 @@ templates:
   - source: .github/skills/operacion-cli-devops/SKILL.md
     target: .github/skills/operacion-cli-devops/SKILL.md
 
+  # C5 — stack-skills
+  - source: .github/skills/backend-audit/SKILL.md
+    target: .github/skills/backend-audit/SKILL.md
+  - source: .github/skills/ui-ux-diseno/SKILL.md
+    target: .github/skills/ui-ux-diseno/SKILL.md
+
+  # C6 — skill mirror scaffolds
+  - source: .claude/skills/.gitkeep
+    target: .claude/skills/.gitkeep
+  - source: .agents/skills/.gitkeep
+    target: .agents/skills/.gitkeep
+  - source: .windsurf/skills/.gitkeep
+    target: .windsurf/skills/.gitkeep
+
   # C7 — openspec-schemas
   - source: openspec/schemas/legacy-brownfield-sdd/schema.yaml
     target: openspec/schemas/legacy-brownfield-sdd/schema.yaml
@@ -153,6 +253,10 @@ templates:
     target: openspec/changes/.gitkeep
   - source: openspec/specs/business-production-readiness/README.md
     target: openspec/specs/business-production-readiness/README.md
+  - source: openspec/specs/business-production-readiness/spec.md
+    target: openspec/specs/business-production-readiness/spec.md
+  - source: openspec/specs/project-phases/spec.md
+    target: openspec/specs/project-phases/spec.md
   - source: openspec/profiles/minimal.yaml
     target: openspec/profiles/minimal.yaml
   - source: openspec/profiles/expanded.yaml

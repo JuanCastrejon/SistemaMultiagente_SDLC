@@ -1,90 +1,192 @@
+# phase-graph.yaml
+# Forward edges + label-driven rework triggers for the F0-F17 SDLC flow.
+#
+# Rework rule:
+# - Rework is label-driven, not semantic parsing.
+# - PR comments attach explicit labels: rework:<phase>:<reason>.
+# - Without a label, no rework auto-triggers.
+# - auto: true means the rework can be invoked without human approval.
+# - auto: false means the rework is blocked until a human confirms.
+
 version: 1
 updated: 2026-05-18
 max_rework_attempts_per_phase: 2
+
 phases:
   F0:
-    name: "Bootstrap"
+    name: Bootstrap
+    display: F0
     forward: [F1]
     rework: {}
   F1:
-    name: "Analisis requisitos"
+    name: Requirements analysis
+    display: F1
     forward: [F2]
     rework: {}
   F2:
-    name: "Revision humana del borrador"
+    name: Human draft review
+    display: F2
     forward: [F3]
-    rework: {}
+    rework:
+      rework:F1:scope-changed:
+        target: F1
+        auto: true
+        reason: Scope changed after human review.
   F3:
-    name: "Issue local y validacion"
+    name: Local issue and validation
+    display: F3
     forward: [F3_5]
-    rework: {}
+    rework:
+      rework:F1:scope-changed:
+        target: F1
+        auto: true
+      rework:F2:re-review:
+        target: F2
+        auto: false
   F3_5:
-    name: "Branch desde integracion"
+    name: Branch from integration
+    display: F3.5
     forward: [F4]
     rework: {}
   F4:
-    name: "Handoff readiness-gate"
+    name: Readiness-gate handoff
+    display: F4
     forward: [F5]
     rework: {}
   F5:
-    name: "Planificacion SDD"
+    name: SDD planning
+    display: F5
     forward: [F6]
-    rework: {}
+    rework:
+      rework:F1:requirements-gap:
+        target: F1
+        auto: false
+      rework:F5:contract:
+        target: F5
+        auto: false
   F6:
-    name: "Handoff planificador-orquestador"
+    name: Planner to orchestrator handoff
+    display: F6
     forward: [F7]
     rework: {}
   F7:
-    name: "Orquestacion"
+    name: Orchestration
+    display: F7
     forward: [F8]
-    rework: {}
+    rework:
+      rework:F5:plan-incomplete:
+        target: F5
+        auto: true
   F8:
-    name: "Implementacion"
+    name: Implementation
+    display: F8
     forward: [F9]
-    rework: {}
+    rework:
+      rework:F5:contract-ambiguity:
+        target: F5
+        auto: false
   F9:
-    name: "QA tests"
+    name: QA tests
+    display: F9
     forward: [F10]
-    rework: {}
+    rework:
+      rework:F8:test-failure:
+        target: F8
+        auto: true
+      rework:F5:spec-ambiguity:
+        target: F5
+        auto: false
   F10:
-    name: "Security review"
+    name: Security review
+    display: F10
     forward: [F11]
-    rework: {}
+    rework:
+      rework:F8:security-finding-low:
+        target: F8
+        auto: true
+      rework:F8:security-finding-medium:
+        target: F8
+        auto: true
+      rework:F8:security-finding-high:
+        target: F8
+        auto: false
+      rework:F8:security-finding-critical:
+        target: F8
+        auto: false
+      rework:F5:security-design-flaw:
+        target: F5
+        auto: false
   F11:
-    name: "Commit y push"
+    name: Commit and push
+    display: F11
     forward: [F12]
     rework: {}
   F12:
-    name: "Pull request"
+    name: Pull request
+    display: F12
     forward: [F13]
     rework: {}
   F13:
-    name: "Gate humano final"
+    name: Final human gate
+    display: F13
     forward: [F14]
-    rework: {}
+    rework:
+      rework:F8:code-level:
+        target: F8
+        auto: true
+        reason: PR comments are code-level and small enough for specialist correction.
+      rework:F9:regression:
+        target: F9
+        auto: true
+      rework:F5:design:
+        target: F5
+        auto: false
+      rework:F5:contract:
+        target: F5
+        auto: false
+      rework:F10:security-re-scan:
+        target: F10
+        auto: true
   F14:
-    name: "Merge a integracion"
+    name: Merge to integration
+    display: F14
     forward: [F15]
     rework: {}
   F15:
-    name: "Verify post-merge"
+    name: Post-merge verify
+    display: F15
     forward: [F16]
-    rework: {}
+    rework:
+      rework:F8:spec-drift:
+        target: F8
+        auto: true
+      rework:F5:spec-incorrect:
+        target: F5
+        auto: false
   F16:
-    name: "Archive"
+    name: Archive
+    display: F16
     forward: [F17]
     rework: {}
   F17:
-    name: "Doc viva y publish trace"
+    name: Living docs and publish trace
+    display: F17
     forward: []
     rework: {}
-rework_labels:
-  rework:F8:code-level:
-    target: F8
-    auto: true
-  rework:F5:contract:
-    target: F5
-    auto: false
-  rework:F10:security-re-scan:
-    target: F10
-    auto: true
+
+phase_abort:
+  command: "/phase-abort <slug> --to <phase>"
+  behavior:
+    - tag: "slice/<slug>/phase-abort-<from>-<ts>"
+      preserve_work: true
+    - clean: ".github/agent-state/handoffs/HANDOFF-*<slug>*"
+    - reset: ".github/agent-state/current-slice.md phase to target"
+    - emit: "new handoff from target to target+1"
+  rule: Use only when label-driven rework is insufficient.
+
+escalation:
+  max_rework_attempts_per_phase: 2
+  on_exceed:
+    - write: ".github/agent-state/escalations/<slug>-<phase>.md"
+    - emit_telemetry: "kind: escalation"
+    - block_until_human: true

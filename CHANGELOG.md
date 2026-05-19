@@ -1,5 +1,61 @@
 # Changelog
 
+## [1.2.0] — Unreleased
+
+### Phase 1 — Versionado y migraciones
+
+- Prepara metadata npm publica para `sistema-multiagente-sdlc`.
+- Actualiza `frameworkVersion` a `1.2.0`.
+- Reserva `scale` en config (`bug`, `feature`, `epic`, `platform`) para adaptive scale de v1.3.0.
+- Agrega targets de migracion `1.1.0` y `1.2.0` para cubrir upgrades `1.0.0 -> 1.2.0` y `1.1.0 -> 1.2.0`.
+
+### Phase 2 — Scripts operativos
+
+- Reemplaza stubs por 12 scripts sanitizados en `templates/scripts/`.
+- Agrega politica opt-in: `publish-trace` y scheduler requieren `-Apply`; sync externo requiere flags explicitos.
+- Instala `agent-skills.manifest.json`, `models.yaml` routing-only y config ejemplo de memoria Obsidian.
+- Amplia regresion con pruebas golden para `continua`, `publish-trace`, `register-claude-sync-task`, `compute-calibration` y `bootstrap-agent-skills`.
+
+### Phase 3 — C5/C6 skills
+
+- Agrega stack-skills canonicas `backend-audit` y `ui-ux-diseno` bajo `.github/skills`.
+- Agrega scaffolds de mirrors `.claude/skills`, `.agents/skills` y `.windsurf/skills`.
+- Extiende `stack` con `database` y `designSystem` para las nuevas skills parametrizadas.
+
+### Phase 4 — Gobierno operativo
+
+- Enriquece `.github/agent-state/` con `phase-status`, `active-slices`, decisiones, riesgos, lock TTL, drafts, calibration y templates de rework/handoff.
+- Fortalece `phase-graph.yaml` con rework label-driven, `F3_5` tecnico y `F3.5` display.
+- Agrega personas `.agent.md` validables, README de agentes y trazabilidad/guardrails genericos.
+
+### Phase 5 — Docs operativas
+
+- Agrega `docs/agents/` con presentacion F0-F17, catalogo de comandos, triage labels, mapa de handoffs, stack map y dominio base.
+- Documenta la instalacion opt-in de Obsidian, Graphify, caveman y sync de memoria en `external-tools-matrix.md`.
+- Agrega matriz de trazabilidad por superficie y guardrails semanticos genericos.
+
+### Phase 6 — OpenSpec specs base
+
+- Instala specs canonicas `business-production-readiness` y `project-phases`.
+- Deja specs donor especificas como referencia educativa no instalada en `docs/examples/openspec-specs-ejemplos/`.
+
+### Phase 7 — Validators
+
+- Agrega 9 validators nuevos: placeholder scripts, politica de herramientas externas, precedencia de gobierno, consistencia de skills, schema de personas, links docs, OpenSpec, Mustache y `models.yaml`.
+- `npm run validate` ahora ejecuta 14 validators en cadena.
+
+### Phase 8 — Doctor
+
+- `sdlc doctor` reporta runtime Node, PowerShell y Git.
+- Verifica agent-state base, specs canonicas, manifest de skills y `scale`.
+- Reporta Obsidian, Graphify y mirrors como checks informativos cuando siguen opt-in.
+
+### Phase 9-11 — E2E, community y CI/CD
+
+- Agrega alias `sdlc init` para `sdlc install` y prueba de regresion `init-alias`.
+- Expande README con quick start `npx`, flujo F0-F17, validators, matriz BMAD y roadmap.
+- Agrega workflows `regression-install`, `release` y `publish` manual con provenance.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine
