@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- ADR `0002-codegraph-spike.md`: aprobar evaluación de 7 días de [CodeGraph (colbymchenry)](https://github.com/colbymchenry/codegraph) como complemento o reemplazo de Graphify. El spike no toca `templates/`, `src/` ni `bin/`; la decisión va en ADR 0004.
+- ADR `0003-per-phase-model-assignment.md`: extender `templates/scripts/models.yaml` con bloque opcional `phases:` para asignar modelos distintos a fases SDD (`sdd-explore`, `sdd-design`, `sdd-implement`, `sdd-review` o F0-F17). Reduce costo en exploración manteniendo precisión en F2-F3. Inspirado por el patrón `--profile-phase` de `gentle-ai`.
+- `templates/scripts/models.yaml`: bloque `phases:` opt-in con defaults documentados (Haiku para `sdd-explore`, Opus para `sdd-design`, Sonnet para `sdd-implement`/`sdd-review`).
+
+### Changed
+
+- `scripts/validate-models-schema.mjs`: soporte para clave top-level `phases` opcional + verificación de shape `{ primary, fallback }` por fase. Bloque `phases:` declarado pero vacío produce error explícito.
+
 ### Docs
 
 - README: actualizada tabla `BMAD Comparison` con realidad V6 de BMAD-METHOD (module ecosystem BMM/BMB/TEA/BMGD/CIS, Skills Architecture, Sub-Agent inclusion, scale-adaptive, Discord community) y comparación side-by-side honesta. Datos tomados del README oficial v6 de `bmad-code-org/BMAD-METHOD`.

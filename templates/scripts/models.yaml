@@ -1,5 +1,5 @@
 version: 1
-updated: "2026-05-18"
+updated: "2026-05-19"
 
 roles:
   orquestador:
@@ -24,6 +24,36 @@ platforms:
     default: gpt-5
   windsurf:
     default: claude-sonnet-4-6
+
+# Per-phase model assignment (opt-in, v1.3.0+).
+# Asignar modelos distintos a cada fase del flujo SDD para optimizar costo sin
+# perder calidad en pasos críticos. Cuando una fase no aparezca aquí, se usa el
+# rol equivalente (ver bloque `roles` arriba). Esto NO reemplaza `roles`/`platforms`;
+# es una capa de override más fina.
+#
+# Convenciones:
+# - Claves: nombres canónicos de fase F0-F17 (ver docs/agents/presentacion-sistema-multiagente-sdlc.md)
+#   o pseudo-fases SDD (`sdd-explore`, `sdd-design`, `sdd-implement`, `sdd-review`).
+# - Valores: { primary, fallback }, mismo schema que `roles`.
+# - Modelos `cheap:*` o `:free` quedan permitidos para exploración/triage donde la
+#   precisión no es crítica. Ver ADR 0003 para criterios.
+phases:
+  # F0 triage / exploración rápida → modelo barato
+  sdd-explore:
+    primary: claude-haiku-4-5-20251001
+    fallback: claude-sonnet-4-6
+  # F2-F3 análisis y diseño → modelo más capaz
+  sdd-design:
+    primary: claude-opus-4-7
+    fallback: claude-sonnet-4-6
+  # F5+ implementación → modelo intermedio
+  sdd-implement:
+    primary: claude-sonnet-4-6
+    fallback: claude-haiku-4-5-20251001
+  # F6+ verificación / review → modelo intermedio con fallback a haiku
+  sdd-review:
+    primary: claude-sonnet-4-6
+    fallback: claude-haiku-4-5-20251001
 
 fallbacks:
   - claude-sonnet-4-6
