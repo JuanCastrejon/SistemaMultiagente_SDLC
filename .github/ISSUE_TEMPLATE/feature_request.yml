@@ -1,0 +1,56 @@
+name: Feature request
+description: Propone una mejora para el framework o sus templates.
+title: "feat: "
+labels:
+  - enhancement
+  - needs-triage
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Que problema resuelve y para quien.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Proposed scope
+      description: Que deberia entrar y que debe quedar fuera.
+    validations:
+      required: true
+  - type: dropdown
+    id: breaking
+    attributes:
+      label: Breaking change?
+      options:
+        - "No"
+        - "Yes"
+        - "Unsure"
+    validations:
+      required: true
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Affected phase
+      options:
+        - F0 bootstrap
+        - F1 analysis
+        - F5 planning
+        - F8 implementation
+        - F9 QA
+        - F10 security
+        - F13 human gate
+        - F17 trace/archive
+        - CLI/install
+        - templates
+        - validators
+        - docs
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Opcional, pero ayuda a evitar repetir decisiones.

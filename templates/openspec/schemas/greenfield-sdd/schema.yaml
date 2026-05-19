@@ -1,0 +1,143 @@
+name: greenfield-sdd
+version: 1
+description: "Workflow greenfield: proposal -> specs -> design -> tasks"
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal document outlining the new capability
+    template: proposal.md
+    instruction: >
+      Create the proposal document that establishes WHY this change is needed
+      and WHAT will be built.
+
+
+      Sections:
+
+      - **Why**: Problem or opportunity being solved.
+
+      - **What Changes**: Specific capabilities being introduced. Mark breaking
+      changes with **BREAKING** when applicable.
+
+      - **Business Fit y KPI principal**: Qué objetivo de negocio persigue el
+      cambio y cuál es su KPI principal.
+
+      - **Perfil de readiness**: Nivel `L1`, `L2` o `L3` con justificación.
+
+      - **Capabilities**: New capabilities being introduced.
+        - Use kebab-case names. Each becomes `specs/<name>/spec.md`.
+
+      - **Dependency Map**: Dependencies with type, status, and blocker flag.
+
+      - **Impact**: Affected docs, code, APIs, data, operations.
+
+      - **Readiness Gate**: Minimum evidence required before implementation or
+      release.
+
+      - **Viabilidad y esfuerzo**: S/M/L/XL, riesgo técnico y funcional.
+
+
+      Guardrails:
+
+      - Keep the proposal concise and avoid implementation detail.
+
+      - If the change is functional non-trivial, tie it to a business KPI and
+      a readiness profile.
+
+      - For non-trivial functional changes, verify business fit, KPI, readiness
+      profile, NFR matrix, and human validation exist before creating the
+      proposal.
+    requires: []
+  - id: specs
+    generates: specs/**/*.md
+    description: Detailed specifications for new capabilities
+    template: spec.md
+    instruction: >
+      Create specification files that define WHAT the system should do.
+
+
+      Create one spec file per capability listed in the proposal.
+      Use kebab-case names: specs/<capability>/spec.md.
+
+
+      Format:
+
+      - Each requirement: `### Requirement: <name>` followed by description.
+
+      - Use SHALL/MUST for normative requirements.
+
+      - Each scenario: `#### Scenario: <name>` with GIVEN/WHEN/THEN format.
+
+      - **CRITICAL**: Scenarios MUST use exactly 4 hashtags (`####`).
+
+      - Every requirement MUST have at least one scenario.
+
+
+      Specs should be testable — each scenario is a potential test case.
+    requires:
+      - proposal
+  - id: design
+    generates: design.md
+    description: Technical design document
+    template: design.md
+    instruction: >
+      Create the design document that explains HOW to implement the change.
+
+
+      Include only when any of these apply:
+
+      - Cross-cutting change or new architectural pattern
+
+      - New external dependency or significant data model changes
+
+      - Security, performance, or integration complexity
+
+      - Ambiguity that benefits from upfront technical decisions
+
+
+      Sections:
+
+      - **Context**: Background, constraints, stakeholders.
+
+      - **Goals / Non-Goals**: What this design achieves and explicitly excludes.
+
+      - **Decisions**: Key technical choices with rationale and alternatives.
+
+      - **Readiness / NFR Strategy**: Coverage per `L1/L2/L3`.
+
+      - **Risks / Trade-offs**: Known limitations. Format: [Risk] → Mitigation.
+
+      - **Open Questions**: Outstanding decisions or unknowns.
+    requires:
+      - proposal
+      - specs
+  - id: tasks
+    generates: tasks.md
+    description: Implementation checklist with trackable tasks
+    template: tasks.md
+    instruction: >
+      Create the task list that breaks down the implementation work.
+
+
+      **IMPORTANT**: Use checkbox format `- [ ] X.Y Task description`.
+      Tasks not using this format won't be tracked by the apply phase.
+
+
+      Guidelines:
+
+      - Group related tasks under ## numbered headings.
+
+      - Tasks should be small enough to complete in one session.
+
+      - Order tasks by dependency.
+
+      - Include documentation, validation, and readiness tasks when applicable.
+    requires:
+      - specs
+      - design
+apply:
+  requires:
+    - tasks
+  tracks: tasks.md
+  instruction: |
+    Read proposal, specs, and design before implementing.
+    Work through pending tasks, mark complete as you go, and keep docs/specs in sync.

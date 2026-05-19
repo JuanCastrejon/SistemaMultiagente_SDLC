@@ -1,0 +1,20 @@
+# OpenSpec profile: minimal
+# Activates the base set of commands without extended workflows.
+# Suitable for new projects or teams adopting OpenSpec incrementally.
+
+name: minimal
+version: 1
+commands:
+  - opsx:new
+  - opsx:continue
+  - opsx:apply
+  - opsx:verify
+  - opsx:archive
+schemas:
+  default: greenfield-sdd
+  available:
+    - greenfield-sdd
+gates:
+  requireBusinessFit: false
+  requireReadinessProfile: false
+  requireNFRMatrix: false

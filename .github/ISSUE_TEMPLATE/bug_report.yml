@@ -1,0 +1,53 @@
+name: Bug report
+description: Reporta un problema reproducible del framework, CLI, templates o validators.
+title: "bug: "
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar el problema. Incluye la menor reproduccion posible.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe el bug y el comportamiento esperado.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Lista comandos, modo usado y repo fixture si aplica.
+      placeholder: |
+        1. Run `node ./bin/sdlc.js install ...`
+        2. Run `node ./bin/sdlc.js doctor ...`
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node version, npm version, shell and framework version.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: validators
+    attributes:
+      label: Validation output
+      description: Pega la salida relevante de `npm run validate`, `npm test` o `sdlc doctor --json`.
+      render: text
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Install mode
+      options:
+        - greenfield
+        - legacy
+        - not applicable
+    validations:
+      required: true
