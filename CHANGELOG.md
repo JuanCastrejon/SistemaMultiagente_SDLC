@@ -1,6 +1,16 @@
 # Changelog
 
-## [1.2.0] — Unreleased
+## [1.2.1] — 2026-05-18
+
+### UX fix — `init` sin `--target` usa cwd
+
+- `bin/sdlc.js` (`src/cli.js`): `requireTarget` deja de exigir `--target <repo>`. Cuando se omite, se usa `process.cwd()` como destino.
+- El quickstart del README (`npx sistema-multiagente-sdlc init --dry-run`) ahora coincide con el comportamiento real del CLI; antes fallaba con `Falta --target <repo>`.
+- Mensaje de `help` actualizado: `--target` queda marcado como opcional con default cwd.
+- Regresión nueva en `tests/run-regression.mjs`: smoke test ejecuta `node bin/sdlc.js init --dry-run` desde un tmpdir con `cwd` distinto al repo y verifica que el dry-run no escriba archivos.
+- Sin cambios en `frameworkVersion` (sigue `1.2.0`): no se altera el contenido de los archivos gestionados, solo el front-door del CLI. Las instalaciones existentes no requieren `upgrade` ni migración.
+
+## [1.2.0] — 2026-05-17
 
 ### Phase 1 — Versionado y migraciones
 

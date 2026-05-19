@@ -12,10 +12,21 @@ The operating model is SDD waterfall by slice and agile by release: each slice h
 
 ## Quick Start
 
-Published package flow for v1.2.0:
+Published package flow (>=1.2.1):
 
 ```powershell
-npx sistema-multiagente-sdlc init --target . --mode greenfield --project-name "My Project"
+# Desde la raíz del repo destino (cwd = repo).
+# --target es opcional desde v1.2.1: si se omite, se usa el directorio actual.
+npx sistema-multiagente-sdlc init --mode greenfield --project-name "My Project"
+
+# Smoke previo sin escribir nada:
+npx sistema-multiagente-sdlc init --mode greenfield --project-name "My Project" --dry-run --json
+```
+
+Para v1.2.0 (compatibilidad), el comando equivalente requería `--target` explícito:
+
+```powershell
+npx sistema-multiagente-sdlc@1.2.0 init --target . --mode greenfield --project-name "My Project"
 ```
 
 Local development flow:

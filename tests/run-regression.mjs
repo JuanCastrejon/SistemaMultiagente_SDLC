@@ -140,6 +140,19 @@ const initAliasOutput = JSON.parse(run(["init", "--target", initAlias, "--mode",
 assert.equal(initAliasOutput.status, "ok");
 assert.ok(initAliasOutput.files.includes(".sdlc/config.json"));
 
+// v1.2.1: init --dry-run sin --target debe usar process.cwd() como destino.
+const initCwdDefault = makeRepo("init-cwd-default");
+const initCwdDefaultOutput = JSON.parse(
+  execFileSync("node", [cli, "init", "--mode", "greenfield", "--project-name", "Init Cwd Default", "--dry-run", "--json"], {
+    cwd: initCwdDefault,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  })
+);
+assert.equal(initCwdDefaultOutput.status, "ok");
+assert.ok(initCwdDefaultOutput.files.includes(".sdlc/config.json"));
+assert.ok(!fs.existsSync(path.join(initCwdDefault, ".sdlc", "config.json")), "dry-run no debe escribir archivos en cwd");
+
 const legacy100 = makeRepo("legacy-upgrade-1-0-0");
 fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization", "README.md"), path.join(legacy100, "README.md"));
 run(["install", "--target", legacy100, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);
