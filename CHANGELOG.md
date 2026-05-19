@@ -34,6 +34,11 @@
 - Documenta la instalacion opt-in de Obsidian, Graphify, caveman y sync de memoria en `external-tools-matrix.md`.
 - Agrega matriz de trazabilidad por superficie y guardrails semanticos genericos.
 
+### Phase 6 — OpenSpec specs base
+
+- Instala specs canonicas `business-production-readiness` y `project-phases`.
+- Deja specs donor especificas como referencia educativa no instalada en `docs/examples/openspec-specs-ejemplos/`.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine

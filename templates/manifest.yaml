@@ -253,6 +253,10 @@ templates:
     target: openspec/changes/.gitkeep
   - source: openspec/specs/business-production-readiness/README.md
     target: openspec/specs/business-production-readiness/README.md
+  - source: openspec/specs/business-production-readiness/spec.md
+    target: openspec/specs/business-production-readiness/spec.md
+  - source: openspec/specs/project-phases/spec.md
+    target: openspec/specs/project-phases/spec.md
   - source: openspec/profiles/minimal.yaml
     target: openspec/profiles/minimal.yaml
   - source: openspec/profiles/expanded.yaml
