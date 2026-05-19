@@ -65,9 +65,7 @@ function print(payload, json) {
 
 function requireTarget(options) {
   if (!options.target) {
-    const error = new Error("Falta --target <repo>");
-    error.exitCode = EXIT_ERROR;
-    throw error;
+    return path.resolve(process.cwd());
   }
   return path.resolve(options.target);
 }
@@ -624,7 +622,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config> --target <repo> [--json]"
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
     }
   };
 }
