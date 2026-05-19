@@ -38,12 +38,21 @@
   "scripts": {
     "sdlc": "node ./bin/sdlc.js",
     "test": "node ./tests/run-regression.mjs",
-    "validate": "npm run validate:config-schema && npm run validate:no-personal-paths && npm run validate:template-sanitization && npm run validate:no-inline-managed-content && npm run validate:manifest-integrity",
+    "validate": "npm run validate:config-schema && npm run validate:no-personal-paths && npm run validate:template-sanitization && npm run validate:no-inline-managed-content && npm run validate:manifest-integrity && npm run validate:no-placeholder-scripts && npm run validate:external-tools-policy && npm run validate:governance-precedence && npm run validate:skill-manifest-consistency && npm run validate:agent-persona-schema && npm run validate:docs-links-exist && npm run validate:openspec-consistency && npm run validate:mustache-references-exist && npm run validate:models-schema",
     "validate:config-schema": "node ./scripts/validate-config-schema.mjs",
     "validate:no-personal-paths": "node ./scripts/validate-no-personal-paths.mjs",
     "validate:template-sanitization": "node ./scripts/validate-template-sanitization.mjs",
     "validate:no-inline-managed-content": "node ./scripts/validate-no-inline-managed-content.mjs",
-    "validate:manifest-integrity": "node ./scripts/validate-manifest-integrity.mjs --allow-empty"
+    "validate:manifest-integrity": "node ./scripts/validate-manifest-integrity.mjs --allow-empty",
+    "validate:no-placeholder-scripts": "node ./scripts/validate-no-placeholder-scripts.mjs",
+    "validate:external-tools-policy": "node ./scripts/validate-external-tools-policy.mjs",
+    "validate:governance-precedence": "node ./scripts/validate-governance-precedence.mjs",
+    "validate:skill-manifest-consistency": "node ./scripts/validate-skill-manifest-consistency.mjs",
+    "validate:agent-persona-schema": "node ./scripts/validate-agent-persona-schema.mjs",
+    "validate:docs-links-exist": "node ./scripts/validate-docs-links-exist.mjs",
+    "validate:openspec-consistency": "node ./scripts/validate-openspec-consistency.mjs",
+    "validate:mustache-references-exist": "node ./scripts/validate-mustache-references-exist.mjs",
+    "validate:models-schema": "node ./scripts/validate-models-schema.mjs"
   },
   "engines": {
     "node": ">=18"

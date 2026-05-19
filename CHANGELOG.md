@@ -39,6 +39,11 @@
 - Instala specs canonicas `business-production-readiness` y `project-phases`.
 - Deja specs donor especificas como referencia educativa no instalada en `docs/examples/openspec-specs-ejemplos/`.
 
+### Phase 7 — Validators
+
+- Agrega 9 validators nuevos: placeholder scripts, politica de herramientas externas, precedencia de gobierno, consistencia de skills, schema de personas, links docs, OpenSpec, Mustache y `models.yaml`.
+- `npm run validate` ahora ejecuta 14 validators en cadena.
+
 ## [1.1.0] — 2026-05-18
 
 ### Fase A — Template engine
