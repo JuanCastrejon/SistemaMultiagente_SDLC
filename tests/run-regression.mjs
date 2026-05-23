@@ -37,7 +37,7 @@ function findPowerShell() {
       return command;
     }
   }
-  throw new Error("PowerShell runtime not found. v1.2.0 requires pwsh/powershell for script regression tests.");
+  throw new Error("PowerShell runtime not found. v1.3.0 requires pwsh/powershell for script regression tests.");
 }
 
 function runPowerShellScript(scriptPath, args = [], cwd = repoRoot) {
@@ -90,7 +90,7 @@ const greenfield = makeRepo("task-manager-saas");
 fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(greenfield, "README.md"));
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Task Manager SaaS", "--json"]);
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
-assert.equal(greenfieldConfig.frameworkVersion, "1.2.0");
+assert.equal(greenfieldConfig.frameworkVersion, "1.3.0");
 assert.equal(greenfieldConfig.scale, "feature");
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
@@ -158,34 +158,37 @@ fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization"
 run(["install", "--target", legacy100, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);
 simulateInstalledFrameworkVersion(legacy100, "1.0.0");
 
-const upgrade100Output = JSON.parse(run(["upgrade", "--target", legacy100, "--to-version", "1.2.0", "--json"]));
+const upgrade100Output = JSON.parse(run(["upgrade", "--target", legacy100, "--to-version", "1.3.0", "--json"]));
 assert.equal(upgrade100Output.status, "ok");
 assert.ok(upgrade100Output.backup);
 assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.0.1-applied.txt")));
 assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.1.0-applied.txt")));
 assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.2.0-applied.txt")));
+assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.3.0-applied.txt")));
 const upgraded100Config = JSON.parse(fs.readFileSync(path.join(legacy100, ".sdlc", "config.json"), "utf8"));
-assert.equal(upgraded100Config.frameworkVersion, "1.2.0");
+assert.equal(upgraded100Config.frameworkVersion, "1.3.0");
 assert.equal(upgraded100Config.scale, "feature");
 run(["diff", "--target", legacy100, "--json"]);
 run(["rollback", "--target", legacy100, "--to", upgrade100Output.backup, "--json"]);
 assert.ok(!fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.0.1-applied.txt")));
 assert.ok(!fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.1.0-applied.txt")));
 assert.ok(!fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.2.0-applied.txt")));
+assert.ok(!fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.3.0-applied.txt")));
 
 const legacy110 = makeRepo("legacy-upgrade-1-1-0");
 fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization", "README.md"), path.join(legacy110, "README.md"));
 run(["install", "--target", legacy110, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);
 simulateInstalledFrameworkVersion(legacy110, "1.1.0");
 
-const upgrade110Output = JSON.parse(run(["upgrade", "--target", legacy110, "--to-version", "1.2.0", "--json"]));
+const upgrade110Output = JSON.parse(run(["upgrade", "--target", legacy110, "--to-version", "1.3.0", "--json"]));
 assert.equal(upgrade110Output.status, "ok");
 assert.ok(upgrade110Output.backup);
 assert.ok(!fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.0.1-applied.txt")));
 assert.ok(!fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.1.0-applied.txt")));
 assert.ok(fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.2.0-applied.txt")));
+assert.ok(fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.3.0-applied.txt")));
 const upgraded110Config = JSON.parse(fs.readFileSync(path.join(legacy110, ".sdlc", "config.json"), "utf8"));
-assert.equal(upgraded110Config.frameworkVersion, "1.2.0");
+assert.equal(upgraded110Config.frameworkVersion, "1.3.0");
 assert.equal(upgraded110Config.scale, "feature");
 run(["diff", "--target", legacy110, "--json"]);
 

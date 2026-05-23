@@ -392,7 +392,7 @@ function collectDoctorEnhancements(target, config) {
   }
 
   if (!config || !config.scale) {
-    findings.push({ level: "error", code: "scale-missing", message: "config.scale is required in v1.2.0" });
+    findings.push({ level: "error", code: "scale-missing", message: "config.scale is required in v1.3.0" });
   } else {
     findings.push({ level: "info", code: "scale-present", message: `scale=${config.scale}` });
   }

@@ -35,3 +35,9 @@ jobs:
         run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify publish succeeded
+        run: |
+          set -e
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          npm view "sistema-multiagente-sdlc@${PKG_VERSION}" version --registry=https://registry.npmjs.org
