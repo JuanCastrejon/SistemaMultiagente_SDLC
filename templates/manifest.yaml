@@ -172,6 +172,8 @@ templates:
     target: .claude/skills/enrich-us/SKILL.md
   - source: .github/skills/enrich-us/SKILL.md
     target: .github/skills/enrich-us/SKILL.md
+  - source: .github/skills/edge-case-hunter/SKILL.md
+    target: .github/skills/edge-case-hunter/SKILL.md
   - source: .claude/skills/commit/SKILL.md
     target: .claude/skills/commit/SKILL.md
   - source: .github/skills/commit/SKILL.md

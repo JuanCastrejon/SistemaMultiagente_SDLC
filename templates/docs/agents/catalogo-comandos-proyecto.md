@@ -8,7 +8,7 @@
 | `sdlc install --mode legacy` | instala gobierno en proyecto brownfield |
 | `sdlc doctor --json` | valida estado instalado |
 | `sdlc diff --json` | detecta drift contra templates |
-| `sdlc upgrade --to-version 1.2.0` | aplica migraciones |
+| `sdlc upgrade --to-version 1.3.0` | aplica migraciones |
 | `sdlc rollback --to <backup>` | restaura backup |
 | `sdlc prune-backups --keep 5` | limpia backups antiguos |
 
