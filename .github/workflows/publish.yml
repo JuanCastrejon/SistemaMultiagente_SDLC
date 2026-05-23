@@ -40,4 +40,12 @@ jobs:
         run: |
           set -e
           PKG_VERSION=$(node -p "require('./package.json').version")
-          npm view "sistema-multiagente-sdlc@${PKG_VERSION}" version --registry=https://registry.npmjs.org
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            if npm view "sistema-multiagente-sdlc@${PKG_VERSION}" version --registry=https://registry.npmjs.org; then
+              exit 0
+            fi
+            echo "Package not visible yet; retry ${attempt}/10"
+            sleep 15
+          done
+          echo "sistema-multiagente-sdlc@${PKG_VERSION} not visible after publish"
+          exit 1
