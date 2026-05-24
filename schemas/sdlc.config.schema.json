@@ -21,7 +21,7 @@
       "type": "string",
       "enum": ["bug", "feature", "epic", "platform"],
       "default": "feature",
-      "description": "Reserved for v1.3.0 adaptive scale. Not consumed in v1.2.0."
+      "description": "Scale hint used by v1.3.0+ for adaptive planning and agent routing."
     },
     "stack": {
       "type": "object",

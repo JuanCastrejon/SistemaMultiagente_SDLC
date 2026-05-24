@@ -124,14 +124,14 @@ All external installs are opt-in. Scripts default to dry-run or local-only behav
 
 Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
 
-| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.2.1 |
+| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.3.0 |
 | --- | --- | --- |
 | License | MIT | MIT |
 | Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥18, PowerShell (pwsh/powershell), Git |
 | Install command | `npx bmad-method install` (interactive) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
 | Scope principal | AI-driven agile development | AI-assisted SDLC con governance enterprise y SDD |
 | Workflows | 34+ agile workflows (BMM core) | SDD waterfall por slice + agile por release (F0-F17 phases) |
-| Scale-adaptive | sí, automático (bug → enterprise) | reserved en config v1.2.0; activación adaptive scale en v1.3.0 |
+| Scale-adaptive | sí, automático (bug → enterprise) | scale hint activo desde v1.3.0 |
 | Agentes/personas | 12+ personas (PM, Architect, Dev, UX, …) | 8 personas activas + roadmap extensible |
 | Party / collaboration mode | yes (multiple personas en sesión) | roundtable opt-in planned v1.3.0 |
 | Help CLI / next-step coach | `bmad-help` skill | `sdlc doctor` (state checks); `sdlc next` planned v1.3.0 |
