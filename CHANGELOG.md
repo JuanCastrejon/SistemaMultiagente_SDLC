@@ -4,6 +4,28 @@
 
 _No hay cambios pendientes._
 
+## [1.5.0] — 2026-05-24
+
+### Added
+
+- Harness ejecutable F0-F17 con `phase-contract.yaml`, `schemas/phase-evidence.schema.json` y `templates/phases/F0...F17`.
+- Comandos CLI nuevos: `sdlc phase-gate`, `sdlc governance-check`, `sdlc tools-doctor` y `sdlc pr-body-check`.
+- Bloque `SDLC_SHARED_RULES` con hash para paridad entre `AGENTS.md`, `CLAUDE.md`, `.github/AGENTS.md` y `.github/copilot-instructions.md`.
+- Roles upstream: `product-owner-agent`, `project-manager-agent`, `qa-test-architect-agent`, `tech-writer-agent` y `ux-designer-agent`.
+- Skill `party-mode` anclada a F1/F2/F5 y separación entre QA temprana y `qa-security-review` para F9/F10.
+- Perfil `full-harness` para reportar OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
+- Migración `1.5.0` con marcador `.sdlc/migrations/1.5.0-applied.txt`.
+
+### Changed
+
+- Migración del desarrollo y workflows del framework a `pnpm@11.3.0`.
+- `resume` y `continua` incorporan lectura del contrato de fase y reportan bloqueos por evidencia faltante.
+- `buildManagedFiles` genera mirrors cross-IDE desde `.github/skills/` para evitar drift entre Claude Code, Codex, Copilot y Windsurf.
+
+### Tests
+
+- Regresión extendida con smoke tests de `phase-gate`, `governance-check` y `tools-doctor`.
+
 ## [1.4.0] — 2026-05-24
 
 ### Added

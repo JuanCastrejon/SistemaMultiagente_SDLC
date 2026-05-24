@@ -2,6 +2,8 @@
 
 Contexto operativo de {{project.name}}.
 
+{{sdlcSharedRulesBlock}}
+
 ## Regla base
 
 1. Leer primero .github/AGENTS.md.

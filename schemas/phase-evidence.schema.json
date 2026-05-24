@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://grupoit.dev/sistema-multiagente-sdlc/phase-evidence.schema.json",
+  "title": "SDLC Phase Evidence",
+  "type": "object",
+  "required": ["phase", "slice", "agent_id", "started_at", "outputs", "validators_run"],
+  "properties": {
+    "phase": {
+      "type": "string",
+      "pattern": "^F(0|1|2|3|3_5|4|5|6|7|8|9|10|11|12|13|14|15|16|17)$"
+    },
+    "slice": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "inputs_hash": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{64}$"
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "validators_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "status"],
+        "properties": {
+          "command": { "type": "string" },
+          "status": { "type": "string", "enum": ["ok", "warning", "error", "blocked", "skipped"] },
+          "exit_code": { "type": ["integer", "null"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "human_gate_signoff": {
+      "type": ["object", "null"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "approved_by": { "type": ["string", "null"] },
+        "approved_at": { "type": ["string", "null"], "format": "date-time" },
+        "notes": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "risks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "next_phase": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": true
+}

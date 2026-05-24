@@ -2,6 +2,8 @@
 
 Modo: greenfield — proyecto nuevo sin código legacy.
 
+{{sdlcSharedRulesBlock}}
+
 ## Enfoque greenfield
 
 - Partir de arquitectura limpia; no asumir deuda técnica previa.
