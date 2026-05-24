@@ -27,6 +27,9 @@
     "openspec-verify",
     "operacion-cli-devops",
     "orquestacion-multiagente",
+    "resume",
+    "save",
+    "continua",
     "ui-ux-diseno"
   ],
   "externalCollections": [

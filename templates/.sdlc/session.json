@@ -1,0 +1,8 @@
+{
+  "status": "new",
+  "generatedBy": "SistemaMultiagente_SDLC",
+  "frameworkVersion": "{{frameworkVersion}}",
+  "project": "{{project.slug}}",
+  "updatedAt": null,
+  "runtime": {}
+}

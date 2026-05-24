@@ -17,6 +17,15 @@ import {
 } from "./file-utils.js";
 import { buildManagedFiles, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
 import { applyMigrations, migrationsToRun, SUPPORTED_VERSIONS } from "./migrations.js";
+import {
+  commandContinua,
+  commandHooks,
+  commandMemorySync,
+  commandResume,
+  commandSave,
+  commandSessionStart,
+  commandValidateRuntime
+} from "./runtime.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -44,7 +53,10 @@ function parseArgs(argv) {
     }
     positionals.push(token);
   }
-  result.command = positionals[0] ?? "help";
+  result.positionals = positionals;
+  result.command = positionals[0] === "hooks" && positionals[1] === "install"
+    ? "hooks install"
+    : positionals[0] ?? "help";
   return result;
 }
 
@@ -622,7 +634,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
     }
   };
 }
@@ -645,6 +657,20 @@ export function run(argv) {
       return commandPruneBackups(parsed.options);
     case "migrate-config":
       return commandMigrateConfig(parsed.options);
+    case "session-start":
+      return commandSessionStart(parsed.options);
+    case "resume":
+      return commandResume(parsed.options);
+    case "save":
+      return commandSave(parsed.options);
+    case "continua":
+      return commandContinua(parsed.options);
+    case "memory-sync":
+      return commandMemorySync(parsed.options);
+    case "validate-runtime":
+      return commandValidateRuntime(parsed.options);
+    case "hooks install":
+      return commandHooks(parsed.options);
     case "help":
     default:
       return commandHelp();

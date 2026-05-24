@@ -47,6 +47,28 @@ node ./bin/sdlc.js install --target ../legacy-project --mode legacy --project-na
 node ./bin/sdlc.js doctor --target ../legacy-project --json
 ```
 
+## Runtime Multiagente
+
+Desde `1.4.0`, `sdlc` incluye comandos ejecutables para continuidad cross-IDE. El runtime primario es Node; los wrappers PowerShell solo existen para ergonomia Windows.
+
+```powershell
+sdlc session-start --target . --json
+sdlc resume --target . --markdown
+sdlc save --target . --event manual --json
+sdlc continua --target . --platform codex --json
+sdlc memory-sync --target . --mode health --json
+sdlc validate-runtime --target . --json
+sdlc hooks install --target . --post-merge-checkpoint --json
+```
+
+Reglas base:
+
+- `session-start` crea `.sdlc/session.json` con healthcheck de Headroom, CodeGraph, Graphify, caveman, vault y slice actual.
+- `resume` es solo lectura y recompone contexto en orden repo -> CodeGraph -> Graphify -> vault.
+- `save` escribe checkpoints locales en el vault; no promueve GitHub Issues, OpenSpec ni PRs sin gate humano.
+- `hooks install --post-merge-checkpoint` instala un hook local `post-merge` que ejecuta `sdlc save --event post-merge`.
+- `memory-sync --mode nightly --apply` importa chats y exporta Graphify al vault; no crea checkpoints automaticos.
+
 ## Modes
 
 | Mode | Use when | Adds |
@@ -124,7 +146,7 @@ All external installs are opt-in. Scripts default to dry-run or local-only behav
 
 Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
 
-| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.3.0 |
+| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.4.0 |
 | --- | --- | --- |
 | License | MIT | MIT |
 | Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥18, PowerShell (pwsh/powershell), Git |

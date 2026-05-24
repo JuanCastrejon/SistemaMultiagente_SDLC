@@ -4,6 +4,27 @@
 
 _No hay cambios pendientes._
 
+## [1.4.0] — 2026-05-24
+
+### Added
+
+- ADR `0004-codegraph-graphify-orden-canonico.md`: cierra la decisión pendiente de ADR 0002 y canoniza CodeGraph para estructura de código + Graphify para semántica documental/export Obsidian.
+- Runtime Node multiagente como interfaz canónica: `sdlc session-start`, `resume`, `save`, `continua`, `memory-sync`, `validate-runtime` y `hooks install --post-merge-checkpoint`.
+- `.sdlc/session.json` como estado generado de sesión para healthcheck y continuidad cross-IDE.
+- Skills canónicas `resume`, `save` y `continua` bajo `.github/skills/` y mirrors para `.claude/`, `.agents/` y `.windsurf/`, todas apuntando al mismo CLI `sdlc`.
+- `templates/scripts/continua.mjs` como implementación portable Node de continuidad; `continua.ps1` queda como wrapper Windows delgado.
+- Migración `1.4.0` con marcador `.sdlc/migrations/1.4.0-applied.txt`.
+
+### Changed
+
+- `sdlc doctor` y el runner de regresión validan la versión `1.4.0`.
+- El manifest de skills gobernadas incluye `resume`, `save` y `continua`.
+- La continuidad multiagente deja de depender de PowerShell como runtime primario; PowerShell queda para compatibilidad en Windows.
+
+### Tests
+
+- Regresión extendida con smoke tests de `session-start`, `resume`, `save --no-mutate`, `continua`, `memory-sync --mode health`, `validate-runtime` y `hooks install`.
+
 ## [1.3.0] — 2026-05-23
 
 ### Added
