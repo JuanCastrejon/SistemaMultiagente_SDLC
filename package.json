@@ -56,7 +56,7 @@
     "validate:models-schema": "node ./scripts/validate-models-schema.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@11.3.0",
   "pnpm": {
