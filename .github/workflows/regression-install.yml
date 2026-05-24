@@ -45,7 +45,8 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Create consumer repo
-        run: node -e "require('fs').mkdirSync('tmp-consumer', { recursive: true })"
+        run: |
+          node -e "require('fs').mkdirSync('tmp-consumer', { recursive: true })"
 
       - name: Install template
         run: node ./bin/sdlc.js init --target ./tmp-consumer --mode ${{ matrix.mode }} --project-name "Regression ${{ matrix.mode }}" --json
