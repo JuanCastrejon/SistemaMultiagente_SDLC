@@ -3,6 +3,8 @@
 Proyecto: {{project.name}}
 Modo: {{mode}}
 
+{{sdlcSharedRulesBlock}}
+
 ## Orden de prioridad
 
 1. .github/AGENTS.md
