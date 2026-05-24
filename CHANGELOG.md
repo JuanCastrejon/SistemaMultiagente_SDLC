@@ -123,7 +123,7 @@ _No hay cambios pendientes._
 ### Phase 7 — Validators
 
 - Agrega 9 validators nuevos: placeholder scripts, politica de herramientas externas, precedencia de gobierno, consistencia de skills, schema de personas, links docs, OpenSpec, Mustache y `models.yaml`.
-- `npm run validate` ahora ejecuta 14 validators en cadena.
+- `pnpm run validate` ahora ejecuta 14 validators en cadena.
 
 ### Phase 8 — Doctor
 

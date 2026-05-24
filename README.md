@@ -169,7 +169,7 @@ Side-by-side de los dos frameworks. La intención no es competir sino aclarar d�
 | Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
 | --- | --- | --- |
 | License | MIT | MIT |
-| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥18, PowerShell (pwsh/powershell), Git |
+| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |
 | Install command | `npx bmad-method install` (interactive) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
 | Scope principal | AI-driven agile development | AI-assisted SDLC con governance enterprise y SDD |
 | Workflows | 34+ agile workflows (BMM core) | SDD waterfall por slice + agile por release (F0-F17 phases) |
