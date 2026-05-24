@@ -2,7 +2,7 @@ import path from "node:path";
 import { renderTemplates } from "./template-loader.js";
 export { validateConfigShape } from "./config-validator.js";
 
-export const FRAMEWORK_VERSION = "1.3.0";
+export const FRAMEWORK_VERSION = "1.4.0";
 export const SCHEMA_VERSION = 1;
 export const SUPPORTED_MODES = new Set(["greenfield", "legacy"]);
 

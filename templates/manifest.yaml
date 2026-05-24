@@ -15,6 +15,8 @@ templates:
     target: indice-operativo.md
   - source: .sdlc/README.md
     target: .sdlc/README.md
+  - source: .sdlc/session.json
+    target: .sdlc/session.json
   - source: .github/AGENTS.md
     target: .github/AGENTS.md
   - source: .github/agents/ownership-matrix.md
@@ -87,6 +89,8 @@ templates:
     target: .graphifyignore
   - source: scripts/continua.ps1
     target: scripts/continua.ps1
+  - source: scripts/continua.mjs
+    target: scripts/continua.mjs
   - source: scripts/publish-trace.ps1
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
@@ -178,6 +182,30 @@ templates:
     target: .claude/skills/commit/SKILL.md
   - source: .github/skills/commit/SKILL.md
     target: .github/skills/commit/SKILL.md
+  - source: .github/skills/resume/SKILL.md
+    target: .github/skills/resume/SKILL.md
+  - source: .github/skills/save/SKILL.md
+    target: .github/skills/save/SKILL.md
+  - source: .github/skills/continua/SKILL.md
+    target: .github/skills/continua/SKILL.md
+  - source: .claude/skills/resume/SKILL.md
+    target: .claude/skills/resume/SKILL.md
+  - source: .claude/skills/save/SKILL.md
+    target: .claude/skills/save/SKILL.md
+  - source: .claude/skills/continua/SKILL.md
+    target: .claude/skills/continua/SKILL.md
+  - source: .agents/skills/resume/SKILL.md
+    target: .agents/skills/resume/SKILL.md
+  - source: .agents/skills/save/SKILL.md
+    target: .agents/skills/save/SKILL.md
+  - source: .agents/skills/continua/SKILL.md
+    target: .agents/skills/continua/SKILL.md
+  - source: .windsurf/skills/resume/SKILL.md
+    target: .windsurf/skills/resume/SKILL.md
+  - source: .windsurf/skills/save/SKILL.md
+    target: .windsurf/skills/save/SKILL.md
+  - source: .windsurf/skills/continua/SKILL.md
+    target: .windsurf/skills/continua/SKILL.md
   - source: .github/skills/openspec-propose/SKILL.md
     target: .github/skills/openspec-propose/SKILL.md
   - source: .github/skills/openspec-explore/SKILL.md

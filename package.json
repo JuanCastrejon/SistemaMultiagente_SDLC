@@ -1,6 +1,6 @@
 {
   "name": "sistema-multiagente-sdlc",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Framework reusable para instalar un SDLC multiagente gobernado en repos greenfield o legacy.",
   "type": "module",
   "bin": {
