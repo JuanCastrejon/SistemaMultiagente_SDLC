@@ -1,0 +1,14 @@
+phase: F1
+slice: <slice>
+agent_id: <agent-id>
+started_at: <iso-8601>
+completed_at: null
+inputs_hash: {}
+outputs: []
+validators_run:
+  - command: sdlc phase-gate --target . --phase F1 --slice <slice> --json
+    status: skipped
+    exit_code: null
+human_gate_signoff: null
+risks: []
+next_phase: null

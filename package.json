@@ -1,6 +1,6 @@
 {
   "name": "sistema-multiagente-sdlc",
-  "version": "1.3.0",
+  "version": "1.5.0",
   "description": "Framework reusable para instalar un SDLC multiagente gobernado en repos greenfield o legacy.",
   "type": "module",
   "bin": {
@@ -15,6 +15,7 @@
     "schemas/",
     "templates/",
     "profiles/",
+    "phase-contract.yaml",
     "migrations/",
     "scripts/",
     "README.md",
@@ -38,7 +39,7 @@
   "scripts": {
     "sdlc": "node ./bin/sdlc.js",
     "test": "node ./tests/run-regression.mjs",
-    "validate": "npm run validate:config-schema && npm run validate:no-personal-paths && npm run validate:template-sanitization && npm run validate:no-inline-managed-content && npm run validate:manifest-integrity && npm run validate:no-placeholder-scripts && npm run validate:external-tools-policy && npm run validate:governance-precedence && npm run validate:skill-manifest-consistency && npm run validate:agent-persona-schema && npm run validate:docs-links-exist && npm run validate:openspec-consistency && npm run validate:mustache-references-exist && npm run validate:models-schema",
+    "validate": "corepack pnpm run validate:config-schema && corepack pnpm run validate:no-personal-paths && corepack pnpm run validate:template-sanitization && corepack pnpm run validate:no-inline-managed-content && corepack pnpm run validate:manifest-integrity && corepack pnpm run validate:no-placeholder-scripts && corepack pnpm run validate:external-tools-policy && corepack pnpm run validate:governance-precedence && corepack pnpm run validate:skill-manifest-consistency && corepack pnpm run validate:agent-persona-schema && corepack pnpm run validate:docs-links-exist && corepack pnpm run validate:openspec-consistency && corepack pnpm run validate:mustache-references-exist && corepack pnpm run validate:models-schema",
     "validate:config-schema": "node ./scripts/validate-config-schema.mjs",
     "validate:no-personal-paths": "node ./scripts/validate-no-personal-paths.mjs",
     "validate:template-sanitization": "node ./scripts/validate-template-sanitization.mjs",
@@ -55,9 +56,19 @@
     "validate:models-schema": "node ./scripts/validate-models-schema.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@11.3.0",
+  "pnpm": {
+    "minimumReleaseAge": 1440,
+    "minimumReleaseAgeStrict": true,
+    "minimumReleaseAgeIgnoreMissingTime": false,
+    "trustPolicy": "no-downgrade",
+    "blockExoticSubdeps": true,
+    "nodeLinker": "isolated"
   },
   "dependencies": {
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   }
 }

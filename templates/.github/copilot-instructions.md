@@ -3,6 +3,8 @@
 Proyecto gobernado por SistemaMultiagente_SDLC {{frameworkVersion}}.
 Modo: {{mode}}
 
+{{sdlcSharedRulesBlock}}
+
 ## Contexto normativo
 
 - La verdad normativa vive en `.github/AGENTS.md`, `AGENTS.md`, `openspec/` y `docs/`.

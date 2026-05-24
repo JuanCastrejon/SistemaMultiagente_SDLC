@@ -1,0 +1,194 @@
+version: 1
+name: sdlc-f0-f17
+description: Contrato ejecutable de fases para SistemaMultiagente_SDLC.
+phases:
+  - id: F0
+    name: bootstrap
+    objective: Instalar el harness, configurar superficies y dejar gobierno base verificable.
+    owner: orquestador-opus
+    participants: [planificador-opus]
+    inputs_required: [README.md]
+    outputs_required: [AGENTS.md, .github/AGENTS.md, .github/copilot-instructions.md, .sdlc/config.json, phase-contract.yaml]
+    evidence_required: false
+    human_gate: false
+    next_phase: F1
+  - id: F1
+    name: requirements-analysis
+    objective: Alinear valor de negocio, KPI, alcance, readiness, NFRs y prior art.
+    owner: analista-requisitos
+    participants: [product-owner-agent, project-manager-agent, qa-test-architect-agent, ux-designer-agent]
+    inputs_required: [.github/agent-state/current-slice.md]
+    outputs_required: [openspec/changes/<slice>/research.md, openspec/changes/<slice>/proposal.md]
+    evidence_required: true
+    human_gate: false
+    next_phase: F2
+  - id: F2
+    name: human-draft-review
+    objective: Revisar el borrador funcional con apoyo multi-rol antes de promocionar.
+    owner: product-owner-agent
+    participants: [analista-requisitos, project-manager-agent, qa-test-architect-agent]
+    inputs_required: [openspec/changes/<slice>/proposal.md]
+    outputs_required: [.github/agent-state/drafts/<slice>.md]
+    evidence_required: true
+    human_gate: true
+    next_phase: F3
+  - id: F3
+    name: local-issue-validation
+    objective: Convertir borrador aprobado en Issue o decisión local trazable.
+    owner: project-manager-agent
+    participants: [product-owner-agent, analista-requisitos]
+    inputs_required: [.github/agent-state/drafts/<slice>.md]
+    outputs_required: [.github/agent-state/evidence/<slice>/F3.yaml]
+    evidence_required: true
+    human_gate: true
+    next_phase: F3_5
+  - id: F3_5
+    name: branch
+    objective: Abrir rama trazable desde la rama de integración.
+    owner: orquestador-opus
+    participants: [project-manager-agent]
+    inputs_required: [.github/agent-state/current-slice.md]
+    outputs_required: [.github/agent-state/evidence/<slice>/F3_5.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F4
+  - id: F4
+    name: readiness
+    objective: Validar business readiness, producción, NFRs y criterios de aceptación.
+    owner: analista-requisitos
+    participants: [product-owner-agent, qa-test-architect-agent]
+    inputs_required: [openspec/changes/<slice>/proposal.md]
+    outputs_required: [openspec/changes/<slice>/specs]
+    evidence_required: true
+    human_gate: true
+    next_phase: F5
+  - id: F5
+    name: sdd-planning
+    objective: Crear diseño, tareas, owners y test strategy antes de implementar.
+    owner: planificador-opus
+    participants: [arquitecto, qa-test-architect-agent, api-agent, web-agent]
+    inputs_required: [openspec/changes/<slice>/proposal.md]
+    outputs_required: [openspec/changes/<slice>/design.md, openspec/changes/<slice>/tasks.md]
+    evidence_required: true
+    human_gate: false
+    next_phase: F6
+  - id: F6
+    name: handoff
+    objective: Emitir handoff consumible por agentes especialistas.
+    owner: orquestador-opus
+    participants: [planificador-opus]
+    inputs_required: [openspec/changes/<slice>/tasks.md]
+    outputs_required: [.github/agent-state/handoffs/<slice>.md]
+    evidence_required: true
+    human_gate: false
+    next_phase: F7
+  - id: F7
+    name: orchestration
+    objective: Rutar trabajo por superficie y controlar dependencias.
+    owner: orquestador-opus
+    participants: [api-agent, web-agent, mobile-sync]
+    inputs_required: [.github/agent-state/handoffs/<slice>.md]
+    outputs_required: [.github/agent-state/evidence/<slice>/F7.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F8
+  - id: F8
+    name: implementation
+    objective: Implementar tareas con trazabilidad hacia OpenSpec.
+    owner: api-agent
+    participants: [web-agent, mobile-sync, arquitecto]
+    inputs_required: [openspec/changes/<slice>/tasks.md]
+    outputs_required: [.github/agent-state/evidence/<slice>/F8.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F9
+  - id: F9
+    name: qa
+    objective: Ejecutar validación QA con owner único y resultados reproducibles.
+    owner: qa-security-review
+    participants: []
+    inputs_required: [.github/agent-state/evidence/<slice>/F8.yaml]
+    outputs_required: [.github/agent-state/evidence/<slice>/F9.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F10
+  - id: F10
+    name: security
+    objective: Revisar seguridad, drift y riesgos antes de commit.
+    owner: qa-security-review
+    participants: []
+    inputs_required: [.github/agent-state/evidence/<slice>/F9.yaml]
+    outputs_required: [.github/agent-state/evidence/<slice>/F10.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F11
+  - id: F11
+    name: commit
+    objective: Crear commit atomico y trazable.
+    owner: orquestador-opus
+    participants: [project-manager-agent]
+    inputs_required: [.github/agent-state/evidence/<slice>/F10.yaml]
+    outputs_required: [.github/agent-state/evidence/<slice>/F11.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F12
+  - id: F12
+    name: pr
+    objective: Abrir o actualizar PR con body versionado y postcheck.
+    owner: project-manager-agent
+    participants: [orquestador-opus]
+    inputs_required: [AGENTS.md]
+    outputs_required: [.github/pr-bodies/<slice>.md]
+    evidence_required: true
+    human_gate: false
+    next_phase: F13
+  - id: F13
+    name: human-gate
+    objective: Validar PR, riesgos, checks y autorización humana.
+    owner: product-owner-agent
+    participants: [qa-security-review, project-manager-agent]
+    inputs_required: [.github/pr-bodies/<slice>.md]
+    outputs_required: [.github/agent-state/evidence/<slice>/F13.yaml]
+    evidence_required: true
+    human_gate: true
+    next_phase: F14
+  - id: F14
+    name: merge
+    objective: Integrar por PR sin push directo.
+    owner: project-manager-agent
+    participants: [orquestador-opus]
+    inputs_required: [.github/agent-state/evidence/<slice>/F13.yaml]
+    outputs_required: [.github/agent-state/evidence/<slice>/F14.yaml]
+    evidence_required: true
+    human_gate: true
+    next_phase: F15
+  - id: F15
+    name: post-merge
+    objective: Ejecutar checkpoint post-merge y verificar runtime.
+    owner: orquestador-opus
+    participants: [project-manager-agent]
+    inputs_required: [.github/agent-state/evidence/<slice>/F14.yaml]
+    outputs_required: [.github/agent-state/evidence/<slice>/F15.yaml]
+    evidence_required: true
+    human_gate: false
+    next_phase: F16
+  - id: F16
+    name: archive
+    objective: Archivar OpenSpec y sincronizar specs canonicas.
+    owner: planificador-opus
+    participants: [analista-requisitos, arquitecto]
+    inputs_required: [openspec/changes/<slice>]
+    outputs_required: [openspec/changes/archive]
+    evidence_required: true
+    human_gate: false
+    next_phase: F17
+  - id: F17
+    name: living-docs
+    objective: Actualizar documentacion viva y trazas finales.
+    owner: tech-writer-agent
+    participants: [orquestador-opus, project-manager-agent]
+    inputs_required: [.github/agent-state/evidence/<slice>/F16.yaml]
+    outputs_required: [CHANGELOG.md]
+    evidence_required: true
+    human_gate: false
+    next_phase: null

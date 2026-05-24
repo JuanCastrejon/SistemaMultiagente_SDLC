@@ -34,9 +34,10 @@ Local development flow:
 ```powershell
 git clone https://github.com/JuanCastrejon/SistemaMultiagente_SDLC.git
 cd SistemaMultiagente_SDLC
-npm install
-npm run validate
-npm test
+corepack prepare pnpm@11.3.0 --activate
+pnpm install --frozen-lockfile
+pnpm run validate
+pnpm test
 node ./bin/sdlc.js install --target ../my-project --mode greenfield --project-name "My Project"
 ```
 
@@ -46,6 +47,46 @@ Legacy/brownfield:
 node ./bin/sdlc.js install --target ../legacy-project --mode legacy --project-name "Legacy Project"
 node ./bin/sdlc.js doctor --target ../legacy-project --json
 ```
+
+## Runtime Multiagente
+
+Desde `1.4.0`, `sdlc` incluye comandos ejecutables para continuidad cross-IDE. El runtime primario es Node; los wrappers PowerShell solo existen para ergonomia Windows.
+
+```powershell
+sdlc session-start --target . --json
+sdlc resume --target . --markdown
+sdlc save --target . --event manual --json
+sdlc continua --target . --platform codex --json
+sdlc memory-sync --target . --mode health --json
+sdlc validate-runtime --target . --json
+sdlc hooks install --target . --post-merge-checkpoint --json
+```
+
+Reglas base:
+
+- `session-start` crea `.sdlc/session.json` con healthcheck de Headroom, CodeGraph, Graphify, caveman, vault y slice actual.
+- `resume` es solo lectura y recompone contexto en orden repo -> CodeGraph -> Graphify -> vault.
+- `save` escribe checkpoints locales en el vault; no promueve GitHub Issues, OpenSpec ni PRs sin gate humano.
+- `hooks install --post-merge-checkpoint` instala un hook local `post-merge` que ejecuta `sdlc save --event post-merge`.
+- `memory-sync --mode nightly --apply` importa chats y exporta Graphify al vault; no crea checkpoints automaticos.
+
+## Harness Ejecutable F0-F17
+
+Desde `1.5.0`, el flujo F0-F17 tiene contrato ejecutable y evidencia por fase.
+
+```powershell
+sdlc phase-gate --target . --phase F5 --slice <slice> --json
+sdlc governance-check --target . --json
+sdlc tools-doctor --target . --profile full --json
+sdlc pr-body-check --repo . --pr <number> --json
+```
+
+Reglas base:
+
+- `phase-contract.yaml` declara owner, participantes, entradas, salidas, gate humano y siguiente fase.
+- `.github/agent-state/evidence/<slice>/<phase>.yaml` registra evidencia trazable cuando la fase lo exige.
+- `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
+- `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
 
 ## Modes
 
@@ -59,8 +100,9 @@ node ./bin/sdlc.js doctor --target ../legacy-project --json
 | Plane | Personas |
 | --- | --- |
 | Control | `planificador-opus`, `orquestador-opus` |
-| Definition | `analista-requisitos`, `arquitecto-modular-clean` |
-| Specialist | `api-nestjs`, `web-admin`, `mobile-sync` |
+| Product/coordination | `product-owner-agent`, `project-manager-agent` |
+| Definition | `analista-requisitos`, `arquitecto-modular-clean`, `qa-test-architect-agent` |
+| Specialist | `api-nestjs`, `web-admin`, `mobile-sync`, `ux-designer-agent`, `tech-writer-agent` |
 | Gate | `qa-security-review` |
 
 ## Phase Flow
@@ -89,7 +131,7 @@ flowchart LR
 
 ## Validators
 
-`npm run validate` runs 14 validators:
+`pnpm run validate` runs the framework validators:
 
 - config schema
 - no personal paths
@@ -124,10 +166,10 @@ All external installs are opt-in. Scripts default to dry-run or local-only behav
 
 Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
 
-| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.3.0 |
+| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
 | --- | --- | --- |
 | License | MIT | MIT |
-| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥18, PowerShell (pwsh/powershell), Git |
+| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |
 | Install command | `npx bmad-method install` (interactive) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
 | Scope principal | AI-driven agile development | AI-assisted SDLC con governance enterprise y SDD |
 | Workflows | 34+ agile workflows (BMM core) | SDD waterfall por slice + agile por release (F0-F17 phases) |

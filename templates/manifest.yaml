@@ -15,6 +15,8 @@ templates:
     target: indice-operativo.md
   - source: .sdlc/README.md
     target: .sdlc/README.md
+  - source: .sdlc/session.json
+    target: .sdlc/session.json
   - source: .github/AGENTS.md
     target: .github/AGENTS.md
   - source: .github/agents/ownership-matrix.md
@@ -87,6 +89,8 @@ templates:
     target: .graphifyignore
   - source: scripts/continua.ps1
     target: scripts/continua.ps1
+  - source: scripts/continua.mjs
+    target: scripts/continua.mjs
   - source: scripts/publish-trace.ps1
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
@@ -136,14 +140,24 @@ templates:
     target: .github/agents/orquestador-opus.agent.md
   - source: .github/agents/analista-requisitos.agent.md
     target: .github/agents/analista-requisitos.agent.md
+  - source: .github/agents/product-owner-agent.agent.md
+    target: .github/agents/product-owner-agent.agent.md
+  - source: .github/agents/project-manager-agent.agent.md
+    target: .github/agents/project-manager-agent.agent.md
   - source: .github/agents/arquitecto-modular-clean.agent.md
     target: .github/agents/arquitecto-modular-clean.agent.md
+  - source: .github/agents/qa-test-architect-agent.agent.md
+    target: .github/agents/qa-test-architect-agent.agent.md
   - source: .github/agents/api-nestjs.agent.md
     target: .github/agents/api-nestjs.agent.md
   - source: .github/agents/web-admin.agent.md
     target: .github/agents/web-admin.agent.md
   - source: .github/agents/mobile-sync.agent.md
     target: .github/agents/mobile-sync.agent.md
+  - source: .github/agents/ux-designer-agent.agent.md
+    target: .github/agents/ux-designer-agent.agent.md
+  - source: .github/agents/tech-writer-agent.agent.md
+    target: .github/agents/tech-writer-agent.agent.md
   - source: .github/agents/qa-security-review.agent.md
     target: .github/agents/qa-security-review.agent.md
   - source: .github/agents/README.md
@@ -168,6 +182,8 @@ templates:
     target: .github/skills/contexto-proyecto/SKILL.md
   - source: .github/skills/orquestacion-multiagente/SKILL.md
     target: .github/skills/orquestacion-multiagente/SKILL.md
+  - source: .github/skills/party-mode/SKILL.md
+    target: .github/skills/party-mode/SKILL.md
   - source: .claude/skills/enrich-us/SKILL.md
     target: .claude/skills/enrich-us/SKILL.md
   - source: .github/skills/enrich-us/SKILL.md
@@ -178,6 +194,30 @@ templates:
     target: .claude/skills/commit/SKILL.md
   - source: .github/skills/commit/SKILL.md
     target: .github/skills/commit/SKILL.md
+  - source: .github/skills/resume/SKILL.md
+    target: .github/skills/resume/SKILL.md
+  - source: .github/skills/save/SKILL.md
+    target: .github/skills/save/SKILL.md
+  - source: .github/skills/continua/SKILL.md
+    target: .github/skills/continua/SKILL.md
+  - source: .claude/skills/resume/SKILL.md
+    target: .claude/skills/resume/SKILL.md
+  - source: .claude/skills/save/SKILL.md
+    target: .claude/skills/save/SKILL.md
+  - source: .claude/skills/continua/SKILL.md
+    target: .claude/skills/continua/SKILL.md
+  - source: .agents/skills/resume/SKILL.md
+    target: .agents/skills/resume/SKILL.md
+  - source: .agents/skills/save/SKILL.md
+    target: .agents/skills/save/SKILL.md
+  - source: .agents/skills/continua/SKILL.md
+    target: .agents/skills/continua/SKILL.md
+  - source: .windsurf/skills/resume/SKILL.md
+    target: .windsurf/skills/resume/SKILL.md
+  - source: .windsurf/skills/save/SKILL.md
+    target: .windsurf/skills/save/SKILL.md
+  - source: .windsurf/skills/continua/SKILL.md
+    target: .windsurf/skills/continua/SKILL.md
   - source: .github/skills/openspec-propose/SKILL.md
     target: .github/skills/openspec-propose/SKILL.md
   - source: .github/skills/openspec-explore/SKILL.md

@@ -12,6 +12,7 @@ const context = defaultConfig({
 });
 context.surfacesTable = "| `backend` | `apps/api` | `api-agent` |";
 context.surfacesList = "- `apps/api`";
+context.sdlcSharedRulesBlock = "<!-- SDLC_SHARED_RULES_START sha256:example -->\nshared rules\n<!-- SDLC_SHARED_RULES_END -->";
 
 const files = listFiles(path.join(root, "templates")).filter((file) => {
   const absolute = path.join(root, "templates", file);
