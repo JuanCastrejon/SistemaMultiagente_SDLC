@@ -123,18 +123,38 @@ if ($InstallExternal -and -not $SkipExternalInstall) {
 
 $crossResults = @()
 if ($manifest.PSObject.Properties.Name -contains 'crossMirrorSkills') {
+  $repoRootFull = [IO.Path]::GetFullPath($RepoRoot)
+  $sep = [IO.Path]::DirectorySeparatorChar
+
   foreach ($entry in @($manifest.crossMirrorSkills)) {
-    $fromRoot = Join-Path $RepoRoot ($entry.fromRoot -replace '/', '\')
+    $fromRootRel = $entry.fromRoot
+    if ($fromRootRel -match '^[a-zA-Z]:' -or $fromRootRel -match '^\\\\' -or $fromRootRel -match '(^|[/\\])\.\.([/\\]|$)') {
+      Write-Warning "[cross-mirror] fromRoot '$fromRootRel' no es ruta relativa segura — omitida."
+      continue
+    }
+    $fromRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot $fromRootRel.Replace('/', $sep)))
+    if (-not $fromRoot.StartsWith($repoRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+      Write-Warning "[cross-mirror] fromRoot '$fromRootRel' resuelve fuera del repo — omitida."
+      continue
+    }
     foreach ($toRootRel in @($entry.toRoots)) {
-      $toRoot = Join-Path $RepoRoot ($toRootRel -replace '/', '\')
+      if ($toRootRel -match '^[a-zA-Z]:' -or $toRootRel -match '^\\\\' -or $toRootRel -match '(^|[/\\])\.\.([/\\]|$)') {
+        Write-Warning "[cross-mirror] toRoot '$toRootRel' no es ruta relativa segura — omitida."
+        continue
+      }
+      $toRoot = [IO.Path]::GetFullPath((Join-Path $RepoRoot $toRootRel.Replace('/', $sep)))
+      if (-not $toRoot.StartsWith($repoRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+        Write-Warning "[cross-mirror] toRoot '$toRootRel' resuelve fuera del repo — omitida."
+        continue
+      }
       foreach ($skillName in @($entry.skills)) {
-        $srcPath = Join-Path $fromRoot "$skillName\SKILL.md"
-        if (-not (Test-Path -LiteralPath $srcPath)) {
-          $crossResults += [ordered]@{ target = "$toRootRel/$skillName/SKILL.md"; status = 'skipped'; reason = 'source not found' }
-          continue
-        }
+        $srcPath = Join-Path (Join-Path $fromRoot $skillName) 'SKILL.md'
         $targetDir = Join-Path $toRoot $skillName
         $targetPath = Join-Path $targetDir 'SKILL.md'
+        if (-not (Test-Path -LiteralPath $srcPath)) {
+          $crossResults += [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'source not found' }
+          continue
+        }
         if (Test-Path -LiteralPath $targetPath) {
           $existing = Get-Content -LiteralPath $targetPath -Raw
           if ($existing -notmatch 'cross-mirror:\s*true') {
