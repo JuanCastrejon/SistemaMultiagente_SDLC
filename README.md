@@ -1,35 +1,35 @@
 # SistemaMultiagente_SDLC
 
-AI-assisted SDLC framework con governance enterprise, SDD y enfoque brownfield-first.
+Framework SDLC asistido por IA con governance enterprise, SDD y enfoque brownfield-first.
 
 > BMAD orquesta; SistemaMultiagente_SDLC orquesta y verifica.
 
-## Why
+## Por qué
 
-This project installs a governed multi-agent SDLC into greenfield or legacy repos. It combines reusable agent personas, OpenSpec/SDD workflows, phase gates, migrations, validators, rollback and optional persistent memory.
+Este proyecto instala un SDLC multi-agente gobernado en repos greenfield o legacy. Combina personas de agente reutilizables, flujos OpenSpec/SDD, phase gates, migraciones, validadores, rollback y memoria persistente opcional.
 
-The operating model is SDD waterfall by slice and agile by release: each slice has explicit requirements, readiness, design, implementation, verification and archive gates, while releases can stay iterative.
+El modelo operativo es SDD waterfall por slice y ágil por release: cada slice tiene gates explícitos de requisitos, readiness, diseño, implementación, verificación y archivo, mientras los releases permanecen iterativos.
 
-## Quick Start
+## Inicio rápido
 
-Published package flow (>=1.2.1):
+Flujo con paquete publicado (>=1.2.1):
 
 ```powershell
 # Desde la raíz del repo destino (cwd = repo).
 # --target es opcional desde v1.2.1: si se omite, se usa el directorio actual.
-npx sistema-multiagente-sdlc init --mode greenfield --project-name "My Project"
+npx sistema-multiagente-sdlc init --mode greenfield --project-name "Mi Proyecto"
 
 # Smoke previo sin escribir nada:
-npx sistema-multiagente-sdlc init --mode greenfield --project-name "My Project" --dry-run --json
+npx sistema-multiagente-sdlc init --mode greenfield --project-name "Mi Proyecto" --dry-run --json
 ```
 
 Para v1.2.0 (compatibilidad), el comando equivalente requería `--target` explícito:
 
 ```powershell
-npx sistema-multiagente-sdlc@1.2.0 init --target . --mode greenfield --project-name "My Project"
+npx sistema-multiagente-sdlc@1.2.0 init --target . --mode greenfield --project-name "Mi Proyecto"
 ```
 
-Local development flow:
+Flujo de desarrollo local:
 
 ```powershell
 git clone https://github.com/JuanCastrejon/SistemaMultiagente_SDLC.git
@@ -38,19 +38,19 @@ corepack prepare pnpm@11.3.0 --activate
 pnpm install --frozen-lockfile
 pnpm run validate
 pnpm test
-node ./bin/sdlc.js install --target ../my-project --mode greenfield --project-name "My Project"
+node ./bin/sdlc.js install --target ../mi-proyecto --mode greenfield --project-name "Mi Proyecto"
 ```
 
 Legacy/brownfield:
 
 ```powershell
-node ./bin/sdlc.js install --target ../legacy-project --mode legacy --project-name "Legacy Project"
-node ./bin/sdlc.js doctor --target ../legacy-project --json
+node ./bin/sdlc.js install --target ../proyecto-legacy --mode legacy --project-name "Proyecto Legacy"
+node ./bin/sdlc.js doctor --target ../proyecto-legacy --json
 ```
 
 ## Runtime Multiagente
 
-Desde `1.4.0`, `sdlc` incluye comandos ejecutables para continuidad cross-IDE. El runtime primario es Node; los wrappers PowerShell solo existen para ergonomia Windows.
+Desde `1.4.0`, `sdlc` incluye comandos ejecutables para continuidad cross-IDE. El runtime primario es Node; los wrappers PowerShell solo existen para ergonomía Windows.
 
 ```powershell
 sdlc session-start --target . --json
@@ -65,10 +65,10 @@ sdlc hooks install --target . --post-merge-checkpoint --json
 Reglas base:
 
 - `session-start` crea `.sdlc/session.json` con healthcheck de Headroom, CodeGraph, Graphify, caveman, vault y slice actual.
-- `resume` es solo lectura y recompone contexto en orden repo -> CodeGraph -> Graphify -> vault.
+- `resume` es solo lectura y recompone contexto en orden repo → CodeGraph → Graphify → vault.
 - `save` escribe checkpoints locales en el vault; no promueve GitHub Issues, OpenSpec ni PRs sin gate humano.
 - `hooks install --post-merge-checkpoint` instala un hook local `post-merge` que ejecuta `sdlc save --event post-merge`.
-- `memory-sync --mode nightly --apply` importa chats y exporta Graphify al vault; no crea checkpoints automaticos.
+- `memory-sync --mode nightly --apply` importa chats y exporta Graphify al vault; no crea checkpoints automáticos.
 
 ## Harness Ejecutable F0-F17
 
@@ -88,137 +88,247 @@ Reglas base:
 - `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
 - `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
 
-## Modes
+## Modos
 
-| Mode | Use when | Adds |
+| Modo | Cuándo usar | Qué agrega |
 | --- | --- | --- |
-| `greenfield` | new repo or clean product start | greenfield SDD templates and governance |
-| `legacy` | existing repo, migration or brownfield modernization | mandatory research templates and legacy discovery gates |
+| `greenfield` | repo nuevo o inicio limpio de producto | plantillas SDD greenfield y governance |
+| `legacy` | repo existente, migración o modernización brownfield | plantillas de research obligatorio y gates de descubrimiento legacy |
 
-## Agents
+## Agentes
 
-| Plane | Personas |
+| Plano | Personas |
 | --- | --- |
 | Control | `planificador-opus`, `orquestador-opus` |
-| Product/coordination | `product-owner-agent`, `project-manager-agent` |
-| Definition | `analista-requisitos`, `arquitecto-modular-clean`, `qa-test-architect-agent` |
-| Specialist | `api-nestjs`, `web-admin`, `mobile-sync`, `ux-designer-agent`, `tech-writer-agent` |
+| Producto/coordinación | `product-owner-agent`, `project-manager-agent` |
+| Definición | `analista-requisitos`, `arquitecto-modular-clean`, `qa-test-architect-agent` |
+| Especialista | `api-nestjs`, `web-admin`, `mobile-sync`, `ux-designer-agent`, `tech-writer-agent` |
 | Gate | `qa-security-review` |
 
-## Phase Flow
+## Flujo de Fases
 
 ```mermaid
 flowchart LR
-  F0["F0 Bootstrap"] --> F1["F1 Requirements"]
-  F1 --> F2["F2 Human draft review"]
-  F2 --> F3["F3 Local issue"]
-  F3 --> F35["F3.5 Branch"]
-  F35 --> F4["F4 Readiness handoff"]
-  F4 --> F5["F5 SDD planning"]
-  F5 --> F6["F6 Planner handoff"]
-  F6 --> F7["F7 Orchestration"]
-  F7 --> F8["F8 Implementation"]
+  F0["F0 Bootstrap"] --> F1["F1 Requisitos"]
+  F1 --> F2["F2 Revisión humana borrador"]
+  F2 --> F3["F3 Issue local"]
+  F3 --> F35["F3.5 Rama"]
+  F35 --> F4["F4 Handoff readiness"]
+  F4 --> F5["F5 Planificación SDD"]
+  F5 --> F6["F6 Handoff planificador"]
+  F6 --> F7["F7 Orquestación"]
+  F7 --> F8["F8 Implementación"]
   F8 --> F9["F9 QA"]
-  F9 --> F10["F10 Security"]
+  F9 --> F10["F10 Seguridad"]
   F10 --> F11["F11 Commit"]
   F11 --> F12["F12 PR"]
-  F12 --> F13["F13 Human gate"]
+  F12 --> F13["F13 Gate humano"]
   F13 --> F14["F14 Merge"]
-  F14 --> F15["F15 Verify"]
-  F15 --> F16["F16 Archive"]
-  F16 --> F17["F17 Docs + trace"]
+  F14 --> F15["F15 Verificación"]
+  F15 --> F16["F16 Archivo"]
+  F16 --> F17["F17 Docs + trazabilidad"]
 ```
 
-## Validators
+## Validadores
 
-`pnpm run validate` runs the framework validators:
+`pnpm run validate` ejecuta los validadores del framework:
 
-- config schema
-- no personal paths
-- template sanitization
-- no inline managed content
-- manifest integrity
-- no placeholder scripts
-- external tools policy
-- governance precedence
-- skill manifest consistency
-- agent persona schema
-- docs links exist
-- OpenSpec consistency
-- Mustache references exist
-- models schema
+- schema de config
+- sin rutas personales
+- sanitización de plantillas
+- sin contenido gestionado inline
+- integridad del manifiesto
+- sin scripts placeholder
+- política de herramientas externas
+- precedencia de governance
+- consistencia del manifiesto de skills
+- schema de persona de agente
+- existencia de links en docs
+- consistencia de OpenSpec
+- existencia de referencias Mustache
+- schema de modelos
 
-## Optional External Tools
+## Herramientas Externas — Guía de Instalación para el Agente
 
-See `templates/docs/agents/external-tools-matrix.md` for setup details.
+Las herramientas externas son opt-in. El framework funciona sin ellas; al activarlas reducen reconstrucción de contexto, mejoran trazabilidad y ahorran tokens de forma significativa. Esta sección está dirigida al **agente que trabaja en el repo consumidor** para que pueda guiar al desarrollador correctamente.
 
-| Tool | Required | Purpose |
+Ver detalles completos en `templates/docs/agents/external-tools-matrix.md`.
+
+| Herramienta | Requerida | Propósito |
 | --- | --- | --- |
-| OpenSpec | yes | SDD specs, changes and archive |
-| Graphify | no | structural graph for fast orientation |
-| Obsidian | no | local persistent memory vault |
-| caveman | no | token-saving communication mode |
-| gh CLI | yes for GitHub publish | issues, PRs and releases |
+| OpenSpec | sí | SDD: specs, changes y archivo |
+| gh CLI | sí para GitHub | issues, PRs y releases |
+| headroom | no | proxy de contexto + ahorro de tokens en llamadas Anthropic |
+| Graphify | no | grafo semántico de docs para exploración cross-módulo |
+| CodeGraph | no | grafo estructural AST para navegación de código |
+| Obsidian | no | vault local para checkpoints y continuidad multi-sesión |
+| caveman | no | compresión de tokens en comunicación operativa |
+| autoskills | no | discovery de skills externas curadas |
+| vercel-labs/agent-skills | no | skills UI/deploy opcionales |
 
-All external installs are opt-in. Scripts default to dry-run or local-only behavior unless `-Apply` or another explicit install flag is provided.
+### headroom (proxy de contexto)
 
-## BMAD Comparison
+headroom actúa como proxy entre el agente y la API de Anthropic. Comprime payloads, aplica presupuestos de contexto y reduce costos en sesiones largas.
 
-Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
+**Instalación:**
 
-| Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
+```powershell
+npm install -g headroom
+# o con npx sin instalar globalmente
+npx headroom proxy --no-telemetry
+```
+
+**Configuración en Claude Code** (`~/.claude/settings.json`):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"
+  }
+}
+```
+
+**Arranque del proxy** (script incluido en `templates/scripts/`):
+
+```powershell
+pwsh -NonInteractive -File scripts/headroom-start.ps1
+```
+
+**Autoarranque en Windows** (una sola vez por máquina — acción del usuario, no automatizable por el agente):
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1
+Get-ScheduledTask -TaskName "<ProjectSlug>-Headroom-Autostart"
+```
+
+Sin esta tarea registrada, Codex y VS Code/Copilot no arrancan headroom automáticamente; Claude Code sí (via hook SessionStart en `~/.claude/settings.json`).
+
+**Regla crítica:** si el proxy falla tras los reintentos, **no limpiar `ANTHROPIC_BASE_URL`**. Eso causaría que el agente llame directamente a Anthropic sin que el usuario lo sepa. El script registra el fallo en `%APPDATA%\headroom\health-last-fail.txt` y termina con `exit 1` para que el error sea visible.
+
+### Graphify (grafo semántico de documentación)
+
+Graphify indexa `docs/`, `openspec/`, `.github/agents/`, `.github/skills/` y raíz como knowledge graph semántico. **No indexa código de producto** (`apps/`, `packages/`).
+
+```powershell
+pip install --user graphifyy
+graphify update .                    # re-extracción AST local, sin costo LLM
+graphify query "<tema>"              # búsqueda semántica
+graphify path "<A>" "<B>"           # relaciones entre nodos
+graphify explain "<nodo>"           # descripción expandida
+```
+
+Cuándo usar: onboarding al proyecto, análisis de arquitectura cross-módulo, research de prior art en paso 4.5 de `enrich-us`. **No usar en loops normales de implementación.**
+
+### CodeGraph (grafo estructural de código)
+
+CodeGraph construye un índice AST de todo el código de producto. Responde preguntas estructurales sub-milisegundo sin grep.
+
+```powershell
+codegraph init -i                    # construir índice
+codegraph status                     # verificar salud
+```
+
+Cuándo usar: "¿dónde está definida X?", "¿qué llama a Y?", "¿qué rompería si cambio Z?", firma de un símbolo, navegación cross-module en `apps/` y `packages/`. **No usar para docs ni semántica.**
+
+### Regla de ahorro de tokens: CodeGraph vs Graphify vs Grep
+
+Esta regla es crítica. Violarla duplica contexto y eleva costos 3x–8x en sesiones largas.
+
+| Pregunta | Herramienta correcta |
+|---|---|
+| Estructura de código (callers, callees, impacto, firma) | CodeGraph — siempre primero, sin fallback a grep |
+| Semántica cross-doc (docs, ADRs, specs, guides, agents) | Graphify si el grafo existe, sino docs raw |
+| Texto literal (strings de log, comentarios, contenido sin estructura) | Grep — solo si no aplican los anteriores |
+
+**Nunca ejecutar CodeGraph y Graphify para la misma consulta.** Son capas distintas con distinto scope.
+
+### caveman (compresión de tokens en conversación)
+
+caveman comprime solo los tokens de **output** del agente, no el razonamiento ni los payloads MCP. Útil para coordinación operativa entre agentes.
+
+```text
+/caveman lite    → modo conversacional comprimido (sin artículos, fragmentos OK)
+/caveman full    → máxima compresión (solo para coordinación interna)
+```
+
+Regla: caveman **solo en conversación operativa**. Off en documentación, commits, PRs y artefactos finales. Las decisiones durables van a OpenSpec, docs o `.github/agent-state/`.
+
+**party-mode** solo en fases F2 (Análisis), F3 (Diseño) y F4 (Validación). El costo multiagente (3x–8x tokens) solo se justifica en decisiones de diseño con trade-offs reales.
+
+### Skills multi-entorno (bootstrap)
+
+Después de instalar el framework, sincronizar las skills a todos los agentes:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1
+```
+
+Esto copia las skills gobernadas desde `.github/skills/` a `.claude/skills/`, `.agents/skills/` y `.windsurf/skills/`. Si el manifiesto tiene entradas `crossMirrorSkills`, también copia skills entre carpetas de agente (por ejemplo, caveman ecosystem a Claude Code).
+
+Verificar con:
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1 -Json
+sdlc tools-doctor --target . --profile full --json
+```
+
+## Comparativa BMAD
+
+Comparativa lado a lado de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
+
+| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
 | --- | --- | --- |
-| License | MIT | MIT |
+| Licencia | MIT | MIT |
 | Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |
-| Install command | `npx bmad-method install` (interactive) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
-| Scope principal | AI-driven agile development | AI-assisted SDLC con governance enterprise y SDD |
-| Workflows | 34+ agile workflows (BMM core) | SDD waterfall por slice + agile por release (F0-F17 phases) |
+| Comando de instalación | `npx bmad-method install` (interactivo) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
+| Scope principal | Desarrollo ágil asistido por IA | SDLC asistido por IA con governance enterprise y SDD |
+| Flujos de trabajo | 34+ flujos ágiles (BMM core) | SDD waterfall por slice + ágil por release (fases F0-F17) |
 | Scale-adaptive | sí, automático (bug → enterprise) | scale hint activo desde v1.3.0 |
-| Agentes/personas | 12+ personas (PM, Architect, Dev, UX, …) | 8 personas activas + roadmap extensible |
-| Party / collaboration mode | yes (multiple personas en sesión) | roundtable opt-in planned v1.3.0 |
-| Help CLI / next-step coach | `bmad-help` skill | `sdlc doctor` (state checks); `sdlc next` planned v1.3.0 |
-| Modules / ecosystem | BMM (core) + BMB (builder) + TEA (test architect) + BMGD (game dev) + CIS (creative) | mode-based (`greenfield` / `legacy`) + extensible packs planned v2.0.0 |
-| Skills architecture | sí (V6 + Sub-Agent inclusion + Cross-Platform Agent Team) | skills mirroring across `.claude/`, `.agents/`, `.windsurf/` (`bootstrap-agent-skills.ps1`) |
-| Custom agent/workflow builder | BMad Builder v1 | personas `.agent.md` + validators (`validate-agent-persona-schema`) |
-| Dev Loop automation | en roadmap V6 | `phase-graph.yaml` + rework label-driven + lock TTL |
-| Brownfield-first | no | sí (legacy mode con research obligatorio antes de proposal) |
-| Governance validators | not core | 14 validators (config, personal-paths, template-sanitization, manifest-integrity, governance-precedence, …) |
-| OpenSpec / SDD | not core | integrated (capacidades canónicas en `openspec/specs/`) |
-| Readiness L1/L2/L3 + matriz NFR | not core | integrated (`business-production-readiness` spec) |
-| Migration system + rollback | not core | backup automático + `sdlc upgrade --to-version` + `sdlc rollback --to <id>` |
-| Multi-agent lock | not core | TTL `platform-context.json` lock |
-| Sanitization de paths/templates | not core | `validate:no-personal-paths` + `validate:template-sanitization` |
-| Provenance (SLSA) | n/d explícito | sí, SLSA v1 + signatures vía OIDC GitHub (workflow `publish.yml`) |
-| Community | Discord abierto, YouTube, X | GitHub Issues + Discussions (Discord no necesario) |
-| Trademark | BMad / BMAD-METHOD trademarks of BMad Code, LLC | sin restricción explícita más allá de MIT |
+| Agentes/personas | 12+ personas (PM, Arquitecto, Dev, UX, …) | 8 personas activas + roadmap extensible |
+| Modo party / colaboración | sí (múltiples personas en sesión) | roundtable opt-in planificado v1.3.0 |
+| CLI de ayuda / coach de siguiente paso | skill `bmad-help` | `sdlc doctor` (verificaciones de estado); `sdlc next` planificado v1.3.0 |
+| Módulos / ecosistema | BMM (core) + BMB (builder) + TEA (test architect) + BMGD (game dev) + CIS (creative) | basado en modos (`greenfield` / `legacy`) + packs extensibles planificados v2.0.0 |
+| Arquitectura de skills | sí (V6 + Sub-Agent inclusion + Cross-Platform Agent Team) | mirroring de skills a `.claude/`, `.agents/`, `.windsurf/` (`bootstrap-agent-skills.ps1`) con soporte `crossMirrorSkills` |
+| Constructor de agentes/flujos personalizados | BMad Builder v1 | personas `.agent.md` + validadores (`validate-agent-persona-schema`) |
+| Automatización del loop de desarrollo | en roadmap V6 | `phase-graph.yaml` + rework label-driven + lock TTL |
+| Brownfield-first | no | sí (modo legacy con research obligatorio antes de proposal) |
+| Validadores de governance | no es core | 14 validadores (config, personal-paths, template-sanitization, manifest-integrity, governance-precedence, …) |
+| OpenSpec / SDD | no es core | integrado (capacidades canónicas en `openspec/specs/`) |
+| Readiness L1/L2/L3 + matriz NFR | no es core | integrado (spec `business-production-readiness`) |
+| Sistema de migración + rollback | no es core | backup automático + `sdlc upgrade --to-version` + `sdlc rollback --to <id>` |
+| Lock multi-agente | no es core | TTL `platform-context.json` lock |
+| Sanitización de paths/plantillas | no es core | `validate:no-personal-paths` + `validate:template-sanitization` |
+| Provenance (SLSA) | n/d explícito | sí, SLSA v1 + firmas vía OIDC GitHub (workflow `publish.yml`) |
+| Comunidad | Discord abierto, YouTube, X | GitHub Issues + Discussions (Discord no necesario) |
+| Marca registrada | BMad / BMAD-METHOD trademarks of BMad Code, LLC | sin restricción explícita más allá de MIT |
 
-Lectura corta: BMAD lidera en agile breadth y community (12+ personas, 34+ workflows, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validators (14) + migration system + readiness L1/L2/L3 + sanitization. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
+Lectura corta: BMAD lidera en amplitud ágil y comunidad (12+ personas, 34+ flujos, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validadores (14) + sistema de migración + readiness L1/L2/L3 + sanitización. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
 
 ## Roadmap
 
 v1.3.0:
 
-- bash parity for critical scripts
+- paridad bash para scripts críticos
 - `sdlc next`
-- adaptive scale: bug, feature, epic, platform
-- calibration extensions
+- scale adaptativo: bug, feature, epic, platform
+- extensiones de calibración
 - roundtable opt-in
-- docs site
-- regression-install matrix: agregar `macos-latest` (triple coverage ubuntu + windows + macos)
-- bump `actions/checkout@v5` + `actions/setup-node@v5` con `node-version: 24`; deadline GitHub: Node 20 deprecated jun 2026, removed sep 2026
+- sitio de documentación
+- matriz de instalación de regresión: agregar `macos-latest` (cobertura triple ubuntu + windows + macos)
+- bump `actions/checkout@v5` + `actions/setup-node@v5` con `node-version: 24`; deadline GitHub: Node 20 deprecated jun 2026, removido sep 2026
 
 v2.0.0:
 
-- extensible packs
-- plugin API
-- marketplace registry
-- English i18n
-- interactive contextual help
+- packs extensibles
+- API de plugins
+- registro marketplace
+- internacionalización en inglés
+- ayuda contextual interactiva
 
-## Contributing
+## Contribución
 
-Read `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` and `SECURITY.md`.
+Leer `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` y `SECURITY.md`.
 
-## License
+## Licencia
 
 MIT.

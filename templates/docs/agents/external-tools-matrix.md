@@ -63,6 +63,58 @@ powershell -ExecutionPolicy Bypass -File scripts/bootstrap-obsidian-vault.ps1 -A
 
 5. Abrir Obsidian y seleccionar el vault creado. La plantilla no requiere plugins obligatorios.
 
+## headroom (proxy de contexto)
+
+headroom actúa como proxy entre el agente y la API de Anthropic. Reduce tokens en llamadas largas y permite presupuestos de contexto.
+
+**Instalación:**
+
+```powershell
+npm install -g headroom
+```
+
+**Configurar Claude Code** (`~/.claude/settings.json`):
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"
+  }
+}
+```
+
+**Arranque del proxy:**
+
+```powershell
+pwsh -NonInteractive -File scripts/headroom-start.ps1
+```
+
+**Registrar autoarranque en Windows** (una sola vez por máquina — acto del usuario, no del agente):
+
+```powershell
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1
+Get-ScheduledTask -TaskName "{{project.slug}}-Headroom-Autostart"
+```
+
+Sin la tarea registrada, Codex y VS Code/Copilot no arrancan headroom automáticamente. Claude Code sí (via hook SessionStart).
+
+**Regla crítica:** si el proxy falla, **no limpiar `ANTHROPIC_BASE_URL`**. Silenciar el bypass es peor que un fallo visible. El script registra fallos en `%APPDATA%\headroom\health-last-fail.txt`.
+
+## Regla de ahorro de tokens: CodeGraph vs Graphify vs Grep
+
+Violar esta separación duplica contexto y eleva costos 3x–8x en sesiones largas.
+
+| Herramienta | Usar para | No usar para |
+|---|---|---|
+| **CodeGraph** (`codegraph_*`) | Estructura de código: callers, callees, impacto, firma de símbolo, navegación cross-module en `apps/` y `packages/` | Semántica documental, ADRs, specs, requisitos |
+| **Graphify** (`graphify query/path/explain`) | Semántica cross-doc: relaciones entre docs, OpenSpec, ADRs, guides, agents | Código de producto |
+| **Grep / cavecrew-investigator** | Texto literal: strings de log, comentarios, contenido sin estructura | Lookups de símbolos o estructura |
+
+Regla de oro: nunca ejecutar CodeGraph y Graphify para la misma consulta.
+- Pregunta estructural de código → CodeGraph primero, sin fallback a grep.
+- Pregunta semántica de docs/arquitectura → Graphify si el grafo existe, sino docs raw.
+- Búsqueda literal → Grep, solo si no aplican los anteriores.
+
 ## Graphify
 
 1. Generar o actualizar el grafo con la herramienta que uses para tu repo:
