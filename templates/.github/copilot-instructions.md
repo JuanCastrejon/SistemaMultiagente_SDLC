@@ -28,6 +28,27 @@ Frontend: {{stack.frontend}}
 /commit [#issue]        → commit Conventional + PR contra {{gitFlow.integrationBranch}}
 ```
 
+## Límites de Herramientas de Análisis
+
+Para evitar duplicación de contexto y sobrecarga de tokens:
+
+| Herramienta | Usar para | No usar para |
+|---|---|---|
+| **CodeGraph** (`codegraph_*`) | Estructura de código: callers, callees, impacto de cambio, firma de símbolo | Semántica documental, ADRs, specs, requisitos |
+| **Graphify** (`graphify query/path/explain`) | Semántica cross-doc: relaciones entre docs, OpenSpec, ADRs, guides | Código de producto |
+| **Grep / cavecrew-investigator** | Texto literal: strings de log, comentarios, contenido no estructurado | Lookups de símbolos o estructura |
+
+Regla: nunca ejecutar CodeGraph y Graphify para la misma consulta.
+- Pregunta estructural de código → CodeGraph primero.
+- Pregunta semántica de docs/arquitectura → Graphify si el grafo existe.
+- Búsqueda literal → Grep, solo si no aplican los anteriores.
+
+**party-mode** solo en fases F2 (Análisis), F3 (Diseño) y F4 (Validación). No en F5+ ni para tareas CRUD estándar.
+
+**Graphify** no se usa en loops normales de implementación. Solo para: onboarding, análisis de arquitectura cross-módulo, y research de prior art.
+
+**Obsidian / resume** solo al inicio (`/resume`) y fin (`/save`) de un bloque de trabajo.
+
 ## Reglas
 
 - No implementar sin OpenSpec change aprobado (cambios funcionales no triviales).

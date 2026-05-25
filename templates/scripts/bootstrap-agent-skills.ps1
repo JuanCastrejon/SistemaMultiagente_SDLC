@@ -121,11 +121,53 @@ if ($InstallExternal -and -not $SkipExternalInstall) {
   }
 }
 
+$crossResults = @()
+if ($manifest.PSObject.Properties.Name -contains 'crossMirrorSkills') {
+  foreach ($entry in @($manifest.crossMirrorSkills)) {
+    $fromRoot = Join-Path $RepoRoot ($entry.fromRoot -replace '/', '\')
+    foreach ($toRootRel in @($entry.toRoots)) {
+      $toRoot = Join-Path $RepoRoot ($toRootRel -replace '/', '\')
+      foreach ($skillName in @($entry.skills)) {
+        $srcPath = Join-Path $fromRoot "$skillName\SKILL.md"
+        if (-not (Test-Path -LiteralPath $srcPath)) {
+          $crossResults += [ordered]@{ target = "$toRootRel/$skillName/SKILL.md"; status = 'skipped'; reason = 'source not found' }
+          continue
+        }
+        $targetDir = Join-Path $toRoot $skillName
+        $targetPath = Join-Path $targetDir 'SKILL.md'
+        if (Test-Path -LiteralPath $targetPath) {
+          $existing = Get-Content -LiteralPath $targetPath -Raw
+          if ($existing -notmatch 'cross-mirror:\s*true') {
+            $crossResults += [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'unmanaged file exists' }
+            continue
+          }
+        }
+        $sourceText = Get-Content -LiteralPath $srcPath -Raw
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+        }
+        $mirrorText = @(
+          '---'
+          'cross-mirror: true'
+          "from: $($entry.fromRoot)/$skillName/SKILL.md"
+          '---'
+          ''
+          $sourceText.TrimEnd()
+          ''
+        ) -join "`n"
+        $mirrorText | Set-Content -LiteralPath $targetPath -Encoding UTF8
+        $crossResults += [ordered]@{ target = $targetPath; status = 'written'; reason = $null }
+      }
+    }
+  }
+}
+
 $payload = [ordered]@{
   status = 'ok'
   source = $SourceRoot
   mirrors = $results
   external = $external
+  crossMirror = $crossResults
 }
 
 if ($Json) {
@@ -133,5 +175,7 @@ if ($Json) {
 } else {
   $written = @($results | Where-Object { $_.status -eq 'written' }).Count
   $skipped = @($results | Where-Object { $_.status -eq 'skipped' }).Count
-  Write-Host "bootstrap-agent-skills: written=$written skipped=$skipped external_attempted=$($external.attempted)"
+  $crossWritten = @($crossResults | Where-Object { $_.status -eq 'written' }).Count
+  $crossSkipped = @($crossResults | Where-Object { $_.status -eq 'skipped' }).Count
+  Write-Host "bootstrap-agent-skills: written=$written skipped=$skipped external_attempted=$($external.attempted) cross_written=$crossWritten cross_skipped=$crossSkipped"
 }
