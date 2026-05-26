@@ -4,7 +4,7 @@ import path from "node:path";
 import { renderTemplates, templatesRoot } from "./template-loader.js";
 export { validateConfigShape } from "./config-validator.js";
 
-export const FRAMEWORK_VERSION = "1.6.0";
+export const FRAMEWORK_VERSION = "1.5.0";
 export const SCHEMA_VERSION = 1;
 export const SUPPORTED_MODES = new Set(["greenfield", "legacy"]);
 
@@ -25,13 +25,10 @@ function buildSharedRulesBlock(config) {
   const body = [
     "1. La fuente normativa vive en `.github/`, `openspec/`, `docs/`, `AGENTS.md` e `indice-operativo.md`.",
     "2. Todo cambio funcional no trivial requiere business fit, KPI, readiness, matriz NFR y cambio OpenSpec antes de implementar.",
-    `3. Las ramas permitidas son \`${config.gitFlow.branchPrefixes.join("`, `")}\`; integración en \`${config.gitFlow.integrationBranch}\` y estable en \`${config.gitFlow.stableBranch}\`.`,
-    "4. Los gates humanos no se automatizan: borrador local -> revisión humana -> Issue/PR -> validación -> merge.",
+    `3. Las ramas permitidas son \`${config.gitFlow.branchPrefixes.join("`, `")}\`; integracion en \`${config.gitFlow.integrationBranch}\` y estable en \`${config.gitFlow.stableBranch}\`.`,
+    "4. Los gates humanos no se automatizan: borrador local -> revision humana -> Issue/PR -> validacion -> merge.",
     "5. La continuidad lee contexto en orden repo -> CodeGraph -> graphify-out -> vault Obsidian.",
-    "6. Las skills canónicas viven en `.github/skills/` y sus mirrors de IDE deben conservar el mismo hash.",
-    "7. Jerarquía obligatoria de retrieval (ADR local de jerarquía/perfiles, ver `docs/guides/tool-hierarchy-and-profiles.md`): (0) `Read` directo si path conocido; (1) CodeGraph `codegraph_*` para estructura de código; (2) Graphify `graphify query|path|explain` para semántica documental cross-doc; (3) Obsidian vault (`/resume`, lectura targeted) para memoria persistente; (4) OpenSpec `specs/` para capacidades canonizadas; (5) `Grep`/`Glob` solo para texto literal; (6) `WebSearch`/`WebFetch` como último recurso. Saltar a nivel superior MUST estar justificado por respuesta vacía o insuficiente del inferior.",
-    "8. Perfiles operativos. Elegir antes de cargar contexto. Documentar `Perfil: <LEAN|ANALYSIS|ORCHESTRATION>` en commit/PR/enhanced. `LEAN` default (CRUD, bug fix, refactor < 3 archivos): CodeGraph + OpenSpec specs minimal + headroom + este bloque; prohibido Graphify, Obsidian retrieval, party-mode, enrich-us, specialist personas. `ANALYSIS` (F2/F3, prior-art, onboarding): `LEAN` + Graphify + Obsidian (`/resume` un checkpoint) + change OpenSpec completo; prohibido party-mode y specialist personas en loop de implementación. `ORCHESTRATION` (F4 Validación, tradeoffs, debate multi-voz): `ANALYSIS` + party-mode (<=4 personas, <=3 rondas, <=400 palabras) + enrich-us + specialist personas. Empezar siempre en `LEAN`; upgrade explícito y justificado.",
-    "9. Gate local pre-push/pre-PR obligatorio: antes de `git push` o `gh pr create`, ejecutar `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/validate-local-gate.ps1 -ChangeName <change> -Strict` en repos maduros (o sin `-Strict` en consumidores greenfield portables) y resolver cualquier error de `bootstrap-agent-skills`, `validate:*`, `sdlc governance-check`, `sdlc tools-doctor` y revisión `qa-security-review` local."
+    "6. Las skills canonicas viven en `.github/skills/` y sus mirrors de IDE deben conservar el mismo hash."
   ].join("\n");
   return [
     `<!-- SDLC_SHARED_RULES_START sha256:${sha256Text(body)} -->`,
