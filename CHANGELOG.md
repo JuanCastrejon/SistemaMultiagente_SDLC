@@ -28,7 +28,7 @@ _No hay cambios pendientes._
 - Comandos CLI nuevos: `sdlc phase-gate`, `sdlc governance-check`, `sdlc tools-doctor` y `sdlc pr-body-check`.
 - Bloque `SDLC_SHARED_RULES` con hash para paridad entre `AGENTS.md`, `CLAUDE.md`, `.github/AGENTS.md` y `.github/copilot-instructions.md`.
 - Roles upstream: `product-owner-agent`, `project-manager-agent`, `qa-test-architect-agent`, `tech-writer-agent` y `ux-designer-agent`.
-- Skill `party-mode` anclada a F1/F2/F5 y separación entre QA temprana y `qa-security-review` para F9/F10.
+- Skill `party-mode` anclada a F2/F3/F4 y separación entre QA temprana y `qa-security-review` para F9/F10.
 - Perfil `full-harness` para reportar OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
 - Migración `1.5.0` con marcador `.sdlc/migrations/1.5.0-applied.txt`.
 
