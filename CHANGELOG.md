@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-26
+
+### Added
+
+- ADR `0005-tool-hierarchy-and-operational-profiles.md`: jerarquía de retrieval y perfiles `LEAN` / `ANALYSIS` / `ORCHESTRATION`.
+- Guía `docs/guides/tool-hierarchy-and-profiles.md` y template instalable equivalente.
+- Migración `1.6.0` con marcador `.sdlc/migrations/1.6.0-applied.txt`.
+- Script template `scripts/validate-local-gate.ps1` para reproducir el control plane antes de push/PR.
+
+### Changed
+
+- `SDLC_SHARED_RULES` ahora incluye reglas 7-9 para jerarquía de retrieval, perfiles operativos y gate local pre-push/pre-PR.
+- Skills `contexto-proyecto`, `enrich-us` y `party-mode` aplican selección de perfil y límites de herramienta.
+- External tools matrix documenta perfil elegible y cuándo no usar cada herramienta.
+- Workflows de GitHub Actions optan a Node 24 para evitar warnings de acciones JavaScript sobre Node 20.
+
+
 ## [1.5.0] — 2026-05-24
 
 ### Added
