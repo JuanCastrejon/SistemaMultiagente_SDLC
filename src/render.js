@@ -22,10 +22,13 @@ function sha256Text(value) {
 }
 
 function buildSharedRulesBlock(config) {
+  const branchPrefixes = Array.isArray(config?.gitFlow?.branchPrefixes)
+    ? config.gitFlow.branchPrefixes
+    : ["feature/", "fix/", "docs/"];
   const body = [
     "1. La fuente normativa vive en `.github/`, `openspec/`, `docs/`, `AGENTS.md` e `indice-operativo.md`.",
     "2. Todo cambio funcional no trivial requiere business fit, KPI, readiness, matriz NFR y cambio OpenSpec antes de implementar.",
-    `3. Las ramas permitidas son \`${config.gitFlow.branchPrefixes.join("`, `")}\`; integración en \`${config.gitFlow.integrationBranch}\` y estable en \`${config.gitFlow.stableBranch}\`.`,
+    `3. Las ramas permitidas son \`${branchPrefixes.join("`, `")}\`; integración en \`${config.gitFlow.integrationBranch}\` y estable en \`${config.gitFlow.stableBranch}\`.`,
     "4. Los gates humanos no se automatizan: borrador local -> revisión humana -> Issue/PR -> validación -> merge.",
     "5. La continuidad lee contexto en orden repo -> CodeGraph -> graphify-out -> vault Obsidian.",
     "6. Las skills canónicas viven en `.github/skills/` y sus mirrors de IDE deben conservar el mismo hash.",
