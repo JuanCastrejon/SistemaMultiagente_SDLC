@@ -78,7 +78,8 @@ function checkHttp(url, timeoutMs = 1200) {
 
 function fileAgeHours(filePath) {
   if (!pathExists(filePath)) return null;
-  return Math.round(((Date.now() - fs.statSync(filePath).mtimeMs) / 36_000) / 100) / 100;
+  const ageHours = (Date.now() - fs.statSync(filePath).mtimeMs) / 3_600_000;
+  return Math.round(ageHours * 100) / 100;
 }
 
 function latestFile(root, extension = ".md") {
