@@ -47,6 +47,65 @@ _No hay cambios pendientes._
 
 - Regresión extendida con smoke tests de `session-start`, `resume`, `save --no-mutate`, `continua`, `memory-sync --mode health`, `validate-runtime` y `hooks install`.
 
+## [1.6.0] — 2026-05-26
+
+### Added
+
+- ADR `0005-tool-hierarchy-and-operational-profiles.md`: jerarquía de retrieval y perfiles `LEAN` / `ANALYSIS` / `ORCHESTRATION`.
+- Guía `docs/guides/tool-hierarchy-and-profiles.md` y template instalable equivalente.
+- Migración `1.6.0` con marcador `.sdlc/migrations/1.6.0-applied.txt`.
+- Script template `scripts/validate-local-gate.ps1` para reproducir el control plane antes de push/PR.
+
+### Changed
+
+- `SDLC_SHARED_RULES` ahora incluye reglas 7-9 para jerarquía de retrieval, perfiles operativos y gate local pre-push/pre-PR.
+- Skills `contexto-proyecto`, `enrich-us` y `party-mode` aplican selección de perfil y límites de herramienta.
+- External tools matrix documenta perfil elegible y cuándo no usar cada herramienta.
+- Workflows de GitHub Actions optan a Node 24 para evitar warnings de acciones JavaScript sobre Node 20.
+
+## [1.5.0] — 2026-05-24
+
+### Added
+
+- Harness ejecutable F0-F17 con `phase-contract.yaml`, `schemas/phase-evidence.schema.json` y `templates/phases/F0...F17`.
+- Comandos CLI nuevos: `sdlc phase-gate`, `sdlc governance-check`, `sdlc tools-doctor` y `sdlc pr-body-check`.
+- Bloque `SDLC_SHARED_RULES` con hash para paridad entre `AGENTS.md`, `CLAUDE.md`, `.github/AGENTS.md` y `.github/copilot-instructions.md`.
+- Roles upstream: `product-owner-agent`, `project-manager-agent`, `qa-test-architect-agent`, `tech-writer-agent` y `ux-designer-agent`.
+- Skill `party-mode` anclada a F2/F3/F4 y separación entre QA temprana y `qa-security-review` para F9/F10.
+- Perfil `full-harness` para reportar OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
+- Migración `1.5.0` con marcador `.sdlc/migrations/1.5.0-applied.txt`.
+
+### Changed
+
+- Migración del desarrollo y workflows del framework a `pnpm@11.3.0`.
+- `resume` y `continua` incorporan lectura del contrato de fase y reportan bloqueos por evidencia faltante.
+- `buildManagedFiles` genera mirrors cross-IDE desde `.github/skills/` para evitar drift entre Claude Code, Codex, Copilot y Windsurf.
+
+### Tests
+
+- Regresión extendida con smoke tests de `phase-gate`, `governance-check` y `tools-doctor`.
+
+## [1.4.0] — 2026-05-24
+
+### Added
+
+- ADR `0004-codegraph-graphify-orden-canonico.md`: cierra la decisión pendiente de ADR 0002 y canoniza CodeGraph para estructura de código + Graphify para semántica documental/export Obsidian.
+- Runtime Node multiagente como interfaz canónica: `sdlc session-start`, `resume`, `save`, `continua`, `memory-sync`, `validate-runtime` y `hooks install --post-merge-checkpoint`.
+- `.sdlc/session.json` como estado generado de sesión para healthcheck y continuidad cross-IDE.
+- Skills canónicas `resume`, `save` y `continua` bajo `.github/skills/` y mirrors para `.claude/`, `.agents/` y `.windsurf/`, todas apuntando al mismo CLI `sdlc`.
+- `templates/scripts/continua.mjs` como implementación portable Node de continuidad; `continua.ps1` queda como wrapper Windows delgado.
+- Migración `1.4.0` con marcador `.sdlc/migrations/1.4.0-applied.txt`.
+
+### Changed
+
+- `sdlc doctor` y el runner de regresión validan la versión `1.4.0`.
+- El manifest de skills gobernadas incluye `resume`, `save` y `continua`.
+- La continuidad multiagente deja de depender de PowerShell como runtime primario; PowerShell queda para compatibilidad en Windows.
+
+### Tests
+
+- Regresión extendida con smoke tests de `session-start`, `resume`, `save --no-mutate`, `continua`, `memory-sync --mode health`, `validate-runtime` y `hooks install`.
+
 ## [1.3.0] — 2026-05-23
 
 ### Added

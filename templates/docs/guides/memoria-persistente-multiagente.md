@@ -18,17 +18,22 @@ Guía operativa para combinar la verdad versionada del repo, Graphify y un vault
    - `openspec/specs/`
    - `openspec/changes/`
    - `docs/`
-2. **Graphify**:
+2. **CodeGraph**:
+   - estructura de código,
+   - símbolos,
+   - callers/callees,
+   - impacto.
+3. **Graphify**:
    - `graphify-out/GRAPH_REPORT.md`
    - `graphify query|path|explain`
    - notas Obsidian derivadas en `graphify/{{project.slug}}/`
-3. **Vault externo**:
+4. **Vault externo**:
    - checkpoints,
    - logs de sesión,
    - chats importados,
    - notas derivadas.
-4. **Código raw / historial no importado**:
-   - solo cuando las capas 1-3 no resuelven la duda.
+5. **Código raw / historial no importado**:
+   - solo cuando las capas 1-4 no resuelven la duda.
 
 ## Regla central
 
@@ -66,9 +71,10 @@ Comando auxiliar de reconstrucción de contexto.
 Secuencia:
 
 1. leer repositorio canónico,
-2. leer `graphify-out/`,
-3. leer el último checkpoint del vault,
-4. resumir estado y dejar listo el siguiente paso para `Continua`.
+2. leer CodeGraph para estructura de código,
+3. leer `graphify-out/` si el perfil es `ANALYSIS` u `ORCHESTRATION`,
+4. leer el último checkpoint del vault,
+5. resumir estado y dejar listo el siguiente paso para `Continua`.
 
 `/resume` no implementa cambios solo por invocarse.
 
@@ -91,7 +97,7 @@ Debe escribir en el vault:
 - vínculos útiles,
 - promoción pendiente al repo si aplica.
 
-`/save` no reemplaza el update de documentación viva ni hace commit/push automático.
+`/save` no reemplaza el update de documentación viva ni hace commit/push automático. La importación de chats completos al vault es determinística y no usa modelo por defecto; los auto-resúmenes con LLM requieren un change separado.
 
 ## Layout local recomendado
 
