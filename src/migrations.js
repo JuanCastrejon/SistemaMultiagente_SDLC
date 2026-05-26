@@ -4,6 +4,7 @@ import { up as up_1_2_0 } from "../migrations/1.2.0/up.mjs";
 import { up as up_1_3_0 } from "../migrations/1.3.0/up.mjs";
 import { up as up_1_4_0 } from "../migrations/1.4.0/up.mjs";
 import { up as up_1_5_0 } from "../migrations/1.5.0/up.mjs";
+import { up as up_1_6_0 } from "../migrations/1.6.0/up.mjs";
 
 const REGISTRY = [
   { version: "1.0.1", up: up_1_0_1 },
@@ -11,7 +12,8 @@ const REGISTRY = [
   { version: "1.2.0", up: up_1_2_0 },
   { version: "1.3.0", up: up_1_3_0 },
   { version: "1.4.0", up: up_1_4_0 },
-  { version: "1.5.0", up: up_1_5_0 }
+  { version: "1.5.0", up: up_1_5_0 },
+  { version: "1.6.0", up: up_1_6_0 }
 ];
 
 function semverTuple(v) {
