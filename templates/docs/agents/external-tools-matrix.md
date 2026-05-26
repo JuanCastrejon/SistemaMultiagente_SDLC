@@ -1,19 +1,31 @@
 # External Tools Matrix
 
-Las herramientas externas son opt-in. La plantilla funciona sin ellas; al activarlas reducen reconstruccion de contexto, mejoran trazabilidad y ahorran tokens.
+Las herramientas externas son opt-in. La plantilla funciona sin ellas; al activarlas reducen reconstruccion de contexto, mejoran trazabilidad y evitan scanning innecesario cuando se usan bajo el perfil correcto.
 
 ## Matriz
 
-| Herramienta | Capa | Requerida | Proposito |
-| --- | --- | --- | --- |
-| OpenSpec | SDD | si | capacidad, proposal, specs, design y tasks |
-| Graphify | memoria estructural | no | grafo de docs/codigo para exploracion rapida |
-| Obsidian | memoria persistente | no | vault local para checkpoints y continuidad |
-| caveman | compresion | no | reducir tokens en comunicacion operativa |
-| headroom | presupuesto | no | estimar espacio de contexto antes de tareas largas |
-| autoskills | skills | no | discovery de skills externas |
-| vercel-labs/agent-skills | skills externas | no | skills UI/deploy opcionales |
-| gh CLI | GitHub | si para publish | issues, PRs y releases |
+| Herramienta | Capa | Perfil elegible | Requerida | Proposito |
+| --- | --- | --- | --- | --- |
+| OpenSpec | SDD | `LEAN` minimo, `ANALYSIS` completo | si | capacidad, proposal, specs, design y tasks |
+| CodeGraph | estructura codigo | `LEAN` | no | simbolos, callers/callees, impacto y contexto AST |
+| Graphify | semantica documental | `ANALYSIS` / `ORCHESTRATION` | no | grafo de docs/OpenSpec/ADRs para exploracion cross-doc |
+| Obsidian | memoria persistente | `ANALYSIS` con `/resume`; cierre con `/save` | no | vault local para checkpoints, chats importados y continuidad |
+| caveman | compresion output | cualquiera, conversacion | no | reducir output conversacional, no contexto ni reasoning |
+| headroom | proxy/cache | cualquiera | no | cache y compresion de trafico cuando el cliente lo soporte |
+| autoskills | skills | segun tarea | no | discovery de skills externas |
+| vercel-labs/agent-skills | skills externas | segun tarea frontend/deploy | no | skills UI/deploy opcionales |
+| gh CLI | GitHub | `LEAN` | si para publish | issues, PRs y releases |
+
+## Cuando NO usar
+
+| Herramienta | No usar para |
+|---|---|
+| OpenSpec | Reemplazar lectura directa de un path exacto o inflar tareas CRUD triviales |
+| CodeGraph | Semantica documental, ADRs, specs o memoria |
+| Graphify | Loops normales de implementacion `LEAN` o estructura de codigo |
+| Obsidian | Retrieval continuo o fuente de verdad normativa |
+| caveman | Docs, commits, PRs o como solucion a contexto alto |
+| headroom | Sustituir perfiles operativos o ocultar fallos de proxy |
 
 ## Instalacion base
 
@@ -65,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts/bootstrap-obsidian-vault.ps1 -A
 
 ## headroom (proxy de contexto)
 
-headroom actúa como proxy entre el agente y la API de Anthropic. Reduce tokens en llamadas largas y permite presupuestos de contexto.
+headroom actúa como proxy entre el agente y la API de Anthropic. Aporta caché y compresión de tráfico; no reemplaza la disciplina de perfiles ni reduce por sí mismo el contexto cargado.
 
 **Instalación:**
 
@@ -100,20 +112,21 @@ Sin la tarea registrada, Codex y VS Code/Copilot no arrancan headroom automátic
 
 **Regla crítica:** si el proxy falla, **no limpiar `ANTHROPIC_BASE_URL`**. Silenciar el bypass es peor que un fallo visible. El script registra fallos en `%APPDATA%\headroom\health-last-fail.txt`.
 
-## Regla de ahorro de tokens: CodeGraph vs Graphify vs Grep
+## Regla de ahorro de tokens: jerarquía de retrieval
 
 Violar esta separación duplica contexto y eleva costos 3x–8x en sesiones largas.
 
-| Herramienta | Usar para | No usar para |
+| Nivel | Herramienta | Usar para |
 |---|---|---|
-| **CodeGraph** (`codegraph_*`) | Estructura de código: callers, callees, impacto, firma de símbolo, navegación cross-module en `apps/` y `packages/` | Semántica documental, ADRs, specs, requisitos |
-| **Graphify** (`graphify query/path/explain`) | Semántica cross-doc: relaciones entre docs, OpenSpec, ADRs, guides, agents | Código de producto |
-| **Grep / cavecrew-investigator** | Texto literal: strings de log, comentarios, contenido sin estructura | Lookups de símbolos o estructura |
+| 0 | Read directo | Artefacto conocido por path |
+| 1 | CodeGraph (`codegraph_*`) | Estructura de código |
+| 2 | Graphify (`graphify query/path/explain`) | Semántica documental cross-doc |
+| 3 | Obsidian vault | `/resume`, checkpoints y chats |
+| 4 | OpenSpec specs | Capacidades canonizadas |
+| 5 | Grep / Glob | Texto literal |
+| 6 | WebSearch / WebFetch | Conocimiento externo |
 
-Regla de oro: nunca ejecutar CodeGraph y Graphify para la misma consulta.
-- Pregunta estructural de código → CodeGraph primero, sin fallback a grep.
-- Pregunta semántica de docs/arquitectura → Graphify si el grafo existe, sino docs raw.
-- Búsqueda literal → Grep, solo si no aplican los anteriores.
+Regla de oro: usar el nivel más bajo aplicable y justificar cualquier salto. Nunca ejecutar CodeGraph y Graphify para la misma consulta.
 
 ## Graphify
 
@@ -141,7 +154,7 @@ Modo recomendado:
 caveman lite: resumir estado F5/F6 y siguiente accion
 ```
 
-Regla: caveman comprime conversacion, pero las decisiones durables deben quedar en OpenSpec, docs o `.github/agent-state/`.
+Regla: caveman comprime output conversacional, pero no reduce contexto ni reasoning. Las decisiones durables deben quedar en OpenSpec, docs o `.github/agent-state/`.
 
 ## Sync Claude/Codex a Obsidian
 
@@ -156,6 +169,8 @@ Aplicar:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/sync-claude-obsidian.ps1 -Apply -Json
 ```
+
+La importación de chats completos es determinística y no usa modelo por defecto. `/save` sigue siendo el checkpoint decisional explícito; no generar auto-resúmenes con LLM sin un change separado.
 
 Registrar tarea programada en Windows:
 

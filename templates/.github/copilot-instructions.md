@@ -8,7 +8,8 @@ Modo: {{mode}}
 ## Contexto normativo
 
 - La verdad normativa vive en `.github/AGENTS.md`, `AGENTS.md`, `openspec/` y `docs/`.
-- Usar `graphify-out/` para exploración cross-module si el grafo existe.
+- Elegir perfil operativo antes de cargar contexto.
+- Usar CodeGraph para estructura de código y `graphify-out/` para exploración documental cross-doc si el perfil lo permite.
 - Toda decisión funcional no trivial requiere OpenSpec change antes de implementación.
 
 ## Stack
@@ -32,16 +33,17 @@ Frontend: {{stack.frontend}}
 
 Para evitar duplicación de contexto y sobrecarga de tokens:
 
-| Herramienta | Usar para | No usar para |
+| Nivel | Herramienta | Usar para |
 |---|---|---|
-| **CodeGraph** (`codegraph_*`) | Estructura de código: callers, callees, impacto de cambio, firma de símbolo | Semántica documental, ADRs, specs, requisitos |
-| **Graphify** (`graphify query/path/explain`) | Semántica cross-doc: relaciones entre docs, OpenSpec, ADRs, guides | Código de producto |
-| **Grep / cavecrew-investigator** | Texto literal: strings de log, comentarios, contenido no estructurado | Lookups de símbolos o estructura |
+| 0 | Read directo | Artefacto conocido por path |
+| 1 | **CodeGraph** (`codegraph_*`) | Estructura de código: callers, callees, impacto, firma de símbolo |
+| 2 | **Graphify** (`graphify query/path/explain`) | Semántica cross-doc: docs, OpenSpec, ADRs, guides |
+| 3 | Obsidian vault | `/resume`, checkpoints y chats importados |
+| 4 | OpenSpec specs | Capacidades canonizadas |
+| 5 | **Grep / Glob** | Texto literal |
+| 6 | WebSearch / WebFetch | Conocimiento externo |
 
-Regla: nunca ejecutar CodeGraph y Graphify para la misma consulta.
-- Pregunta estructural de código → CodeGraph primero.
-- Pregunta semántica de docs/arquitectura → Graphify si el grafo existe.
-- Búsqueda literal → Grep, solo si no aplican los anteriores.
+Regla: usar el nivel más bajo aplicable y justificar cualquier salto. Nunca ejecutar CodeGraph y Graphify para la misma consulta.
 
 **party-mode** solo en fases F2 (Análisis), F3 (Diseño) y F4 (Validación). No en F5+ ni para tareas CRUD estándar.
 

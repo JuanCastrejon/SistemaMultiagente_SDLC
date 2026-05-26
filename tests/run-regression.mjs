@@ -90,7 +90,7 @@ const greenfield = makeRepo("task-manager-saas");
 fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(greenfield, "README.md"));
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Task Manager SaaS", "--json"]);
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
-assert.equal(greenfieldConfig.frameworkVersion, "1.5.0");
+assert.equal(greenfieldConfig.frameworkVersion, "1.6.0");
 assert.equal(greenfieldConfig.scale, "feature");
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceDate": "2026-05-18",
+  "sourceDate": "2026-05-26",
   "installMethod": "mirror",
   "targetAgents": [
     "claude-code",
@@ -62,6 +62,7 @@
       "contexto-proyecto",
       "orquestacion-multiagente",
       "backend-audit",
+      "party-mode",
       "ui-ux-diseno"
     ],
     "reason": "Repo-governed skills are canonical and external skills must not replace them."

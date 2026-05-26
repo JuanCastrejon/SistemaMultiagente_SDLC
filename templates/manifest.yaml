@@ -97,6 +97,10 @@ templates:
     target: scripts/export-graphify-obsidian.py
   - source: scripts/bootstrap-agent-skills.ps1
     target: scripts/bootstrap-agent-skills.ps1
+  - source: scripts/validate-local-gate.ps1
+    target: scripts/validate-local-gate.ps1
+  - source: scripts/validate-local-gate.mjs
+    target: scripts/validate-local-gate.mjs
   - source: scripts/agent-skills.manifest.json
     target: scripts/agent-skills.manifest.json
   - source: scripts/claude-to-obsidian.py
@@ -311,5 +315,7 @@ templates:
     target: docs/guides/business-production-readiness.md
   - source: docs/guides/memoria-persistente-multiagente.md
     target: docs/guides/memoria-persistente-multiagente.md
+  - source: docs/guides/tool-hierarchy-and-profiles.md
+    target: docs/guides/tool-hierarchy-and-profiles.md
   - source: docs/guides/skills-multi-entorno.md
     target: docs/guides/skills-multi-entorno.md
