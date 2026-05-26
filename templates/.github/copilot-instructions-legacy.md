@@ -2,6 +2,8 @@
 
 Modo: legacy — proyecto existente con código y deuda técnica.
 
+{{sdlcSharedRulesBlock}}
+
 ## Enfoque brownfield
 
 - Investigar siempre prior art interno antes de proponer cambios (graphify → openspec/specs → docs → código).

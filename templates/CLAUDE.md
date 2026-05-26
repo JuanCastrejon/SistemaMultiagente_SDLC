@@ -1,5 +1,7 @@
 @AGENTS.md
 
+{{sdlcSharedRulesBlock}}
+
 ## graphify
 
 Este proyecto mantiene un grafo de conocimiento en `graphify-out/` con nodos dominantes, estructura por comunidades y relaciones entre archivos.

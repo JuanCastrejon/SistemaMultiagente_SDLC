@@ -26,6 +26,12 @@ import {
   commandSessionStart,
   commandValidateRuntime
 } from "./runtime.js";
+import {
+  commandGovernanceCheck,
+  commandPhaseGate,
+  commandPrBodyCheck,
+  commandToolsDoctor
+} from "./harness.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -634,7 +640,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
     }
   };
 }
@@ -669,6 +675,14 @@ export function run(argv) {
       return commandMemorySync(parsed.options);
     case "validate-runtime":
       return commandValidateRuntime(parsed.options);
+    case "phase-gate":
+      return commandPhaseGate(parsed.options);
+    case "governance-check":
+      return commandGovernanceCheck(parsed.options);
+    case "tools-doctor":
+      return commandToolsDoctor(parsed.options);
+    case "pr-body-check":
+      return commandPrBodyCheck(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":

@@ -15,24 +15,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.3.0
+          run_install: false
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: "https://registry.npmjs.org"
-          cache: npm
+          cache: pnpm
+
+      - name: Verify pnpm
+        run: pnpm --version
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Validate
-        run: npm run validate
+        run: pnpm run validate
 
       - name: Test
-        run: npm test
+        run: pnpm test
 
       - name: Publish
-        run: npm publish --provenance
+        run: pnpm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -41,7 +50,14 @@ jobs:
           set -e
           PKG_VERSION=$(node -p "require('./package.json').version")
           for attempt in 1 2 3 4 5 6 7 8 9 10; do
-            if npm view "sistema-multiagente-sdlc@${PKG_VERSION}" version --registry=https://registry.npmjs.org; then
+            if pnpm view "sistema-multiagente-sdlc@${PKG_VERSION}" version --registry=https://registry.npmjs.org; then
+              exit 0
+            fi
+            echo "Package not visible yet; retry ${attempt}/10"
+            sleep 15
+          done
+          echo "sistema-multiagente-sdlc@${PKG_VERSION} not visible after publish"
+          exit 1
               exit 0
             fi
             echo "Package not visible yet; retry ${attempt}/10"

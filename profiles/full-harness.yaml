@@ -1,0 +1,30 @@
+version: 1
+name: full-harness
+description: Perfil completo para replicar el stack multiagente usado por proyectos legacy o greenfield maduros.
+required_tools:
+  - id: pnpm
+    kind: package-manager
+    version: 11.3.0
+  - id: openspec
+    kind: sdd
+    profile: expanded
+  - id: graphify
+    kind: semantic-graph
+    package: graphifyy
+  - id: codegraph
+    kind: code-graph
+  - id: obsidian-memory
+    kind: persistent-memory
+  - id: headroom
+    kind: proxy-compression
+  - id: caveman
+    kind: output-compression
+  - id: autoskills
+    kind: skill-bootstrap
+  - id: vercel-agent-skills
+    kind: curated-external-skills
+  - id: party-mode
+    kind: multi-role-debate
+validators:
+  - sdlc tools-doctor --target . --profile full --json
+  - sdlc governance-check --target . --json

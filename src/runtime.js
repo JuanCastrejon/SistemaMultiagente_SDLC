@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ensureDir, pathExists, readJson, readTextIfExists, writeJson, writeText } from "./file-utils.js";
+import { evaluatePhaseReadiness } from "./harness.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -286,9 +287,13 @@ export function commandResume(options) {
   const activeChanges = pathExists(openSpecChanges)
     ? fs.readdirSync(openSpecChanges, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name !== "archive").map((entry) => entry.name)
     : [];
+  const phaseGate = runtime.state.phase !== "unknown" && runtime.state.sliceId !== "unknown"
+    ? evaluatePhaseReadiness(target, runtime.state.phase, runtime.state.sliceId)
+    : null;
+  const blockedByPhaseGate = phaseGate?.status === "blocked";
   const result = {
     status: "ok",
-    ownerAgent: runtime.state.phase === "definition" ? "analista-requisitos-migracion" : "orquestador-opus",
+    ownerAgent: blockedByPhaseGate ? phaseGate.owner : runtime.state.phase === "definition" ? "analista-requisitos-migracion" : "orquestador-opus",
     sliceId: runtime.state.sliceId,
     phase: runtime.state.phase,
     branch: runtime.git.branch,
@@ -297,7 +302,8 @@ export function commandResume(options) {
     latestCheckpoint: runtime.vault.latestCheckpoint,
     readinessStatus: "unknown",
     promotionStatus: "draft-local",
-    nextCommand: runtime.state.phase === "definition" ? "/enrich-us o Continua con analista-requisitos-migracion" : "Continua",
+    nextCommand: blockedByPhaseGate ? `Completar evidencia/artefactos de ${phaseGate.phase} con ${phaseGate.owner}.` : runtime.state.phase === "definition" ? "/enrich-us o Continua con analista-requisitos-migracion" : "Continua",
+    phaseGate,
     runtimeSummary: {
       headroomHealthy: runtime.headroom.healthy,
       codegraphOk: runtime.codegraph.statusOk,
@@ -319,6 +325,7 @@ export function commandResume(options) {
           `- branch: ${result.branch ?? "unknown"}`,
           `- latest-checkpoint: ${result.latestCheckpoint ?? "none"}`,
           `- next-command: ${result.nextCommand}`,
+          `- phase-gate: ${phaseGate?.status ?? "unknown"}`,
           "",
           "## Active OpenSpec changes",
           "",
