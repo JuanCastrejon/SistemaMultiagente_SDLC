@@ -4,7 +4,7 @@
   "description": "Framework reusable para instalar un SDLC multiagente gobernado en repos greenfield o legacy.",
   "type": "module",
   "bin": {
-    "sdlc": "./bin/sdlc.js"
+    "sdlc": "bin/sdlc.js"
   },
   "publishConfig": {
     "access": "public"
@@ -33,7 +33,10 @@
     "brownfield",
     "sdd"
   ],
-  "repository": "github:JuanCastrejon/SistemaMultiagente_SDLC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuanCastrejon/SistemaMultiagente_SDLC.git"
+  },
   "bugs": "https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/issues",
   "homepage": "https://github.com/JuanCastrejon/SistemaMultiagente_SDLC#readme",
   "scripts": {
