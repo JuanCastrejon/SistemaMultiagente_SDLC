@@ -88,6 +88,7 @@ Reglas base:
 - `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
 - `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
 
+ 
 ## Modes
 
 | Mode | Use when | Adds |
@@ -165,7 +166,6 @@ All external installs are opt-in. Scripts default to dry-run or local-only behav
 ## BMAD Comparison
 
 Side-by-side de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
-
 | Feature | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
 | --- | --- | --- |
 | License | MIT | MIT |

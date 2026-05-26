@@ -58,3 +58,10 @@ jobs:
           done
           echo "sistema-multiagente-sdlc@${PKG_VERSION} not visible after publish"
           exit 1
+              exit 0
+            fi
+            echo "Package not visible yet; retry ${attempt}/10"
+            sleep 15
+          done
+          echo "sistema-multiagente-sdlc@${PKG_VERSION} not visible after publish"
+          exit 1
