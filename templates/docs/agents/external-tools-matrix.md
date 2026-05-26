@@ -1,30 +1,30 @@
 # External Tools Matrix
 
-Las herramientas externas son opt-in. La plantilla funciona sin ellas; al activarlas reducen reconstruccion de contexto, mejoran trazabilidad y evitan scanning innecesario cuando se usan bajo el perfil correcto.
+Las herramientas externas son opt-in. La plantilla funciona sin ellas; al activarlas reducen reconstrucción de contexto, mejoran trazabilidad y evitan scanning innecesario cuando se usan bajo el perfil correcto.
 
 ## Matriz
 
-| Herramienta | Capa | Perfil elegible | Requerida | Proposito |
+| Herramienta | Capa | Perfil elegible | Requerida | Propósito |
 | --- | --- | --- | --- | --- |
-| OpenSpec | SDD | `LEAN` minimo, `ANALYSIS` completo | si | capacidad, proposal, specs, design y tasks |
-| CodeGraph | estructura codigo | `LEAN` | no | simbolos, callers/callees, impacto y contexto AST |
-| Graphify | semantica documental | `ANALYSIS` / `ORCHESTRATION` | no | grafo de docs/OpenSpec/ADRs para exploracion cross-doc |
+| OpenSpec | SDD | `LEAN` mínimo, `ANALYSIS` completo | sí | capacidad, proposal, specs, design y tasks |
+| CodeGraph | estructura código | `LEAN` | no | símbolos, callers/callees, impacto y contexto AST |
+| Graphify | semántica documental | `ANALYSIS` / `ORCHESTRATION` | no | grafo de docs/OpenSpec/ADRs para exploración cross-doc |
 | Obsidian | memoria persistente | `ANALYSIS` con `/resume`; cierre con `/save` | no | vault local para checkpoints, chats importados y continuidad |
-| caveman | compresion output | cualquiera, conversacion | no | reducir output conversacional, no contexto ni reasoning |
-| headroom | proxy/cache | cualquiera | no | cache y compresion de trafico cuando el cliente lo soporte |
-| autoskills | skills | segun tarea | no | discovery de skills externas |
-| vercel-labs/agent-skills | skills externas | segun tarea frontend/deploy | no | skills UI/deploy opcionales |
-| gh CLI | GitHub | `LEAN` | si para publish | issues, PRs y releases |
+| caveman | compresión output | cualquiera, conversación | no | reducir output conversacional, no contexto ni reasoning |
+| headroom | proxy/cache | cualquiera | no | caché y compresión de tráfico cuando el cliente lo soporte |
+| autoskills | skills | según tarea | no | discovery de skills externas |
+| vercel-labs/agent-skills | skills externas | según tarea frontend/deploy | no | skills UI/deploy opcionales |
+| gh CLI | GitHub | `LEAN` | sí para publish | issues, PRs y releases |
 
 ## Cuando NO usar
 
 | Herramienta | No usar para |
 |---|---|
 | OpenSpec | Reemplazar lectura directa de un path exacto o inflar tareas CRUD triviales |
-| CodeGraph | Semantica documental, ADRs, specs o memoria |
-| Graphify | Loops normales de implementacion `LEAN` o estructura de codigo |
+| CodeGraph | Semántica documental, ADRs, specs o memoria |
+| Graphify | Loops normales de implementación `LEAN` o estructura de código |
 | Obsidian | Retrieval continuo o fuente de verdad normativa |
-| caveman | Docs, commits, PRs o como solucion a contexto alto |
+| caveman | Docs, commits, PRs o como solución a contexto alto |
 | headroom | Sustituir perfiles operativos o ocultar fallos de proxy |
 
 ## Instalacion base
@@ -108,7 +108,7 @@ pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1
 Get-ScheduledTask -TaskName "{{project.slug}}-Headroom-Autostart"
 ```
 
-Sin la tarea registrada, Codex y VS Code/Copilot no arrancan headroom automáticamente. Claude Code sí (via hook SessionStart).
+Sin la tarea registrada, Codex y VS Code/Copilot no arrancan headroom automáticamente. Claude Code sí (vía hook SessionStart).
 
 **Regla crítica:** si el proxy falla, **no limpiar `ANTHROPIC_BASE_URL`**. Silenciar el bypass es peor que un fallo visible. El script registra fallos en `%APPDATA%\headroom\health-last-fail.txt`.
 
@@ -146,12 +146,12 @@ python scripts/export-graphify-obsidian.py --graph graphify-out/graph.json --out
 
 ## caveman para ahorro de tokens
 
-Usar caveman solo en coordinacion operativa, no en specs finales ni docs publicas.
+Usar caveman solo en coordinación operativa, no en specs finales ni docs públicas.
 
 Modo recomendado:
 
 ```text
-caveman lite: resumir estado F5/F6 y siguiente accion
+caveman lite: resumir estado F5/F6 y siguiente acción
 ```
 
 Regla: caveman comprime output conversacional, pero no reduce contexto ni reasoning. Las decisiones durables deben quedar en OpenSpec, docs o `.github/agent-state/`.
@@ -179,9 +179,9 @@ powershell -ExecutionPolicy Bypass -File scripts/register-claude-sync-task.ps1 -
 powershell -ExecutionPolicy Bypass -File scripts/register-claude-sync-task.ps1 -Apply
 ```
 
-## Politica opt-in
+## Política opt-in
 
-- Ningun script instala paquetes externos sin flag explicito.
+- Ningún script instala paquetes externos sin flag explícito.
 - `publish-trace` no crea issues sin `-Apply`.
 - Scheduler no se registra sin `-Apply`.
 - Configs locales `*.local.json` no deben versionarse.

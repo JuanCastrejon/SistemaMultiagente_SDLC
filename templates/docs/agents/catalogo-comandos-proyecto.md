@@ -1,4 +1,4 @@
-# Catalogo de Comandos del Proyecto
+# Catálogo de Comandos del Proyecto
 
 ## CLI SDLC
 
@@ -14,7 +14,7 @@
 
 ## Skills OpenSpec
 
-| Skill | Proposito |
+| Skill | Propósito |
 | --- | --- |
 | `/opsx:new` | crear change nuevo |
 | `/opsx:propose` | formular proposal/spec/design/tasks |
@@ -38,5 +38,5 @@
 ## Git Flow
 
 - Rama estable: `{{gitFlow.stableBranch}}`.
-- Rama de integracion: `{{gitFlow.integrationBranch}}`.
+- Rama de integración: `{{gitFlow.integrationBranch}}`.
 - Prefijos permitidos: `feature/`, `fix/`, `docs/`.

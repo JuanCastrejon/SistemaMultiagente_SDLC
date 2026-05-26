@@ -23,7 +23,8 @@ Party-mode no instala BMAD completo. Porta el patrón de debate multi-voz dentro
 
 ## Reglas
 
-- Rechazar si no existe change OpenSpec activo en `openspec/changes/`.
+- Rechazar si no hay `ChangeName` explícito (`party-mode <change-name>` o equivalente) ni una única referencia `openspec/changes/<change-name>` en `.github/agent-state/current-slice.md`.
+- Validar que existe exactamente `openspec/changes/<ChangeName>/` y que la decisión debatida pertenece a ese change.
 - Declarar `Perfil: ORCHESTRATION` y justificar por qué `ANALYSIS` no basta.
 - Máximo 4 voces, 3 rondas y 400 palabras de contexto compartido por ronda.
 - El owner de fase decide el artefacto final.

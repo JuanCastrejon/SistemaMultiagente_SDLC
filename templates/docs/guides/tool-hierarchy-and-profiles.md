@@ -119,9 +119,18 @@ Antes de `git push` o `gh pr create`, ejecutar:
 pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/validate-local-gate.ps1 -ChangeName <change> -SkipInstall
 ```
 
-Para paridad total con CI desde instalación limpia, omitir `-SkipInstall`.
+Para paridad total con CI desde instalación limpia, omitir `-SkipInstall`. En repos maduros que ya declaran los scripts de control plane, usar `-Strict` para que cualquier script ausente falle en vez de omitirse con warning.
 
-Este gate ejecuta validadores locales, OpenSpec, bootstrap de skills, `sdlc governance-check` y `sdlc tools-doctor`. Si falla `shared-rules-hash-mismatch`, usar el hash `actual` reportado por `sdlc governance-check`; no recalcular manualmente con otro algoritmo. `qa-security-review` revisa esta evidencia antes del cierre humano.
+Este gate ejecuta los validadores disponibles, OpenSpec, bootstrap de skills, `sdlc governance-check` y `sdlc tools-doctor`. En modo portable, los checks ausentes se omiten con warning para no romper consumidores greenfield; en modo `-Strict`, esos mismos faltantes son bloqueantes. Si falla `shared-rules-hash-mismatch`, usar el hash `actual` reportado por `sdlc governance-check`; no recalcular manualmente con otro algoritmo. `qa-security-review` revisa esta evidencia antes del cierre humano.
+
+### Checklist local tipo Copilot
+
+- Portabilidad: scripts ejecutables desde cualquier working directory.
+- Comandos reales: cada comando documentado existe como npm script, script local o CLI.
+- Contexto explícito: usar `ChangeName`; no inferir si hay cero o múltiples candidates.
+- Templates consumidores: portable por defecto, `-Strict` para repos maduros.
+- Diagnóstico: cada fallo muestra step, comando, exit code y sugerencia accionable.
+- Idioma: documentación normativa en español consistente.
 
 ## Referencias
 

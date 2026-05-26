@@ -50,6 +50,15 @@ function runPowerShellScript(scriptPath, args = [], cwd = repoRoot) {
   });
 }
 
+function runPowerShellScriptStatus(scriptPath, args = [], cwd = repoRoot) {
+  const command = findPowerShell();
+  const prefix = process.platform === "win32" ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] : ["-NoProfile", "-File"];
+  return spawnSync(command, [...prefix, scriptPath, ...args], {
+    cwd,
+    encoding: "utf8"
+  });
+}
+
 function makeRepo(name) {
   const target = path.join(tempRoot, name);
   fs.mkdirSync(target, { recursive: true });
@@ -101,6 +110,21 @@ assert.equal(phaseGateF0.status, "ok");
 const governanceCheck = JSON.parse(run(["governance-check", "--target", greenfield, "--json"]));
 assert.equal(governanceCheck.status, "ok");
 assert.ok(governanceCheck.canonicalSkills > 0);
+
+const localGatePortable = runPowerShellScript(
+  path.join(greenfield, "scripts", "validate-local-gate.ps1"),
+  ["-SkipInstall", "-SkipBootstrap"],
+  greenfield
+);
+assert.match(localGatePortable, /Local gate OK/);
+
+const localGateStrict = runPowerShellScriptStatus(
+  path.join(greenfield, "scripts", "validate-local-gate.ps1"),
+  ["-SkipInstall", "-SkipBootstrap", "-Strict"],
+  greenfield
+);
+assert.notEqual(localGateStrict.status, 0);
+assert.match(`${localGateStrict.stdout}\n${localGateStrict.stderr}`, /modo -Strict/);
 
 const toolsDoctor = runStatus(["tools-doctor", "--target", greenfield, "--profile", "full", "--json"]);
 assert.ok([0, 2].includes(toolsDoctor.status));
