@@ -50,6 +50,15 @@ function runPowerShellScript(scriptPath, args = [], cwd = repoRoot) {
   });
 }
 
+function runPowerShellScriptStatus(scriptPath, args = [], cwd = repoRoot) {
+  const command = findPowerShell();
+  const prefix = process.platform === "win32" ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] : ["-NoProfile", "-File"];
+  return spawnSync(command, [...prefix, scriptPath, ...args], {
+    cwd,
+    encoding: "utf8"
+  });
+}
+
 function makeRepo(name) {
   const target = path.join(tempRoot, name);
   fs.mkdirSync(target, { recursive: true });
@@ -90,7 +99,7 @@ const greenfield = makeRepo("task-manager-saas");
 fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(greenfield, "README.md"));
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Task Manager SaaS", "--json"]);
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
-assert.equal(greenfieldConfig.frameworkVersion, "1.5.0");
+assert.equal(greenfieldConfig.frameworkVersion, "1.6.0");
 assert.equal(greenfieldConfig.scale, "feature");
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
@@ -101,6 +110,21 @@ assert.equal(phaseGateF0.status, "ok");
 const governanceCheck = JSON.parse(run(["governance-check", "--target", greenfield, "--json"]));
 assert.equal(governanceCheck.status, "ok");
 assert.ok(governanceCheck.canonicalSkills > 0);
+
+const localGatePortable = runPowerShellScript(
+  path.join(greenfield, "scripts", "validate-local-gate.ps1"),
+  ["-SkipInstall", "-SkipBootstrap"],
+  greenfield
+);
+assert.match(localGatePortable, /Local gate OK/);
+
+const localGateStrict = runPowerShellScriptStatus(
+  path.join(greenfield, "scripts", "validate-local-gate.ps1"),
+  ["-SkipInstall", "-SkipBootstrap", "-Strict"],
+  greenfield
+);
+assert.notEqual(localGateStrict.status, 0);
+assert.match(`${localGateStrict.stdout}\n${localGateStrict.stderr}`, /modo -Strict/);
 
 const toolsDoctor = runStatus(["tools-doctor", "--target", greenfield, "--profile", "full", "--json"]);
 assert.ok([0, 2].includes(toolsDoctor.status));
