@@ -6,6 +6,7 @@ Modo: greenfield — proyecto nuevo sin código legacy.
 
 ## Enfoque greenfield
 
+- Elegir perfil operativo antes de cargar contexto (`LEAN` por defecto; upgrade explícito a `ANALYSIS` u `ORCHESTRATION`).
 - Partir de arquitectura limpia; no asumir deuda técnica previa.
 - Priorizar: contratos de API definidos en OpenSpec antes de implementación.
 - Usar ADRs para decisiones de stack no triviales.
@@ -16,6 +17,7 @@ Modo: greenfield — proyecto nuevo sin código legacy.
 2. Definir superficies en `.sdlc/config.json`.
 3. Crear primer change en `openspec/changes/` con `/opsx:new`.
 4. Seguir flujo canónico desde `/opsx:ff`.
+5. Usar la jerarquía Read directo → CodeGraph → Graphify → Obsidian → OpenSpec specs → Grep → WebSearch para evitar sobrecargar contexto.
 
 ## Reglas adicionales greenfield
 

@@ -29,3 +29,5 @@ F0-F17 gobierna ideas, analisis, planning, orquestacion, implementacion, QA, seg
 - No promover borradores a Issue ni PR sin gate humano.
 - Usar handoffs cuando el trabajo cruce fase, agente o superficie.
 - Ejecutar validators cuando cambie gobierno, specs, docs o superficies del producto.
+- Antes de `git push` o `gh pr create`, ejecutar `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/validate-local-gate.ps1 -ChangeName <change>` y resolver errores de harness.
+- `qa-security-review` revisa la evidencia local antes del cierre humano.

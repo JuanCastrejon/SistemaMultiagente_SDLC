@@ -6,16 +6,20 @@ Modo: legacy — proyecto existente con código y deuda técnica.
 
 ## Enfoque brownfield
 
-- Investigar siempre prior art interno antes de proponer cambios (graphify → openspec/specs → docs → código).
+- Elegir perfil operativo antes de cargar contexto (`LEAN` por defecto; upgrade explícito a `ANALYSIS` u `ORCHESTRATION`).
+- Investigar siempre prior art interno antes de proponer cambios siguiendo la jerarquía: Read directo → CodeGraph → Graphify → Obsidian → OpenSpec specs → Grep → WebSearch.
 - Respetar sistema legado hasta que exista decisión explícita de modernización en un ADR.
 - Separar claramente: capacidades existentes vs. nuevas vs. migradas.
 
 ## Flujo de investigación (obligatorio antes de /opsx:propose)
 
-1. `graphify query "<tema>"` — detectar nodos relacionados.
-2. `graphify path "<A>" "<B>"` — trazar relaciones cross-module.
-3. Revisar `openspec/specs/` y `docs/` para evidencia documentada.
-4. Documentar hallazgos en `research` del change antes de avanzar.
+1. Read directo si el path exacto ya es conocido.
+2. CodeGraph (`codegraph_*`) para símbolos, callers/callees e impacto de código.
+3. Graphify (`graphify query/path/explain`) para documentación, ADRs, OpenSpec y relaciones cross-doc.
+4. Obsidian solo para `/resume` o lectura targeted de checkpoints/chats.
+5. Revisar `openspec/specs/` y `docs/` para evidencia documentada.
+6. Grep/Glob solo para texto literal o fallback justificado.
+7. Documentar hallazgos en `research` del change antes de avanzar.
 
 ## Reglas adicionales legacy
 
