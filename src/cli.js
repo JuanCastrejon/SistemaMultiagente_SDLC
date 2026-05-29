@@ -30,8 +30,14 @@ import {
   commandGovernanceCheck,
   commandPhaseGate,
   commandPrBodyCheck,
-  commandToolsDoctor
+  commandStatus,
+  commandToolsDoctor,
+  commandVerdict
 } from "./harness.js";
+import {
+  commandSkillEval,
+  commandSkillPropose
+} from "./eval-runner.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -640,7 +646,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd())."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdiet: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]"
     }
   };
 }
@@ -683,6 +689,22 @@ export function run(argv) {
       return commandToolsDoctor(parsed.options);
     case "pr-body-check":
       return commandPrBodyCheck(parsed.options);
+    case "verdict":
+      return commandVerdict(parsed.options);
+    case "status":
+      return commandStatus(parsed.options);
+    case "skill-eval": {
+      const skillOpts = { ...parsed.options, skill: parsed.options.skill ?? parsed.positionals[1] };
+      return commandSkillEval(skillOpts);
+    }
+    case "skill-propose": {
+      const propOpts = {
+        ...parsed.options,
+        skill: parsed.options.skill ?? parsed.positionals[1],
+        change: parsed.options.change ?? parsed.positionals[2],
+      };
+      return commandSkillPropose(propOpts);
+    }
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":

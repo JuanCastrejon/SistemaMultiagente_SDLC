@@ -157,6 +157,7 @@ export function commandPhaseGate(options) {
   const target = path.resolve(options.target ?? process.cwd());
   const phase = options.phase;
   const slice = options.slice;
+  const exitCodeMode = Boolean(options["exit-code"] ?? options.exitCode);
   if (!phase || !slice) {
     return {
       exitCode: EXIT_ERROR,
@@ -167,9 +168,198 @@ export function commandPhaseGate(options) {
     };
   }
   const result = evaluatePhaseReadiness(target, phase, slice);
+  // Without --exit-code: informative (exit 0 even when blocked, for P0 wiring).
+  // With --exit-code: hard-block when blocked (P2 wiring). ADR-0006.
+  const exitCode = result.status === "error"
+    ? EXIT_ERROR
+    : exitCodeMode && result.status === "blocked"
+      ? EXIT_ACTION_REQUIRED
+      : EXIT_OK;
+  return { exitCode, payload: result };
+}
+
+// ---------------------------------------------------------------------------
+// commandVerdict (ADR-0006 / ADR-024 P2)
+// Runs host validate:* scripts in a deterministic ordered fail-fast sequence.
+// Classifies each step as BLOCKING or WARNING and emits a single
+// {status: "ready"|"not-ready"} verdict. Writes artifact when --write is set.
+// ---------------------------------------------------------------------------
+
+const VERDICT_STEPS = [
+  { key: "control-plane",        script: "validate:control-plane",        level: "BLOCKING" },
+  { key: "drift",                script: "validate:drift",                 level: "BLOCKING" },
+  { key: "slice-traceability",   script: "validate:slice-traceability",    level: "BLOCKING" },
+  { key: "surface-traceability", script: "validate:surface-traceability",  level: "BLOCKING" },
+  { key: "semantic-guardrails",  script: "validate:semantic-guardrails",   level: "BLOCKING" },
+  { key: "adr-integrity",        script: "validate:adr-integrity",         level: "BLOCKING" },
+  { key: "openspec",             script: "validate:openspec",              level: "BLOCKING" },
+  { key: "active-slices",        script: "validate:active-slices",         level: "WARNING"  },
+];
+
+export function commandVerdict(options) {
+  const target = path.resolve(options.target ?? process.cwd());
+  const write = Boolean(options.write);
+  const slice = options.slice ?? null;
+  const phase = options.phase ?? null;
+  const blockers = [];
+  const warnings = [];
+  const steps = [];
+
+  for (const step of VERDICT_STEPS) {
+    const result = runCommand("corepack", ["pnpm", "run", step.script, "--if-present"], target, 60_000);
+    const passed = result.ok;
+    const entry = {
+      key: step.key,
+      script: step.script,
+      level: step.level,
+      status: passed ? "pass" : "fail",
+      exitCode: result.status ?? (passed ? 0 : 1),
+      stderr: result.stderr ? result.stderr.slice(0, 400) : undefined
+    };
+    steps.push(entry);
+    if (!passed) {
+      if (step.level === "BLOCKING") {
+        blockers.push(step.key);
+        break; // fail-fast on first BLOCKING failure
+      } else {
+        warnings.push(step.key);
+      }
+    }
+  }
+
+  const ready = blockers.length === 0;
+  const payload = {
+    status: ready ? "ready" : "not-ready",
+    verdict: ready ? "READY" : "NOT-READY",
+    blockers,
+    warnings,
+    steps
+  };
+
+  if (write && slice && phase) {
+    try {
+      const evidenceDir = path.join(target, ".github", "agent-state", "evidence", slice);
+      fs.mkdirSync(evidenceDir, { recursive: true });
+      const artifactPath = path.join(evidenceDir, `${phase}-verdict.yaml`);
+      const yaml = [
+        `verdict: ${payload.verdict}`,
+        `status: ${payload.status}`,
+        `blockers: ${JSON.stringify(payload.blockers)}`,
+        `warnings: ${JSON.stringify(payload.warnings)}`,
+        `generatedAt: "${new Date().toISOString()}"`,
+      ].join("\n");
+      fs.writeFileSync(artifactPath, yaml + "\n", "utf8");
+      payload.artifactPath = path.relative(target, artifactPath);
+    } catch (err) {
+      payload.writeError = err.message;
+    }
+  }
+
   return {
-    exitCode: result.status === "error" ? EXIT_ERROR : result.status === "blocked" ? EXIT_ACTION_REQUIRED : EXIT_OK,
-    payload: result
+    exitCode: ready ? EXIT_OK : EXIT_ACTION_REQUIRED,
+    payload
+  };
+}
+
+// ---------------------------------------------------------------------------
+// commandStatus (ADR-0006 / ADR-024 P2)
+// Aggregates governance-check + tools-doctor + phase-gate into a single
+// go/no-go snapshot. With --markdown --write, produces status.md.
+// With --exit-code, returns non-zero if any component is error/blocked.
+// ---------------------------------------------------------------------------
+
+export function commandStatus(options) {
+  const target = path.resolve(options.target ?? process.cwd());
+  const writeMd = Boolean(options.markdown && options.write);
+  const exitCodeMode = Boolean(options["exit-code"] ?? options.exitCode);
+
+  const govResult = commandGovernanceCheck(options);
+  const toolsResult = commandToolsDoctor(options);
+
+  // Phase gate: resolve phase/slice from phase-status.yaml if not provided
+  let phaseGateResult = null;
+  let phaseGateExitCode = EXIT_OK;
+  const phaseStatusPath = path.join(target, ".github", "agent-state", "phase-status.yaml");
+  const phaseFromOpts = options.phase ?? null;
+  const sliceFromOpts = options.slice ?? null;
+  let resolvedPhase = phaseFromOpts;
+  let resolvedSlice = sliceFromOpts;
+  if (!resolvedPhase || !resolvedSlice) {
+    try {
+      const raw = fs.readFileSync(phaseStatusPath, "utf8");
+      for (const line of raw.split("\n")) {
+        const mp = line.match(/^\s*current_phase:\s*"?([^"\r\n]+?)"?\s*$/);
+        const ms = line.match(/^\s*current_slice:\s*"?([^"\r\n]+?)"?\s*$/);
+        if (mp) resolvedPhase = resolvedPhase ?? mp[1].trim();
+        if (ms) resolvedSlice = resolvedSlice ?? ms[1].trim();
+      }
+    } catch { /* phase-status.yaml absent */ }
+  }
+  if (resolvedPhase && resolvedSlice) {
+    const pgOptions = { ...options, phase: resolvedPhase, slice: resolvedSlice, "exit-code": true };
+    const pgResult = commandPhaseGate(pgOptions);
+    phaseGateResult = pgResult.payload;
+    phaseGateExitCode = pgResult.exitCode;
+  }
+
+  const govOk = govResult.exitCode === EXIT_OK;
+  const toolsOk = toolsResult.exitCode === EXIT_OK;
+  const phaseOk = phaseGateResult === null || phaseGateExitCode === EXIT_OK;
+  const ready = govOk && toolsOk && phaseOk;
+
+  const payload = {
+    ready,
+    status: ready ? "go" : "no-go",
+    governance: { exitCode: govResult.exitCode, ...govResult.payload },
+    tools: { exitCode: toolsResult.exitCode, ...toolsResult.payload },
+    phaseGate: phaseGateResult
+      ? { exitCode: phaseGateExitCode, phase: resolvedPhase, slice: resolvedSlice, ...phaseGateResult }
+      : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" }
+  };
+
+  if (writeMd) {
+    const govStatus = govOk ? "✅ OK" : "❌ ERROR";
+    const toolsStatus = toolsOk ? "✅ OK" : "⚠️ WARNINGS";
+    const phaseStatus = phaseOk ? "✅ OK" : "🔴 BLOCKED";
+    const readinessLine = ready ? "## ✅ GO — Governance ready" : "## ❌ NO-GO — Governance not ready";
+    const lines = [
+      `# Governance Status — ${new Date().toISOString()}`,
+      "",
+      readinessLine,
+      "",
+      `| Component | Status |`,
+      `|---|---|`,
+      `| governance-check | ${govStatus} |`,
+      `| tools-doctor | ${toolsStatus} |`,
+      `| phase-gate (${resolvedPhase ?? "?"}/${resolvedSlice ?? "?"}) | ${phaseStatus} |`,
+      "",
+      "## Details",
+      "",
+      `### governance-check`,
+      "```json",
+      JSON.stringify(govResult.payload, null, 2),
+      "```",
+      "",
+      `### tools-doctor`,
+      "```json",
+      JSON.stringify(toolsResult.payload, null, 2),
+      "```",
+    ];
+    if (phaseGateResult) {
+      lines.push("", "### phase-gate", "```json", JSON.stringify(phaseGateResult, null, 2), "```");
+    }
+    const md = lines.join("\n") + "\n";
+    try {
+      fs.writeFileSync(path.join(target, "status.md"), md, "utf8");
+      payload.statusMdPath = "status.md";
+    } catch (err) {
+      payload.writeError = err.message;
+    }
+  }
+
+  return {
+    exitCode: exitCodeMode && !ready ? EXIT_ACTION_REQUIRED : EXIT_OK,
+    payload
   };
 }
 
