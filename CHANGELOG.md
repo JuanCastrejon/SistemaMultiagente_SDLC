@@ -4,6 +4,24 @@
 
 _No hay cambios pendientes._
 
+## [1.7.0] — 2026-05-29
+
+### Added
+
+- ADR `0006-engine-harness-verdict-eval.md`: extensiones para Governance Engineering (P2–P4 del plan).
+- `sdlc verdict`: veredicto único READY/NOT-READY con validators en orden fail-fast, clasificación BLOCKING/WARNING, exit 0/2. Opcional `--write --slice --phase` para artefacto en evidence/.
+- `sdlc status`: snapshot go/no-go agregado (governance-check + tools-doctor + phase-gate). Flags `--markdown --write` (genera `status.md`) y `--exit-code` para CI hard-block.
+- `sdlc phase-gate --exit-code`: flag que hace el chequeo bloqueante (exit 2 cuando "blocked"), con scoping correcto; sin el flag mantiene comportamiento informativo (exit 0) para compatibilidad P0.
+- `src/eval-runner.js`: eval-runner determinístico para el loop de skills vivas (ADR-025 P4).
+- `sdlc skill-eval --skill <nombre>`: evalúa golden tasks de `.github/skills/<skill>/evals/*.yaml`; emite score y detalles por task.
+- `sdlc skill-propose --skill <nombre> --change <change> --intent "..."`: genera propuesta de edición de skill solo bajo `openspec/changes/<change>/`; nunca muta `.github/skills/` directamente.
+- `schemas/skill-eval.schema.json`: schema JSON Schema draft-07 para sets de golden tasks.
+
+### Changed
+
+- `src/harness.js`: `commandPhaseGate` acepta `--exit-code` opt-in (retrocompatible).
+- `src/cli.js`: despacha los nuevos comandos `verdict`, `status`, `skill-eval`, `skill-propose`; help string actualizado.
+
 ## [1.6.0] — 2026-05-26
 
 ### Added
