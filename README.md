@@ -88,6 +88,48 @@ Reglas base:
 - `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
 - `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
 
+## Governance Engineering — Enforcement Duro (1.7.0)
+
+Desde `1.7.0`, el engine expone primitivas para convertir gobernanza advisory en enforcement duro (ADR-0006). Ver arquitectura completa en ADR-024/ADR-025 del repo consumidor.
+
+### Veredicto ordenado + status go/no-go
+
+```powershell
+# Veredicto READY/NOT-READY (fail-fast sobre validators del consumidor)
+sdlc verdict --target . --json
+sdlc verdict --target . --write --slice <slice> --phase <F> --json
+
+# Snapshot go/no-go (governance + tools + phase-gate)
+sdlc status --target . --markdown --write
+sdlc status --target . --exit-code   # CI hard-block si no-go
+```
+
+- `verdict`: corre los scripts `validate:*` del consumidor en orden fail-fast; clasifica cada uno como BLOCKING/WARNING; emite un único `{verdict: "READY"|"NOT-READY"}` con exit 0/2.
+- `status`: agrega `governance-check` + `tools-doctor` + `phase-gate` en un snapshot Markdown. Con `--exit-code` devuelve exit no-cero cuando cualquier componente está en error/blocked.
+- `phase-gate --exit-code`: hard-block cuando la fase del slice activo está "blocked" (sin el flag, modo informativo — exit 0).
+
+### Skills vivas — eval + propuesta gated
+
+```powershell
+# Score del canónico contra golden tasks en .github/skills/<skill>/evals/*.yaml
+sdlc skill-eval --target . --skill enrich-us --json
+
+# Propuesta de edición (solo escribe bajo openspec/changes/<change>/)
+sdlc skill-propose --target . --skill enrich-us --change <change> --intent "descripción"
+```
+
+- `skill-eval`: carga golden tasks YAML del consumidor; scoring determinístico (presencia de campos); emite score numérico por task y global.
+- `skill-propose`: genera `proposed-skill-diff.md` + `skill-eval-report.yaml` solo bajo `openspec/changes/<change>/`; nunca muta `.github/skills/` directamente (el hook deny del consumidor lo bloquearía de todos modos).
+- `schemas/skill-eval.schema.json`: schema JSON Schema draft-07 para sets de golden tasks.
+
+### Flujo de gate humano completo
+
+```text
+sdlc verdict → READY/NOT-READY
+sdlc status --markdown --write → status.md
+Adjuntar status.md al bloque [validation] del Issue → gate humano F4/F13 firma contra el número
+```
+
 ## Modos
 
 | Modo | Cuándo usar | Qué agrega |
@@ -276,7 +318,7 @@ sdlc tools-doctor --target . --profile full --json
 
 Comparativa lado a lado de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
 
-| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.5.0 |
+| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.7.0 |
 | --- | --- | --- |
 | Licencia | MIT | MIT |
 | Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |

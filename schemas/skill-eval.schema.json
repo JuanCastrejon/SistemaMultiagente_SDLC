@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "skill-eval",
+  "title": "Skill Golden Task Eval Set",
+  "description": "Schema for .github/skills/<skill>/evals/*.yaml golden task files used by sdlc skill-eval (ADR-0006 / ADR-025).",
+  "type": "object",
+  "required": ["skill", "version", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "skill": {
+      "type": "string",
+      "description": "Canonical skill name (matches .github/skills/<skill>/SKILL.md directory name)."
+    },
+    "version": {
+      "type": "string",
+      "description": "Eval set version (semver or date string, e.g. '1.0.0' or '2026-05-29')."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of what this eval set covers."
+    },
+    "blast_radius_cap": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 3,
+      "description": "Max number of sections a skill-propose may change before being rejected. Default: 3 (LEAN threshold)."
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "input", "expected_fields"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique task identifier within this eval set (e.g. 'T01')."
+          },
+          "description": {
+            "type": "string",
+            "description": "What this golden task tests."
+          },
+          "input": {
+            "type": "string",
+            "description": "Synthetic input fed to the skill (the user request / history text)."
+          },
+          "expected_fields": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "List of field names or substrings that MUST appear in the skill output. Deterministic check (presence-based). All must be present for the task to pass."
+          },
+          "expected_absent": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Strings that must NOT appear in the skill output (anti-patterns / regression guards)."
+          },
+          "rubric": {
+            "type": "string",
+            "description": "Optional LLM-assisted rubric for scoring (used only if deterministic check is insufficient). NOT evaluated in P4 pilot; reserved for P4+."
+          },
+          "weight": {
+            "type": "number",
+            "minimum": 0,
+            "default": 1,
+            "description": "Relative weight for score computation. Default: 1 (all tasks equal)."
+          }
+        }
+      }
+    }
+  }
+}
