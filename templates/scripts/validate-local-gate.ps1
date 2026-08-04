@@ -149,16 +149,22 @@ try {
   }
 
   if ($ChangeName.Trim().Length -gt 0) {
+    # .mjs es el artefacto que instala el framework; .js se acepta por
+    # compatibilidad con consumidores que lo escribieron a mano antes.
+    $enhancedResearchScript = @("scripts/validate-enhanced-research.mjs", "scripts/validate-enhanced-research.js") |
+      Where-Object { Test-Path (Join-Path $RepoRoot $_) } |
+      Select-Object -First 1
+
     if ($scripts.ContainsKey("validate:enhanced-research")) {
       Invoke-OptionalPnpmScript $scripts "validate:enhanced-research" @($ChangeName)
     }
-    elseif (Test-Path (Join-Path $RepoRoot "scripts/validate-enhanced-research.js")) {
-      Invoke-GateStep "validate-enhanced-research $ChangeName" "node scripts/validate-enhanced-research.js $ChangeName" {
-        node (Join-Path $RepoRoot "scripts/validate-enhanced-research.js") $ChangeName
+    elseif ($enhancedResearchScript) {
+      Invoke-GateStep "validate-enhanced-research $ChangeName" "node $enhancedResearchScript $ChangeName" {
+        node (Join-Path $RepoRoot $enhancedResearchScript) $ChangeName
       }
     }
     elseif ($Strict) {
-      throw "No existe validate:enhanced-research ni scripts/validate-enhanced-research.js para ChangeName=$ChangeName."
+      throw "No existe validate:enhanced-research ni scripts/validate-enhanced-research.mjs para ChangeName=$ChangeName."
     }
     else {
       Write-Warning "validate:enhanced-research ausente. Omitido en modo portable para ChangeName=$ChangeName."
@@ -169,6 +175,11 @@ try {
     Invoke-OptionalFileStep "bootstrap-agent-skills" "scripts/bootstrap-agent-skills.ps1" {
       pwsh -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript
     } "pwsh -NoProfile -ExecutionPolicy Bypass -File $bootstrapScript"
+
+    # Los mirrors deben quedar descubribles por Codex despues del bootstrap.
+    Invoke-OptionalFileStep "validate-codex-skills" "scripts/validate-codex-skills.mjs" {
+      node (Join-Path $RepoRoot "scripts/validate-codex-skills.mjs")
+    } "node scripts/validate-codex-skills.mjs"
   }
 
   if ($dependencyNames -contains "sistema-multiagente-sdlc") {

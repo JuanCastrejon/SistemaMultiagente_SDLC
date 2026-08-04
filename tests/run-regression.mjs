@@ -9,6 +9,11 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(repoRoot, "bin", "sdlc.js");
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-regression-"));
+// Ligado a package.json a proposito: hardcodear la version aqui fue lo que dejo
+// pasar el drift entre FRAMEWORK_VERSION (1.6.0) y el paquete publicado (1.7.0).
+const FRAMEWORK_VERSION = JSON.parse(
+  fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")
+).version;
 
 function run(args, options = {}) {
   return execFileSync("node", [cli, ...args], {
@@ -99,7 +104,7 @@ const greenfield = makeRepo("task-manager-saas");
 fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(greenfield, "README.md"));
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Task Manager SaaS", "--json"]);
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
-assert.equal(greenfieldConfig.frameworkVersion, "1.6.0");
+assert.equal(greenfieldConfig.frameworkVersion, FRAMEWORK_VERSION);
 assert.equal(greenfieldConfig.scale, "feature");
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
