@@ -177,7 +177,7 @@ phases:
     objective: Archivar OpenSpec y sincronizar specs canonicas.
     owner: planificador-opus
     participants: [analista-requisitos, arquitecto]
-    inputs_required: [openspec/changes/<slice>]
+    inputs_required: [.github/agent-state/evidence/<slice>/F15.yaml]
     outputs_required: [openspec/changes/archive]
     evidence_required: true
     human_gate: false

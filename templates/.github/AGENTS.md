@@ -31,3 +31,19 @@ F0-F17 gobierna ideas, analisis, planning, orquestacion, implementacion, QA, seg
 - Ejecutar validators cuando cambie gobierno, specs, docs o superficies del producto.
 - Antes de `git push` o `gh pr create`, ejecutar `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/validate-local-gate.ps1 -ChangeName <change>` y resolver errores de harness.
 - `qa-security-review` revisa la evidencia local antes del cierre humano.
+- Produccion solo-crear: sobre sistemas externos vivos solo se crean artefactos nuevos y aislados; modificar o borrar configuracion o datos existentes exige gate humano explicito por escrito.
+- Seguridad de skills: escanear `.github/skills/` (por ejemplo con `nvidia/skillspector`) antes de ejecutar `bootstrap-agent-skills`, para no propagar una skill comprometida a los tres mirrors.
+
+## Puente Codex
+
+Codex no ejecuta slash commands nativos. Equivalencias obligatorias:
+
+| Intencion | Comando en Codex |
+|---|---|
+| `/continua` | `npx --no-install sdlc continua --target . --platform codex --json` |
+| `/resume` | `npx --no-install sdlc resume --target . --markdown` |
+| `/save` | `npx --no-install sdlc save --target . --event manual --json` |
+
+Si `/continua` reporta `phaseGate.status:"blocked"` o `humanGate:true`, Codex no implementa: reporta fase, owner, faltantes y siguiente comando.
+
+Codex descubre skills en `.agents/skills/` leyendo el primer bloque YAML de cada `SKILL.md`. Los mirrors se regeneran con `scripts/bootstrap-agent-skills.ps1` y se verifican con `node scripts/validate-codex-skills.mjs`; nunca se editan a mano.
