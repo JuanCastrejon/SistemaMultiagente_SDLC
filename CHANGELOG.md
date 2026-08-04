@@ -2,13 +2,17 @@
 
 ## [Unreleased]
 
+_No hay cambios pendientes._
+
+## [1.7.1] — 2026-08-03
+
 Mejoras extraídas de los consumidores `CMSHeadless` y `DemoMeridian`, donde el framework se instaló y se endureció en uso real.
 
 ### Fixed
 
 - **Discovery de skills en Codex.** Los mirrors (`.claude/skills/`, `.agents/skills/`, `.windsurf/skills/`) anteponían un bloque `managed: true`, que tapaba el frontmatter real de la skill (`name`, `description`). Codex lee el **primer** bloque YAML como definición, así que ninguna skill gobernada era descubrible en Codex. Ahora el mirror conserva (o sintetiza) el frontmatter real como primer bloque y mueve la metadata de gestión al final como comentarios HTML. Afecta a `src/render.js` (ruta de `sdlc install`) y a `templates/scripts/bootstrap-agent-skills.ps1` (ruta de bootstrap), que producen bytes idénticos.
 - `FRAMEWORK_VERSION` estaba hardcodeado en `1.6.0` en `src/render.js` mientras el paquete publicado era `1.7.0`; los repos instalados registraban una versión falsa en `.sdlc/config.json`. Ahora se lee de `package.json`, y `tests/run-regression.mjs` lo asserta contra la misma fuente en lugar de un literal.
-- `migrations/1.7.0/`: la versión 1.7.0 se publicó sin entrada en el registro de migraciones, así que `sdlc upgrade` la rechazaba con "Version no soportada".
+- `migrations/1.7.0/`: la versión 1.7.0 se publicó sin entrada en el registro de migraciones, así que `sdlc upgrade` la rechazaba con "Version no soportada". Se agrega también `migrations/1.7.1/` para este release.
 - `phase-contract.yaml`: F16-archive pedía `openspec/changes/<slice>` como `inputs_required`, rompiendo la cadena de evidencia que siguen F9–F15 y F17. Ahora pide `.github/agent-state/evidence/<slice>/F15.yaml`.
 
 ### Added
