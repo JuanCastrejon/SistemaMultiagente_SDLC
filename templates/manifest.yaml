@@ -97,6 +97,10 @@ templates:
     target: scripts/export-graphify-obsidian.py
   - source: scripts/bootstrap-agent-skills.ps1
     target: scripts/bootstrap-agent-skills.ps1
+  - source: scripts/validate-codex-skills.mjs
+    target: scripts/validate-codex-skills.mjs
+  - source: scripts/validate-enhanced-research.mjs
+    target: scripts/validate-enhanced-research.mjs
   - source: scripts/validate-local-gate.ps1
     target: scripts/validate-local-gate.ps1
   - source: scripts/validate-local-gate.mjs

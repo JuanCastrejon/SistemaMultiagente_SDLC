@@ -22,7 +22,7 @@ Eso resuelve la **delegación de reglas compartidas**, pero no instala ni sincro
 | Entorno | Entry point principal | Skills nativas | Notas |
 |---|---|---|---|
 | Claude Code | `CLAUDE.md` | `.claude/skills/` | También usa `.claude/commands/` |
-| Codex | `AGENTS.md` | `.agents/skills/` | Codex no consume `.github/skills/` como skill root nativo |
+| Codex | `AGENTS.md` | `.agents/skills/` | Codex no consume `.github/skills/` como skill root nativo; `/continua`, `/resume` y `/save` se puentean a `npx --no-install sdlc ...` |
 | GitHub Copilot / VS Code | `.github/copilot-instructions.md` | `.github/skills/` y `.agents/skills/` | `.github/skills/` gobierna el repo; `.agents/skills/` cubre skills del ecosistema `skills` |
 | Windsurf | `AGENTS.md` + `.windsurf/rules/` | `.windsurf/skills/` | Requiere rule + skill path propios |
 
@@ -90,22 +90,50 @@ La configuración curada vive en:
 - [scripts/agent-skills.manifest.json](../../scripts/agent-skills.manifest.json)
 - [scripts/bootstrap-agent-skills.ps1](../../scripts/bootstrap-agent-skills.ps1)
 
-El bootstrap hace dos cosas:
+El bootstrap puede hacer dos cosas:
 
 1. sincroniza skills internas desde `.github/skills/` a `.claude/skills/`, `.agents/skills/` y `.windsurf/skills/`
-2. instala las skills externas curadas desde `vercel-labs/agent-skills` en esos mismos entornos
+2. con `-InstallExternal`, instala las skills externas curadas; la descarga nunca es implícita
+
+La lectura y escritura se realiza explícitamente en UTF-8 sin BOM para que Windows
+PowerShell 5.1 y PowerShell 7 produzcan el mismo contenido, incluidos tildes y otros
+caracteres no ASCII.
+
+## Formato de mirror y discovery en Codex
+
+Codex descubre cada skill leyendo el **primer bloque YAML** de `SKILL.md`. Por eso el mirror:
+
+- conserva el frontmatter real de la skill (`name`, `description`) como primer bloque —
+  si la skill canónica no lo trae, el bootstrap lo sintetiza a partir del nombre y la
+  primera línea de prosa;
+- escribe la metadata de gestión al final, como comentarios HTML
+  (`sdlc-managed`, `sdlc-source`, `sdlc-source-sha256`, `sdlc-body-sha256`).
+
+Anteponer la metadata en un bloque `managed: true` tapaba el frontmatter real y hacía que
+Codex no descubriera la skill.
+
+Se registran dos hashes distintos con propósitos distintos:
+
+| Hash | Responde a |
+|---|---|
+| `sdlc-source-sha256` | ¿cambió la skill canónica en `.github/skills/`? |
+| `sdlc-body-sha256` | ¿alguien editó este mirror a mano? |
+
+Gracias a esa separación, el bootstrap re-sella un mirror intacto cuando cambia el
+canónico, pero se detiene (`managed mirror has local drift`) si el mirror fue editado
+localmente. `-Force` sobrescribe de todos modos.
 
 ## Comandos útiles
 
 ```powershell
-# Reinstalar / sincronizar todo
-powershell -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1
-
-# Solo resincronizar skills internas del repo
+# Sincronizar las skills internas (comportamiento predeterminado, sin descargas)
 powershell -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1 -SkipExternalInstall
 
-# Solo reinstalar skills externas curadas
-powershell -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1 -SkipRepoGovernedSync
+# Sincronizar internas e instalar las externas curadas (opt-in explícito)
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1 -InstallExternal
+
+# Validar frontmatter, hashes y equivalencia UTF-8 de los tres mirrors
+node scripts/validate-codex-skills.mjs
 ```
 
 ## Regla operativa
@@ -114,5 +142,19 @@ Cuando cambie una skill versionada en `.github/skills/`, se debe:
 
 1. actualizar la skill fuente,
 2. correr `scripts/bootstrap-agent-skills.ps1`,
-3. validar que Claude, Codex, Copilot y Windsurf queden alineados,
+3. ejecutar `node scripts/validate-codex-skills.mjs` para comprobar que los tres mirrors
+   conservan frontmatter, hash y cuerpo UTF-8 equivalentes al canónico,
 4. documentar el cambio en `CHANGELOG.md` y en la matriz de tools externas si aplica.
+
+## Puente de comandos SDLC en Codex
+
+En Claude Code, los slash commands se invocan directamente. En Codex, la invocación equivalente es:
+
+| Intención | Comando Codex |
+|---|---|
+| `/continua` | `npx --no-install sdlc continua --target . --platform codex --json` |
+| `/resume` | `npx --no-install sdlc resume --target . --markdown` |
+| `/save` | `npx --no-install sdlc save --target . --event manual --json` |
+
+El resultado de `/continua` es vinculante: si reporta gate humano o phase gate bloqueado,
+Codex debe detener implementación y reportar owner, fase, faltantes y siguiente comando.

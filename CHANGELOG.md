@@ -2,7 +2,28 @@
 
 ## [Unreleased]
 
-_No hay cambios pendientes._
+Mejoras extraídas de los consumidores `CMSHeadless` y `DemoMeridian`, donde el framework se instaló y se endureció en uso real.
+
+### Fixed
+
+- **Discovery de skills en Codex.** Los mirrors (`.claude/skills/`, `.agents/skills/`, `.windsurf/skills/`) anteponían un bloque `managed: true`, que tapaba el frontmatter real de la skill (`name`, `description`). Codex lee el **primer** bloque YAML como definición, así que ninguna skill gobernada era descubrible en Codex. Ahora el mirror conserva (o sintetiza) el frontmatter real como primer bloque y mueve la metadata de gestión al final como comentarios HTML. Afecta a `src/render.js` (ruta de `sdlc install`) y a `templates/scripts/bootstrap-agent-skills.ps1` (ruta de bootstrap), que producen bytes idénticos.
+- `FRAMEWORK_VERSION` estaba hardcodeado en `1.6.0` en `src/render.js` mientras el paquete publicado era `1.7.0`; los repos instalados registraban una versión falsa en `.sdlc/config.json`. Ahora se lee de `package.json`, y `tests/run-regression.mjs` lo asserta contra la misma fuente en lugar de un literal.
+- `migrations/1.7.0/`: la versión 1.7.0 se publicó sin entrada en el registro de migraciones, así que `sdlc upgrade` la rechazaba con "Version no soportada".
+- `phase-contract.yaml`: F16-archive pedía `openspec/changes/<slice>` como `inputs_required`, rompiendo la cadena de evidencia que siguen F9–F15 y F17. Ahora pide `.github/agent-state/evidence/<slice>/F15.yaml`.
+
+### Added
+
+- `templates/scripts/validate-codex-skills.mjs`: valida que los tres mirrors conserven frontmatter real primero, metadata de gestión al final, hash de source igual al canónico y cuerpo UTF-8 equivalente. Enganchado en `validate-local-gate.ps1` después del bootstrap.
+- `templates/scripts/validate-enhanced-research.mjs`: `validate-local-gate.ps1` ya invocaba este contrato pero el framework nunca lo entregaba. Exige change OpenSpec (activo o archivado) cuando el slice toca rutas de producto; los cambios solo operativos quedan exentos.
+- Sección "Puente Codex" en `templates/AGENTS.md` y `templates/.github/AGENTS.md`: Codex no ejecuta slash commands nativos, así que `/continua`, `/resume` y `/save` se traducen a `npx --no-install sdlc ... --platform codex`. El resultado de `/continua` es vinculante ante `phaseGate.status:"blocked"` o `humanGate:true`.
+- Regla "producción solo-crear" en `AGENTS.md`: sobre sistemas externos vivos solo se crean artefactos nuevos y aislados; modificar o borrar exige gate humano explícito.
+- Recomendación de escanear `.github/skills/` antes del bootstrap, para no propagar una skill comprometida a los tres mirrors.
+
+### Changed
+
+- `templates/scripts/bootstrap-agent-skills.ps1`: lectura y escritura explícitas en UTF-8 sin BOM (Windows PowerShell 5.1 y PowerShell 7 producían mirrors distintos con tildes); nuevo `sdlc-body-sha256` que distingue "cambió el canónico" de "alguien editó el mirror a mano", evitando falsos positivos de drift; switch `-Force` para re-sellar; los mirrors en formato legacy se re-sellan en vez de bloquearse.
+- `templates/scripts/validate-local-gate.ps1`: acepta `validate-enhanced-research.mjs` además del `.js` histórico, y corre `validate-codex-skills.mjs` tras el bootstrap.
+- `templates/docs/guides/skills-multi-entorno.md`: documenta el formato de mirror y por qué, los dos hashes, el puente de comandos en Codex, y corrige los comandos de ejemplo (`-SkipRepoGovernedSync` no existe; la instalación de skills externas es opt-in con `-InstallExternal`).
 
 ## [1.7.0] — 2026-05-29
 

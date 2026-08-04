@@ -6,6 +6,10 @@
   .github/skills is the canonical source. This script creates managed mirrors in
   .claude/skills, .agents/skills and .windsurf/skills. External skill install is
   disabled by default; use -InstallExternal to opt in.
+
+  Codex discovers skills from the FIRST YAML frontmatter block of SKILL.md, so
+  mirrors keep the real skill frontmatter (name, description) first and write the
+  managed metadata as trailing HTML comments.
 #>
 
 # opt-in:external
@@ -13,7 +17,8 @@
 param(
   [switch] $SkipExternalInstall,
   [switch] $InstallExternal,
-  [switch] $Json
+  [switch] $Json,
+  [switch] $Force
 )
 
 Set-StrictMode -Version Latest
@@ -39,11 +44,125 @@ function Get-TextSha256 {
   }
 }
 
+function Get-BodyHash {
+  # Hash de la identidad del cuerpo del mirror, robusto a CRLF/LF y a saltos
+  # de linea de cabecera/cola anadidos por Set-Content. Permite distinguir
+  # "el source canonico cambio" de "el mirror fue editado a mano".
+  param([string] $BodyText)
+  return Get-TextSha256 -Text ($BodyText.Replace("`r", '').Trim())
+}
+
+function Get-MirrorBodyText {
+  param([string] $Text)
+
+  $normalized = $Text.Replace("`r", '').TrimStart([char]0xFEFF).TrimEnd()
+
+  # Legacy mirrors used a managed YAML block before the canonical skill
+  # frontmatter. Strip only that wrapper, not the skill's own frontmatter.
+  if ($normalized -match '(?s)^---\n(?<header>.*?)\n---\n?') {
+    $header = $Matches['header']
+    if ($header -match 'managed:\s*true') {
+      return [regex]::Replace($normalized, '(?s)^---\n.*?\n---\n?', '', 1)
+    }
+  }
+
+  # Codex discovers skills from the first YAML frontmatter block. Managed
+  # metadata therefore lives in trailing HTML comments so the native frontmatter
+  # remains the first block in every mirror.
+  return [regex]::Replace(
+    $normalized,
+    '(?s)\n+<!-- sdlc-managed: true -->\n<!-- sdlc-source: .*? -->\n<!-- sdlc-source-sha256: [a-f0-9]+ -->\n<!-- sdlc-body-sha256: [a-f0-9]+ -->\s*$',
+    ''
+  )
+}
+
+function Get-FirstFrontmatter {
+  param([string] $Text)
+
+  $normalized = $Text.Replace("`r", '').TrimStart([char]0xFEFF)
+  if ($normalized -match '(?s)^---\n(?<frontmatter>.*?)\n---\n?') {
+    return $Matches['frontmatter']
+  }
+  return $null
+}
+
+function Get-DescriptionFromMarkdown {
+  param(
+    [string] $Text,
+    [string] $Fallback
+  )
+
+  $lines = @($Text.Replace("`r", '').Split("`n"))
+  foreach ($line in $lines) {
+    $trimmed = $line.Trim()
+    if ($trimmed.Length -eq 0) { continue }
+    if ($trimmed.StartsWith('#')) { continue }
+    if ($trimmed.StartsWith('```')) { continue }
+    if ($trimmed.StartsWith('---')) { continue }
+    return $trimmed.Replace('"', "'")
+  }
+  return $Fallback
+}
+
+function Ensure-SkillFrontmatter {
+  param(
+    [string] $SkillName,
+    [string] $SourceText
+  )
+
+  $body = $SourceText.TrimEnd()
+  $frontmatter = Get-FirstFrontmatter -Text $body
+  if (($null -ne $frontmatter) -and ($frontmatter -match '(?m)^name:\s*\S+') -and ($frontmatter -match '(?m)^description:\s*\S+')) {
+    return $body
+  }
+
+  $description = Get-DescriptionFromMarkdown -Text $body -Fallback "Skill gobernada por el repo: $SkillName."
+  return @(
+    '---'
+    "name: $SkillName"
+    "description: ""$description"""
+    '---'
+    ''
+    $body
+  ) -join "`n"
+}
+
+function Test-ManagedMirrorForSkill {
+  param(
+    [string] $Text,
+    [string] $SkillName
+  )
+
+  $escapedSkillName = [regex]::Escape($SkillName)
+  return (
+    $Text -match '(managed:\s*true|sdlc-managed:\s*true)' -or
+    $Text -match "source:\s*\.github/skills/$escapedSkillName/SKILL\.md" -or
+    $Text -match "sdlc-source:\s*\.github/skills/$escapedSkillName/SKILL\.md"
+  )
+}
+
+function Write-Utf8NoBom {
+  # Escritura explicita UTF-8 sin BOM: Windows PowerShell 5.1 y PowerShell 7
+  # difieren en el default de Set-Content y producian mirrors distintos para
+  # tildes y otros caracteres no ASCII.
+  param(
+    [string] $Path,
+    [string] $Text
+  )
+  $encoding = [System.Text.UTF8Encoding]::new($false)
+  [System.IO.File]::WriteAllText($Path, "$Text`n", $encoding)
+}
+
+function Read-Utf8Text {
+  param([string] $Path)
+  return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+}
+
 function Read-Manifest {
   if (-not (Test-Path -LiteralPath $ManifestPath)) {
     return [pscustomobject]@{ repoGovernedSkills = @(); externalCollections = @() }
   }
-  return Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+  return Read-Utf8Text -Path $ManifestPath | ConvertFrom-Json
 }
 
 function Write-Mirror {
@@ -52,35 +171,44 @@ function Write-Mirror {
     [string] $SourcePath,
     [string] $TargetRoot
   )
-  $sourceText = Get-Content -LiteralPath $SourcePath -Raw
+  $sourceText = Read-Utf8Text -Path $SourcePath
   $hash = Get-TextSha256 -Text $sourceText
   $targetDir = Join-Path $TargetRoot $SkillName
   $targetPath = Join-Path $targetDir 'SKILL.md'
+  $body = Ensure-SkillFrontmatter -SkillName $SkillName -SourceText $sourceText
+  $bodyHash = Get-BodyHash -BodyText $body
   $mirrorText = @(
-    '---'
-    'managed: true'
-    "source: .github/skills/$SkillName/SKILL.md"
-    "source_sha256: $hash"
-    '---'
+    $body
     ''
-    $sourceText.TrimEnd()
-    ''
+    '<!-- sdlc-managed: true -->'
+    "<!-- sdlc-source: .github/skills/$SkillName/SKILL.md -->"
+    "<!-- sdlc-source-sha256: $hash -->"
+    "<!-- sdlc-body-sha256: $bodyHash -->"
   ) -join "`n"
 
-  if (Test-Path -LiteralPath $targetPath) {
-    $existing = Get-Content -LiteralPath $targetPath -Raw
-    if ($existing -notmatch 'managed:\s*true') {
+  if ((Test-Path -LiteralPath $targetPath) -and (-not $Force)) {
+    $existing = Read-Utf8Text -Path $targetPath
+    if (-not (Test-ManagedMirrorForSkill -Text $existing -SkillName $SkillName)) {
       return [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'unmanaged file exists' }
     }
-    if ($existing -match 'source_sha256:\s*([a-f0-9]+)' -and $Matches[1] -ne $hash) {
-      return [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'managed mirror has local drift' }
+    # Drift real solo si el CUERPO actual del mirror difiere del body_sha256 que
+    # se registro al escribirlo. Si coincide, el mirror esta intacto y es seguro
+    # sobrescribir aunque el source canonico haya cambiado (source_sha256 != $hash).
+    # Mirrors legacy sin body_sha256 se re-sellan (caen al write).
+    if ($existing -match '(?:body_sha256|sdlc-body-sha256):\s*([a-f0-9]+)') {
+      $recordedBodyHash = $Matches[1]
+      $existingBody = Get-MirrorBodyText -Text $existing
+      $existingBodyHash = Get-BodyHash -BodyText $existingBody
+      if (($existingBodyHash -ne $recordedBodyHash) -and ($existingBodyHash -ne $bodyHash)) {
+        return [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'managed mirror has local drift' }
+      }
     }
   }
 
   if (-not (Test-Path -LiteralPath $targetDir)) {
     New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
   }
-  $mirrorText | Set-Content -LiteralPath $targetPath -Encoding UTF8
+  Write-Utf8NoBom -Path $targetPath -Text $mirrorText
   return [ordered]@{ target = $targetPath; status = 'written'; reason = $null }
 }
 
@@ -156,13 +284,13 @@ if ($manifest.PSObject.Properties.Name -contains 'crossMirrorSkills') {
           continue
         }
         if (Test-Path -LiteralPath $targetPath) {
-          $existing = Get-Content -LiteralPath $targetPath -Raw
+          $existing = Read-Utf8Text -Path $targetPath
           if ($existing -notmatch 'cross-mirror:\s*true') {
             $crossResults += [ordered]@{ target = $targetPath; status = 'skipped'; reason = 'unmanaged file exists' }
             continue
           }
         }
-        $sourceText = Get-Content -LiteralPath $srcPath -Raw
+        $sourceText = Read-Utf8Text -Path $srcPath
         if (-not (Test-Path -LiteralPath $targetDir)) {
           New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
         }
@@ -175,7 +303,7 @@ if ($manifest.PSObject.Properties.Name -contains 'crossMirrorSkills') {
           $sourceText.TrimEnd()
           ''
         ) -join "`n"
-        $mirrorText | Set-Content -LiteralPath $targetPath -Encoding UTF8
+        Write-Utf8NoBom -Path $targetPath -Text $mirrorText
         $crossResults += [ordered]@{ target = $targetPath; status = 'written'; reason = $null }
       }
     }

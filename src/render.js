@@ -1,10 +1,16 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { renderTemplates, templatesRoot } from "./template-loader.js";
 export { validateConfigShape } from "./config-validator.js";
 
-export const FRAMEWORK_VERSION = "1.6.0";
+// Fuente unica de verdad: package.json. Mantenerlo hardcodeado hizo que los
+// consumidores registraran frameworkVersion 1.6.0 instalando codigo 1.7.0.
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export const FRAMEWORK_VERSION = JSON.parse(
+  fs.readFileSync(path.join(PACKAGE_ROOT, "package.json"), "utf8")
+).version;
 export const SCHEMA_VERSION = 1;
 export const SUPPORTED_MODES = new Set(["greenfield", "legacy"]);
 
@@ -122,6 +128,58 @@ export function buildManagedFiles(config) {
   return files;
 }
 
+function firstFrontmatter(text) {
+  const normalized = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  return /^---\n([\s\S]*?)\n---\n?/.exec(normalized)?.[1] ?? null;
+}
+
+function descriptionFromMarkdown(text, fallback) {
+  for (const line of text.replace(/\r/g, "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("```") || trimmed.startsWith("---")) continue;
+    return trimmed.replaceAll('"', "'");
+  }
+  return fallback;
+}
+
+// Codex descubre skills leyendo el PRIMER bloque YAML de SKILL.md. Si el mirror
+// antepone metadata de gestion, tapa el frontmatter real y la skill no se
+// descubre. Por eso el cuerpo conserva (o sintetiza) name/description como
+// primer bloque y la metadata viaja al final como comentarios HTML.
+export function buildSkillMirrorBody(skillName, source) {
+  const body = source.replace(/^﻿/, "").trimEnd();
+  const frontmatter = firstFrontmatter(body);
+  if (frontmatter && /^name:\s*\S+/m.test(frontmatter) && /^description:\s*\S+/m.test(frontmatter)) {
+    return body;
+  }
+  const fallback = `Skill gobernada por el repo: ${skillName}.`;
+  return [
+    "---",
+    `name: ${skillName}`,
+    `description: "${descriptionFromMarkdown(body, fallback)}"`,
+    "---",
+    "",
+    body
+  ].join("\n");
+}
+
+function bodyHash(body) {
+  return sha256Text(body.replace(/\r/g, "").trim());
+}
+
+export function buildSkillMirror(skillName, source) {
+  const body = buildSkillMirrorBody(skillName, source);
+  return [
+    body,
+    "",
+    "<!-- sdlc-managed: true -->",
+    `<!-- sdlc-source: .github/skills/${skillName}/SKILL.md -->`,
+    `<!-- sdlc-source-sha256: ${sha256Text(source)} -->`,
+    `<!-- sdlc-body-sha256: ${bodyHash(body)} -->`,
+    ""
+  ].join("\n");
+}
+
 function addSkillMirrors(files) {
   const skillNames = new Set();
   for (const filePath of Object.keys(files)) {
@@ -129,19 +187,8 @@ function addSkillMirrors(files) {
     if (match) skillNames.add(match[1]);
   }
   for (const skillName of [...skillNames].sort()) {
-    const sourcePath = `.github/skills/${skillName}/SKILL.md`;
-    const source = files[sourcePath];
-    const hash = sha256Text(source);
-    const mirror = [
-      "---",
-      "managed: true",
-      `source: .github/skills/${skillName}/SKILL.md`,
-      `source_sha256: ${hash}`,
-      "---",
-      "",
-      source.trimEnd(),
-      ""
-    ].join("\n");
+    const source = files[`.github/skills/${skillName}/SKILL.md`];
+    const mirror = buildSkillMirror(skillName, source);
     for (const root of [".claude/skills", ".agents/skills", ".windsurf/skills"]) {
       files[`${root}/${skillName}/SKILL.md`] = mirror;
     }
