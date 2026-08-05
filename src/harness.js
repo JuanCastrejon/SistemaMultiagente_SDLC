@@ -50,6 +50,67 @@ function firstLine(value) {
   return normalize(value).split("\n")[0] ?? "";
 }
 
+// ---------------------------------------------------------------------------
+// Package manager detection
+// The harness used to hardcode `corepack pnpm`, which made `verdict` and
+// `tools-doctor` fail on npm or yarn consumers. Resolution order:
+//   1. package.json "packageManager" field (corepack standard)
+//   2. lockfile present in the target repo
+//   3. pnpm as historical default
+// ---------------------------------------------------------------------------
+
+const PACKAGE_MANAGERS = {
+  pnpm: {
+    name: "pnpm",
+    versionCommand: ["corepack", ["pnpm", "--version"]],
+    runScript: (script) => ["corepack", ["pnpm", "run", script, "--if-present"]]
+  },
+  npm: {
+    name: "npm",
+    versionCommand: ["npm", ["--version"]],
+    runScript: (script) => ["npm", ["run", "--if-present", script]]
+  },
+  yarn: {
+    name: "yarn",
+    versionCommand: ["yarn", ["--version"]],
+    runScript: (script) => ["yarn", ["run", script]]
+  },
+  bun: {
+    name: "bun",
+    versionCommand: ["bun", ["--version"]],
+    runScript: (script) => ["bun", ["run", script]]
+  }
+};
+
+export function detectPackageManager(target) {
+  const packageJsonPath = path.join(target, "package.json");
+  const raw = readTextIfExists(packageJsonPath);
+  if (raw) {
+    try {
+      const declared = JSON.parse(raw).packageManager;
+      if (typeof declared === "string") {
+        const name = declared.split("@")[0].trim().toLowerCase();
+        if (PACKAGE_MANAGERS[name]) {
+          return { ...PACKAGE_MANAGERS[name], source: "packageManager" };
+        }
+      }
+    } catch {
+      /* package.json ilegible: se cae a los lockfiles */
+    }
+  }
+  for (const [lockfile, name] of [
+    ["pnpm-lock.yaml", "pnpm"],
+    ["yarn.lock", "yarn"],
+    ["bun.lockb", "bun"],
+    ["package-lock.json", "npm"]
+  ]) {
+    if (pathExists(path.join(target, lockfile))) {
+      return { ...PACKAGE_MANAGERS[name], source: lockfile };
+    }
+  }
+  return { ...PACKAGE_MANAGERS.pnpm, source: "default" };
+}
+
 function contractCandidates(target) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   return [
@@ -204,9 +265,11 @@ export function commandVerdict(options) {
   const blockers = [];
   const warnings = [];
   const steps = [];
+  const packageManager = detectPackageManager(target);
 
   for (const step of VERDICT_STEPS) {
-    const result = runCommand("corepack", ["pnpm", "run", step.script, "--if-present"], target, 60_000);
+    const [command, args] = packageManager.runScript(step.script);
+    const result = runCommand(command, args, target, 60_000);
     const passed = result.ok;
     const entry = {
       key: step.key,
@@ -231,6 +294,7 @@ export function commandVerdict(options) {
   const payload = {
     status: ready ? "ready" : "not-ready",
     verdict: ready ? "READY" : "NOT-READY",
+    packageManager: { name: packageManager.name, source: packageManager.source },
     blockers,
     warnings,
     steps
@@ -472,10 +536,17 @@ export function commandToolsDoctor(options) {
   const profile = options.profile ?? "default";
   const home = os.homedir();
   const claudeSettings = readTextIfExists(path.join(home, ".claude", "settings.json")) ?? "";
+  const packageManager = detectPackageManager(target);
   const tools = [
-    checkTool("pnpm", () => {
-      const result = runCommand("corepack", ["pnpm", "--version"], target, 10_000);
-      return { status: result.ok ? "ok" : "missing", version: firstLine(result.stdout || result.stderr) };
+    checkTool("package-manager", () => {
+      const [command, args] = packageManager.versionCommand;
+      const result = runCommand(command, args, target, 10_000);
+      return {
+        status: result.ok ? "ok" : "missing",
+        manager: packageManager.name,
+        detectedFrom: packageManager.source,
+        version: firstLine(result.stdout || result.stderr)
+      };
     }),
     checkTool("openspec", () => ({
       status: pathExists(path.join(target, "openspec", "config.yaml")) ? "ok" : "missing",
@@ -510,7 +581,10 @@ export function commandToolsDoctor(options) {
       path: ".github/skills/party-mode/SKILL.md"
     }))
   ];
-  const required = profile === "full" ? new Set(["pnpm", "openspec", "autoskills", "party-mode"]) : new Set(["pnpm"]);
+  const required =
+    profile === "full"
+      ? new Set(["package-manager", "openspec", "autoskills", "party-mode"])
+      : new Set(["package-manager"]);
   const findings = tools
     .filter((tool) => tool.status !== "ok")
     .map((tool) => ({
@@ -526,6 +600,7 @@ export function commandToolsDoctor(options) {
       status: hasErrors ? "error" : hasWarnings ? "warning" : "ok",
       profile,
       target,
+      packageManager: { name: packageManager.name, source: packageManager.source },
       tools,
       findings
     }

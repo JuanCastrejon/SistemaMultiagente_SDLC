@@ -86,7 +86,11 @@ Reglas base:
 - `phase-contract.yaml` declara owner, participantes, entradas, salidas, gate humano y siguiente fase.
 - `.github/agent-state/evidence/<slice>/<phase>.yaml` registra evidencia trazable cuando la fase lo exige.
 - `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
-- `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y pnpm.
+- `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y el package manager del repo consumidor.
+
+### Package manager del consumidor
+
+`verdict`, `tools-doctor` y `scripts/validate-local-gate.ps1` detectan el package manager del repo destino en este orden: campo `packageManager` de `package.json`, lockfile presente (`pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `package-lock.json`) y `pnpm` como default histórico. Un consumidor con `npm workspaces` ya no falla con `pnpm: missing`; el tool se reporta como `package-manager` con el manager detectado y su origen.
 
 ## Governance Engineering — Enforcement Duro (1.7.0)
 
@@ -239,7 +243,8 @@ pwsh -NonInteractive -File scripts/headroom-start.ps1
 **Autoarranque en Windows** (una sola vez por máquina — acción del usuario, no automatizable por el agente):
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Json
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Apply
 Get-ScheduledTask -TaskName "<ProjectSlug>-Headroom-Autostart"
 ```
 

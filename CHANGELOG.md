@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
-_No hay cambios pendientes._
+Brechas detectadas al instalar el framework en `PasarelaDePago`, un consumidor con `npm workspaces`.
+
+### Fixed
+
+- **El harness ya no asume pnpm.** `sdlc verdict` y `sdlc tools-doctor` ejecutaban `corepack pnpm` hardcodeado, así que en un repo npm o yarn devolvían `pnpm: missing` y `NOT-READY` sin haber corrido un solo validator. Nuevo `detectPackageManager()` en `src/harness.js` resuelve por campo `packageManager` de `package.json`, luego por lockfile, y deja `pnpm` como default. `tools-doctor` reporta el tool `package-manager` (con `manager` y `detectedFrom`) en vez de `pnpm`, y ambos comandos incluyen `packageManager` en su payload.
+- `templates/scripts/validate-local-gate.ps1` aplicaba el mismo hardcodeo en la versión, el install, los `run` de scripts y los `exec` de `sdlc`. Ahora resuelve el package manager con la misma precedencia (`Resolve-PackageManager`) y usa `npm ci`, `yarn install --immutable` o `bun install --frozen-lockfile` según corresponda.
+- `templates/scripts/headroom-start.ps1` y `templates/scripts/register-headroom-task.ps1`: el README y la matriz de herramientas externas los documentaban desde 1.5.0, pero el paquete nunca los entregó y `pwsh -File scripts/headroom-start.ps1` fallaba en todos los consumidores. Ahora existen y están en el manifiesto. `headroom-start.ps1` hace healthcheck con reintentos y, si falla, registra el fallo y sale con 1 sin limpiar `ANTHROPIC_BASE_URL`. `register-headroom-task.ps1` es dry-run por defecto y solo registra la tarea con `-Apply`.
+
+### Added
+
+- Casos de regresión para la detección de package manager (`packageManager`, lockfile y default), para el reporte de `tools-doctor` en un consumidor npm y para la entrega efectiva de los scripts de headroom.
 
 ## [1.7.1] — 2026-08-03
 

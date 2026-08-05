@@ -279,4 +279,56 @@ assert.ok(fs.existsSync(path.join(conflict, ".sdlc", "patch-plan.json")));
 
 run(["prune-backups", "--target", legacy100, "--keep", "1", "--json"]);
 
+// Deteccion de package manager: el harness ya no asume pnpm.
+const { detectPackageManager } = await import(
+  new URL("../src/harness.js", import.meta.url).href
+);
+
+const pmNpm = makeRepo("pm-npm");
+fs.writeFileSync(
+  path.join(pmNpm, "package.json"),
+  JSON.stringify({ name: "pm-npm", packageManager: "npm@11.9.0" }, null, 2),
+  "utf8"
+);
+const detectedNpm = detectPackageManager(pmNpm);
+assert.equal(detectedNpm.name, "npm");
+assert.equal(detectedNpm.source, "packageManager");
+assert.deepEqual(detectedNpm.runScript("validate:drift"), ["npm", ["run", "--if-present", "validate:drift"]]);
+
+const pmYarnLock = makeRepo("pm-yarn-lock");
+fs.writeFileSync(path.join(pmYarnLock, "yarn.lock"), "", "utf8");
+const detectedYarn = detectPackageManager(pmYarnLock);
+assert.equal(detectedYarn.name, "yarn");
+assert.equal(detectedYarn.source, "yarn.lock");
+
+const pmDefault = makeRepo("pm-default");
+const detectedDefault = detectPackageManager(pmDefault);
+assert.equal(detectedDefault.name, "pnpm");
+assert.equal(detectedDefault.source, "default");
+assert.deepEqual(detectedDefault.runScript("validate:drift"), [
+  "corepack",
+  ["pnpm", "run", "validate:drift", "--if-present"]
+]);
+
+// tools-doctor reporta el package manager detectado en vez de exigir pnpm.
+const pmNpmInstalled = makeRepo("pm-npm-installed");
+fs.writeFileSync(
+  path.join(pmNpmInstalled, "package.json"),
+  JSON.stringify({ name: "pm-npm-installed", packageManager: "npm@11.9.0" }, null, 2),
+  "utf8"
+);
+run(["install", "--target", pmNpmInstalled, "--mode", "greenfield", "--project-name", "PM npm", "--json"]);
+const npmToolsDoctorOutput = JSON.parse(
+  runStatus(["tools-doctor", "--target", pmNpmInstalled, "--profile", "full", "--json"]).stdout
+);
+assert.equal(npmToolsDoctorOutput.packageManager.name, "npm");
+const packageManagerTool = npmToolsDoctorOutput.tools.find((tool) => tool.name === "package-manager");
+assert.ok(packageManagerTool, "tools-doctor debe reportar el tool package-manager");
+assert.equal(packageManagerTool.manager, "npm");
+assert.ok(!npmToolsDoctorOutput.findings.some((finding) => finding.code === "tool-pnpm"));
+
+// Los scripts de headroom que documenta el README ahora se entregan de verdad.
+assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "headroom-start.ps1")));
+assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "register-headroom-task.ps1")));
+
 console.log("Regression suite: PASS");

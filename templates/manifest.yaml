@@ -115,6 +115,10 @@ templates:
     target: scripts/register-claude-sync-task.ps1
   - source: scripts/bootstrap-obsidian-vault.ps1
     target: scripts/bootstrap-obsidian-vault.ps1
+  - source: scripts/headroom-start.ps1
+    target: scripts/headroom-start.ps1
+  - source: scripts/register-headroom-task.ps1
+    target: scripts/register-headroom-task.ps1
   - source: scripts/obsidian-memory.config.example.json
     target: scripts/obsidian-memory.config.example.json
   - source: scripts/models.yaml
