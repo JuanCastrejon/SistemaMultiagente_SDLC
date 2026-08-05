@@ -113,7 +113,13 @@ function resolveMemoryConfig(target) {
   const config = configPath ? safeReadJson(configPath) : null;
   const projectSlug = config?.projectSlug || getProjectSlug(target);
   const rawVault = config?.vaultRoot || config?.obsidian?.vaultPath;
-  const vaultRoot = rawVault && !String(rawVault).includes("{{") ? path.resolve(expandEnv(String(rawVault))) : path.join(target, ".sdlc", "vault");
+  // Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd
+  // del proceso: al invocar el CLI desde otro directorio, path.resolve() a secas
+  // producia rutas inexistentes y un warning vault-missing enganoso.
+  const expandedVault = rawVault && !String(rawVault).includes("{{") ? expandEnv(String(rawVault)) : null;
+  const vaultRoot = expandedVault
+    ? (path.isAbsolute(expandedVault) ? expandedVault : path.resolve(target, expandedVault))
+    : path.join(target, ".sdlc", "vault");
   return {
     configPath,
     config,

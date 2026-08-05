@@ -331,4 +331,18 @@ assert.ok(!npmToolsDoctorOutput.findings.some((finding) => finding.code === "too
 assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "headroom-start.ps1")));
 assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "register-headroom-task.ps1")));
 
+// Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd.
+fs.writeFileSync(
+  path.join(pmNpmInstalled, "scripts", "obsidian-memory.config.local.json"),
+  JSON.stringify({ vaultRoot: ".sdlc/vault", projectSlug: "pm-npm-installed" }, null, 2),
+  "utf8"
+);
+fs.mkdirSync(path.join(pmNpmInstalled, ".sdlc", "vault"), { recursive: true });
+const runtimeWithVault = JSON.parse(
+  runStatus(["validate-runtime", "--target", pmNpmInstalled, "--json"]).stdout
+);
+assert.equal(runtimeWithVault.runtime.vault.root, path.join(pmNpmInstalled, ".sdlc", "vault"));
+assert.equal(runtimeWithVault.runtime.vault.exists, true);
+assert.ok(!runtimeWithVault.findings.some((finding) => finding.code === "vault-missing"));
+
 console.log("Regression suite: PASS");
