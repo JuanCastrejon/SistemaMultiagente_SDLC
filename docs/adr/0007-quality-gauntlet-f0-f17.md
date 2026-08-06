@@ -157,6 +157,23 @@ El plan sintetizado se sometió a un crítico de completitud, cuyo veredicto fue
 8. Dueño y presupuesto de la habilitación del piloto.
 9. Dejar de resolver el CLI por `npm link` global en los consumidores.
 
+## Estado de implementación
+
+Piezas de 1.8.0 ya entregadas en la rama `feature/entregabilidad-y-gauntlet-adr-0007`, todas con caso de regresión:
+
+| Pieza | Estado | Verificación |
+|---|---|---|
+| Gate fantasma en `verdict` | hecho | En el piloto, `adr-integrity` y `active-slices` pasan de `pass` a `not-configured` |
+| `upgrade --accept-managed` / `--accept-all-managed` | hecho | 57 conflictos que impedían todo upgrade ahora se aceptan; el dominio queda intacto |
+| `.sdlc/overrides.yaml` y reclasificación en `doctor` | hecho | 57 `managed-file-drift` pasan a `managed-file-override` |
+| Hash normalizado en `collectDrift` | hecho | Elimina 21 `override-stale` falsos por CRLF en Windows |
+| `--version` y exit code de comando desconocido | hecho | Un typo en CI ya no se contabiliza como éxito |
+| `.sdlc/session.json` fuera del set gestionado | hecho | Deja de producir drift permanente |
+| Migraciones que leen disco | pendiente | Bloquea cualquier migración que toque archivos personalizables |
+| `validate-local-gate.ps1` en modo `-Strict` | pendiente | Hoy exige un script raíz `validate` que el piloto no tiene |
+| `runCommand` con `shell: true` | pendiente | Con probes declarativos en YAML sería inyección; el cambio arriesga la resolución de `npm.cmd` en Windows y necesita su propia verificación |
+| Pin de `@fission-ai/openspec` | pendiente | Vive en el consumidor, no en el framework |
+
 ## Primer paso
 
 Un solo cambio, con test de regresión, sin tocar ningún archivo gestionado del consumidor: añadir en `commandVerdict` (`src/harness.js`) un precheck de existencia contra `packageJson.scripts` antes de invocar el package manager, y clasificar el paso ausente como `NOT_CONFIGURED` en vez de `pass`.
