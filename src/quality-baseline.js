@@ -131,6 +131,24 @@ export function promoteBaseline(target, { slice, phase = "F15", commitSha = null
     return { ok: false, code: "baseline-source-without-metrics", detail: `La evidencia de ${phase} no tiene quality_metrics.metrics.` };
   }
 
+  // `source: "ci"` en los argumentos es una AFIRMACION de quien invoca el
+  // comando, no un hecho verificado por si solo. Sin este cruce, cualquiera
+  // podia correr `--source ci` en su maquina contra evidencia que el propio
+  // harness local escribio (quality_metrics.source: "harness", nunca
+  // recomputada por el arbitro) y el baseline quedaba marcado
+  // `promoted_by: ci` -- autoritativo -- sin que nada lo haya verificado. Es
+  // exactamente el envenenamiento que este archivo dice prevenir en su propio
+  // encabezado. `--allow-local` sigue sin esta exigencia: ya se marca
+  // `promoted_by: local:...` y `doctor` la reporta como no autoritativa.
+  const evidenceSource = read.evidence?.quality_metrics?.source ?? null;
+  if (source === "ci" && evidenceSource !== "ci") {
+    return {
+      ok: false,
+      code: "baseline-source-not-ci",
+      detail: `--source ci exige que la evidencia de ${phase} declare quality_metrics.source: "ci"; declara '${evidenceSource ?? "ausente"}'.`
+    };
+  }
+
   const document = {
     version: 1,
     promoted_at: now.toISOString(),
