@@ -13,6 +13,8 @@ templates:
     target: AGENTS.md
   - source: indice-operativo.md
     target: indice-operativo.md
+  - source: quality-contract.yaml
+    target: quality-contract.yaml
   - source: .sdlc/README.md
     target: .sdlc/README.md
   # .sdlc/session.json NO se gestiona: es estado local de maquina que `sdlc

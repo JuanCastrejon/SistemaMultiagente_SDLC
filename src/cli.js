@@ -39,6 +39,7 @@ import {
   commandSkillEval,
   commandSkillPropose
 } from "./eval-runner.js";
+import { commandQualityGate } from "./quality.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -851,7 +852,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory."
     }
   };
 }
@@ -915,6 +916,8 @@ export function run(argv) {
       };
       return commandSkillPropose(propOpts);
     }
+    case "quality-gate":
+      return commandQualityGate(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":
@@ -935,10 +938,13 @@ export function run(argv) {
   }
 }
 
-export function main(argv) {
+export async function main(argv) {
   const parsed = parseArgs(argv);
   try {
-    const result = run(argv);
+    // `quality-gate` es asincrono (carga adapters del consumidor por import
+    // dinamico); el resto de comandos sigue siendo sincrono y `await` sobre un
+    // valor plano no cambia su comportamiento.
+    const result = await run(argv);
     print(result.payload, parsed.json);
     process.exitCode = result.exitCode;
   } catch (error) {

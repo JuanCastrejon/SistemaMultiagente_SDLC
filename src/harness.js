@@ -290,7 +290,7 @@ const VERDICT_STEPS = [
 // falta: sin este precheck, un paso BLOCKING inexistente se reportaba `pass` y
 // contribuia a un READY falso. Se reporta `not-configured`, que no es pass ni
 // fail y no dispara el fail-fast.
-function readPackageScripts(target) {
+export function readPackageScripts(target) {
   const raw = readTextIfExists(path.join(target, "package.json"));
   if (!raw) return null;
   try {
@@ -299,6 +299,28 @@ function readPackageScripts(target) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Ejecuta un script del consumidor con el package manager detectado, aplicando
+ * el mismo precheck que `verdict`: un script no declarado NO se invoca y se
+ * reporta como `not-configured`, porque `--if-present` sale 0 y produciria un
+ * falso pass.
+ */
+export function runPackageScript(target, packageManager, script, timeout = 60_000) {
+  const declared = readPackageScripts(target);
+  if (declared && !Object.prototype.hasOwnProperty.call(declared, script)) {
+    return { status: "not-configured", ok: false, exitCode: null, stdout: "", stderr: "" };
+  }
+  const [command, args] = packageManager.runScript(script);
+  const result = runCommand(command, args, target, timeout);
+  return {
+    status: result.ok ? "ok" : "failed",
+    ok: result.ok,
+    exitCode: result.status ?? (result.ok ? 0 : 1),
+    stdout: result.stdout,
+    stderr: result.stderr
+  };
 }
 
 export function commandVerdict(options) {
