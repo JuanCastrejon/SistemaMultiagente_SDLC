@@ -122,14 +122,25 @@ const localGatePortable = runPowerShellScript(
   greenfield
 );
 assert.match(localGatePortable, /Local gate OK/);
+// Los validate:* son contrato del consumidor, no artefactos del framework: se
+// reportan como no configurados y no abortan el gate.
+assert.match(localGatePortable, /Scripts no configurados en este consumidor/);
 
+// -Strict solo exige lo que el framework SI entrega. En un repo recien
+// instalado eso significa que falla por la dependencia ausente del framework,
+// no por los validate:* que el consumidor todavia no escribio.
 const localGateStrict = runPowerShellScriptStatus(
   path.join(greenfield, "scripts", "validate-local-gate.ps1"),
   ["-SkipInstall", "-SkipBootstrap", "-Strict"],
   greenfield
 );
 assert.notEqual(localGateStrict.status, 0);
-assert.match(`${localGateStrict.stdout}\n${localGateStrict.stderr}`, /modo -Strict/);
+const strictOutput = `${localGateStrict.stdout}\n${localGateStrict.stderr}`;
+assert.match(strictOutput, /Dependencia sistema-multiagente-sdlc ausente/);
+assert.ok(
+  !/Script npm ausente/.test(strictOutput),
+  "-Strict no debe abortar por un validate:* que el framework nunca entrega"
+);
 
 const toolsDoctor = runStatus(["tools-doctor", "--target", greenfield, "--profile", "full", "--json"]);
 assert.ok([0, 2].includes(toolsDoctor.status));
@@ -343,6 +354,94 @@ assert.equal(controlPlaneStep.status, "not-configured");
 assert.equal(controlPlaneStep.exitCode, null);
 assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
 assert.deepEqual(verdictOutput.blockers, []);
+
+// tools-doctor detecta scripts de gate que resuelven @latest en cada corrida.
+const floatingRepo = makeRepo("floating-tooling");
+fs.writeFileSync(
+  path.join(floatingRepo, "package.json"),
+  JSON.stringify(
+    {
+      name: "floating-tooling",
+      packageManager: "npm@11.9.0",
+      scripts: {
+        "validate:openspec": "npx @fission-ai/openspec@latest validate --all",
+        "validate:drift": "node scripts/validate-drift.mjs"
+      }
+    },
+    null,
+    2
+  ),
+  "utf8"
+);
+run(["install", "--target", floatingRepo, "--mode", "greenfield", "--project-name", "Floating", "--json"]);
+const floatingDoctor = JSON.parse(
+  runStatus(["tools-doctor", "--target", floatingRepo, "--profile", "full", "--json"]).stdout
+);
+const pinnedTool = floatingDoctor.tools.find((tool) => tool.name === "pinned-tooling");
+assert.equal(pinnedTool.status, "warning");
+assert.deepEqual(pinnedTool.floatingScripts, ["validate:openspec"]);
+assert.ok(floatingDoctor.findings.some((f) => f.code === "tool-pinned-tooling"));
+
+// Inyeccion de shell: en Windows el harness ejecuta via cmd.exe por obligacion,
+// asi que los tokens con metacaracteres se rechazan en vez de escaparse.
+const { assertShellSafeToken } = await import(new URL("../src/harness.js", import.meta.url).href);
+assert.equal(assertShellSafeToken("validate:drift", "argumento"), "validate:drift");
+assert.equal(assertShellSafeToken("npm", "comando"), "npm");
+for (const payload of [
+  "validate:drift & calc.exe",
+  "x | whoami",
+  "a > out.txt",
+  "b $(id)",
+  "c `id`",
+  'd " & del',
+  "e %PATH%",
+  "f ; rm -rf /"
+]) {
+  assert.throws(
+    () => assertShellSafeToken(payload, "argumento"),
+    (error) => error.code === "UNSAFE_COMMAND_TOKEN",
+    `deberia rechazar: ${payload}`
+  );
+}
+
+// Las migraciones pueden leer el disco del consumidor, no solo los archivos
+// recien renderizados desde templates/.
+const { applyMigrations: applyMigrationsFn } = await import(
+  new URL("../src/migrations.js", import.meta.url).href
+);
+const migrationProbe = { seen: null, existed: null, hadContext: false };
+const migrationsResult = applyMigrationsFn(
+  { "a.md": "renderizado" },
+  [
+    {
+      version: "test",
+      up: (files, context) => {
+        migrationProbe.hadContext = Boolean(context && typeof context.readDisk === "function");
+        migrationProbe.seen = context.readDisk("README.md");
+        migrationProbe.existed = context.existsOnDisk("README.md");
+        return { "b.md": `desde disco: ${String(migrationProbe.seen).slice(0, 12)}` };
+      }
+    }
+  ],
+  {
+    target: greenfield,
+    config: greenfieldConfig,
+    readDisk: (relativePath) => {
+      const absolute = path.join(greenfield, relativePath);
+      return fs.existsSync(absolute) ? fs.readFileSync(absolute, "utf8").replace(/\r\n/g, "\n") : null;
+    },
+    existsOnDisk: (relativePath) => fs.existsSync(path.join(greenfield, relativePath))
+  }
+);
+assert.ok(migrationProbe.hadContext, "la migracion debe recibir contexto de disco");
+assert.equal(migrationProbe.existed, true);
+assert.ok(typeof migrationProbe.seen === "string" && migrationProbe.seen.length > 0);
+assert.equal(migrationsResult["a.md"], "renderizado");
+assert.ok(migrationsResult["b.md"].startsWith("desde disco: "));
+
+// Una migracion que ignora el contexto (todas las historicas) sigue funcionando.
+const legacyStyle = applyMigrationsFn({ "a.md": "x" }, [{ version: "legacy", up: (files) => ({ "c.md": files["a.md"] }) }]);
+assert.equal(legacyStyle["c.md"], "x");
 
 // Contrato de CLI: --version informa la version y un comando desconocido falla.
 const versionOutput = JSON.parse(run(["--version", "--json"]));

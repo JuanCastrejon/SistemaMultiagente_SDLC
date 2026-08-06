@@ -668,7 +668,16 @@ function commandUpgrade(options) {
   const fromVersion = config.frameworkVersion;
   const nextConfig = { ...config, frameworkVersion: toVersion };
   const migrations = migrationsToRun(fromVersion, toVersion);
-  const files = applyMigrations(buildManagedFiles(nextConfig), migrations);
+  const migrationContext = {
+    target,
+    config: nextConfig,
+    readDisk: (relativePath) => {
+      const content = readTextIfExists(path.join(target, relativePath));
+      return content === null ? null : normalizeLF(content);
+    },
+    existsOnDisk: (relativePath) => pathExists(path.join(target, relativePath))
+  };
+  const files = applyMigrations(buildManagedFiles(nextConfig), migrations, migrationContext);
   const conflicts = detectConflicts(target, files, manifest);
 
   // Resolucion por archivo: sin esto, un solo archivo gestionado con

@@ -169,10 +169,12 @@ Piezas de 1.8.0 ya entregadas en la rama `feature/entregabilidad-y-gauntlet-adr-
 | Hash normalizado en `collectDrift` | hecho | Elimina 21 `override-stale` falsos por CRLF en Windows |
 | `--version` y exit code de comando desconocido | hecho | Un typo en CI ya no se contabiliza como éxito |
 | `.sdlc/session.json` fuera del set gestionado | hecho | Deja de producir drift permanente |
-| Migraciones que leen disco | pendiente | Bloquea cualquier migración que toque archivos personalizables |
-| `validate-local-gate.ps1` en modo `-Strict` | pendiente | Hoy exige un script raíz `validate` que el piloto no tiene |
-| `runCommand` con `shell: true` | pendiente | Con probes declarativos en YAML sería inyección; el cambio arriesga la resolución de `npm.cmd` en Windows y necesita su propia verificación |
-| Pin de `@fission-ai/openspec` | pendiente | Vive en el consumidor, no en el framework |
+| Migraciones que leen disco | hecho | `up(files, context)` con `readDisk`/`existsOnDisk`; contrato en `migrations/README.md` |
+| `validate-local-gate.ps1` en modo `-Strict` | hecho | `-Strict` exige solo lo que el framework entrega; los `validate:*` del consumidor se reportan como no configurados |
+| `runCommand` con `shell: true` | hecho | Los tokens con metacaracteres se **rechazan** en vez de escaparse; el shell sigue siendo obligatorio en Windows por la mitigación de CVE-2024-27980 |
+| Detección de `@latest` en scripts de gate | hecho | `tools-doctor` reporta `pinned-tooling`; el pin en sí lo aplica el consumidor |
+
+Con esto, 1.8.0 queda funcionalmente completo salvo el re-baseline del manifiesto en los otros dos consumidores, que exige acceso a esos repos.
 
 ## Primer paso
 

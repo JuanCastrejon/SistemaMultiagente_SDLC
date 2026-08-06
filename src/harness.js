@@ -19,11 +19,39 @@ function normalize(value) {
   return String(value ?? "").replace(/\r\n/g, "\n").trim();
 }
 
+// En Windows hay que pasar por el shell: desde la mitigacion de CVE-2024-27980,
+// Node se niega a ejecutar `.cmd`/`.bat` (npm.cmd, corepack.cmd, yarn.cmd) sin
+// shell. Como el shell interpreta metacaracteres, la defensa no puede ser
+// escapar: es RECHAZAR. Cualquier token con metacaracteres de cmd.exe se
+// bloquea antes de construir la linea, en vez de intentar quotearlo.
+//
+// Importa mas de lo que parece: cuando el contrato de calidad permita declarar
+// `probes[].command` en el YAML del consumidor, ese valor llega hasta aqui.
+const SHELL_METACHARACTERS = /[&|<>^"`$\n\r;()!%]/;
+
+export function assertShellSafeToken(token, role) {
+  const text = String(token);
+  if (SHELL_METACHARACTERS.test(text)) {
+    const error = new Error(
+      `Token no permitido en ${role}: contiene metacaracteres de shell (${text.slice(0, 60)}).`
+    );
+    error.code = "UNSAFE_COMMAND_TOKEN";
+    throw error;
+  }
+  return text;
+}
+
 function runCommand(command, args = [], cwd = process.cwd(), timeout = 8000) {
   const windowsShell = process.platform === "win32";
+  if (windowsShell) {
+    assertShellSafeToken(command, "comando");
+    for (const arg of args) {
+      assertShellSafeToken(arg, "argumento");
+    }
+  }
   const quoteWindowsArg = (value) => {
     const text = String(value);
-    return /[\s"&|<>^]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+    return /\s/.test(text) ? `"${text}"` : text;
   };
   const result = windowsShell
     ? spawnSync([command, ...args].map(quoteWindowsArg).join(" "), {
@@ -612,7 +640,31 @@ export function commandToolsDoctor(options) {
     checkTool("party-mode", () => ({
       status: pathExists(path.join(target, ".github", "skills", "party-mode", "SKILL.md")) ? "ok" : "missing",
       path: ".github/skills/party-mode/SKILL.md"
-    }))
+    })),
+    // Un script de gate que resuelve `@latest` en cada corrida no es
+    // reproducible (cambia de comportamiento cuando publican) y paga red cada
+    // vez. Medido en un consumidor real: `npx @fission-ai/openspec@latest` era
+    // 9.1 de los 9.3 segundos de `sdlc verdict`.
+    checkTool("pinned-tooling", () => {
+      const raw = readTextIfExists(path.join(target, "package.json"));
+      if (!raw) return { status: "ok", detail: "sin package.json" };
+      let scripts = {};
+      try {
+        scripts = JSON.parse(raw).scripts ?? {};
+      } catch {
+        return { status: "warning", detail: "package.json ilegible" };
+      }
+      const floating = Object.entries(scripts)
+        .filter(([, body]) => typeof body === "string" && /npx\s+(-y\s+|--yes\s+)?[^\s|&]*@latest/.test(body))
+        .map(([name]) => name);
+      return floating.length > 0
+        ? {
+            status: "warning",
+            floatingScripts: floating,
+            detail: `Scripts que resuelven @latest en cada corrida: ${floating.join(", ")}. Fijar la version como devDependency.`
+          }
+        : { status: "ok" };
+    })
   ];
   const required =
     profile === "full"

@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $PackageManager = $null  # resuelto tras definir Resolve-PackageManager
+$NotConfiguredScripts = @()
 
 function Invoke-GateStep {
   param(
@@ -135,11 +136,12 @@ function Invoke-OptionalPackageScript {
     return
   }
 
-  $message = "Script npm ausente: $ScriptName"
-  if ($Strict) {
-    throw "$message. En modo -Strict debe existir en package.json."
-  }
-  Write-Warning "$message. Omitido en modo portable."
+  # Ningun `validate:*` lo entrega el framework: son scripts del consumidor. Un
+  # -Strict que lanza por su ausencia hace inusable el gate obligatorio en
+  # cualquier repo que no los tenga todos. Se registran como NOT_CONFIGURED,
+  # igual que hace `sdlc verdict`, y se resumen al final.
+  $script:NotConfiguredScripts += $ScriptName
+  Write-Warning "Script no configurado: $ScriptName. El consumidor no lo declara en package.json."
 }
 
 function Invoke-OptionalFileStep {
@@ -251,7 +253,11 @@ try {
   }
 
   Write-Host ""
-  Write-Host "Local gate OK. En modo portable, los checks ausentes se omiten con warning; usar -Strict para repos maduros."
+  if ($NotConfiguredScripts.Count -gt 0) {
+    Write-Host "Scripts no configurados en este consumidor ($($NotConfiguredScripts.Count)): $($NotConfiguredScripts -join ', ')"
+    Write-Host "No bloquean el gate: el framework no los entrega, son contrato del consumidor."
+  }
+  Write-Host "Local gate OK. -Strict exige los artefactos que instala el framework; los validate:* del consumidor se reportan como no configurados."
 }
 finally {
   Pop-Location
