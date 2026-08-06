@@ -41,8 +41,10 @@ import {
 } from "./eval-runner.js";
 import { commandQualityGate, commandQualityBaseline } from "./quality.js";
 import { baselineDoctorFindings } from "./quality-baseline.js";
-import { probeAnchorDoctorFindings } from "./quality-adjudicate.js";
+import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
+import { computeTreeHash } from "./evidence-writer.js";
+import { createAttestationCommit, verifySignoff } from "./signoff.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -635,6 +637,76 @@ function commandDoctor(options) {
   };
 }
 
+/**
+ * `sdlc signoff` (ADR 0007, P5)
+ *
+ * El sujeto que se aprueba/verifica es SIEMPRE { slice, phase, tree_hash },
+ * recomputado sobre las superficies declaradas en quality-contract.yaml en
+ * el momento de la llamada — nunca se confia en un tree_hash que alguien
+ * declare por fuera, porque eso reabriria exactamente el hueco que esto
+ * cierra (una firma que dice aprobar algo que nadie recomputo).
+ */
+function commandSignoff(options) {
+  const target = requireTarget(options);
+  const loaded = loadQualityContract(target);
+  if (!loaded.ok) {
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", code: loaded.code, path: loaded.path } };
+  }
+  const slice = options.slice ?? null;
+  const phase = options.phase ?? null;
+  if (!slice || !phase) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "signoff exige --slice y --phase." } };
+  }
+  const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
+  const tree = computeTreeHash(target, surfacePaths);
+  const subject = { slice, phase, tree_hash: tree.hash };
+
+  if (options.create) {
+    const created = createAttestationCommit({
+      target,
+      slice,
+      phase,
+      subject,
+      signingKey: options["signing-key"] ?? options.signingKey ?? null
+    });
+    if (!created.ok) return { exitCode: EXIT_ERROR, payload: { status: "error", ...created, subject } };
+    return { exitCode: EXIT_OK, payload: { status: "ok", ...created, subject } };
+  }
+
+  if (options.verify) {
+    let config;
+    try {
+      config = loadConfig(target);
+    } catch (error) {
+      return { exitCode: error.exitCode ?? EXIT_ERROR, payload: { status: "error", message: error.message } };
+    }
+    const maintainers = config.governance?.maintainers ?? [];
+    if (maintainers.length === 0) {
+      return {
+        exitCode: EXIT_ACTION_REQUIRED,
+        payload: {
+          status: "not-configured",
+          code: "governance-maintainers-missing",
+          message: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida."
+        }
+      };
+    }
+    const result = verifySignoff({
+      target,
+      commitSha: options.commit ?? null,
+      subject,
+      maintainers,
+      headRef: options["head-ref"] ?? options.headRef ?? "HEAD"
+    });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED, payload: { status: result.ok ? "ok" : "blocked", ...result, subject } };
+  }
+
+  return {
+    exitCode: EXIT_ERROR,
+    payload: { status: "error", message: "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha>>" }
+  };
+}
+
 function commandDiff(options) {
   const target = requireTarget(options);
   const config = loadConfig(target);
@@ -857,7 +929,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida."
     }
   };
 }
@@ -927,6 +999,8 @@ export function run(argv) {
       return commandQualityBaseline(parsed.options);
     case "coverage-diff":
       return commandCoverageDiff(parsed.options);
+    case "signoff":
+      return commandSignoff(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":

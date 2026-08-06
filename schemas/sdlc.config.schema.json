@@ -54,6 +54,33 @@
         "branchPrefixes": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "governance": {
+      "type": "object",
+      "description": "Modelo de amenaza para la firma humana verificable (ADR 0007, signed-attestation). Con un solo maintainer, GitHub prohibe auto-aprobar un PR propio: platform-review es insatisfacible, y la firma se verifica por commit firmado en vez de por review de plataforma.",
+      "properties": {
+        "threatModel": {
+          "type": "string",
+          "enum": ["single-maintainer", "team"],
+          "default": "single-maintainer"
+        },
+        "maintainers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["signer"],
+            "properties": {
+              "name": { "type": "string" },
+              "signer": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Identidad exacta que reporta `git log --format=%GS` para una firma valida de esta persona (nombre y correo de la clave GPG/SSH, no de git config)."
+              }
+            }
+          }
+        }
+      }
+    },
     "openspec": {
       "type": "object",
       "required": ["profile"],
