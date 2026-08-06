@@ -41,6 +41,7 @@ import {
 } from "./eval-runner.js";
 import { commandQualityGate, commandQualityBaseline } from "./quality.js";
 import { baselineDoctorFindings } from "./quality-baseline.js";
+import { probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
 
 const EXIT_OK = 0;
@@ -616,6 +617,7 @@ function commandDoctor(options) {
   }
   findings.push(...collectDoctorEnhancements(target, config));
   findings.push(...baselineDoctorFindings(target));
+  findings.push(...probeAnchorDoctorFindings(target));
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {

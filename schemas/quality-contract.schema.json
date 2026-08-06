@@ -54,6 +54,11 @@
           },
           "emits": { "type": "string", "minLength": 1, "description": "Ruta del reporte nativo que produce el probe." },
           "format": { "type": "string", "minLength": 1, "description": "Formato del reporte, resuelto por un adapter fuera del engine." },
+          "command_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "sha256 del texto literal del script de package.json que corre este probe. Sin esto, el arbitro re-ejecuta lo que el evaluado declare hoy, sin garantia de que sea lo mismo que se reviso. Cambiar este valor pasa por el guard de frontera (quality-contract.yaml esta protegido), igual que cualquier otro cambio de contrato."
+          },
           "timeout_ms": { "type": "integer", "minimum": 1000, "default": 120000 },
           "when_absent": { "type": "string", "enum": ["skip", "warn", "fail"], "default": "warn" },
           "applies_when": {

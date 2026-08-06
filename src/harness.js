@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { pathExists, readTextIfExists } from "./file-utils.js";
+import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence } from "./quality-adjudicate.js";
 
@@ -387,16 +387,13 @@ const VERDICT_STEPS = [
 // falta: sin este precheck, un paso BLOCKING inexistente se reportaba `pass` y
 // contribuia a un READY falso. Se reporta `not-configured`, que no es pass ni
 // fail y no dispara el fail-fast.
-export function readPackageScripts(target) {
-  const raw = readTextIfExists(path.join(target, "package.json"));
-  if (!raw) return null;
-  try {
-    const scripts = JSON.parse(raw).scripts;
-    return scripts && typeof scripts === "object" ? scripts : {};
-  } catch {
-    return null;
-  }
-}
+//
+// La implementacion vive en file-utils.js (no aqui) porque quality-adjudicate.js
+// tambien la necesita para anclar los scripts de los probes por hash, y
+// quality-adjudicate no puede importar de harness.js: harness.js ya importa de
+// quality-adjudicate, y eso cerraria un ciclo. Se re-exporta para no romper a
+// quien ya la importaba desde aqui.
+export { readPackageScripts };
 
 /**
  * Ejecuta un script del consumidor con el package manager detectado, aplicando

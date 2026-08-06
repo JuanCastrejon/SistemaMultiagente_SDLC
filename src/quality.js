@@ -17,12 +17,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { pathExists } from "./file-utils.js";
+import { pathExists, readPackageScripts, sha256Text } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { detectPackageManager, runPackageScript } from "./harness.js";
-import { checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
+import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 
 const EXIT_OK = 0;
@@ -95,6 +95,7 @@ export async function commandQualityGate(options = {}) {
   }
   const contract = loaded.contract;
   const surfaceFindings = checkSurfaces(target, contract);
+  surfaceFindings.push(...checkProbeAnchors(target, contract));
   const tier = resolveTier(contract, options.surface ?? null);
 
   let metrics = {};
@@ -110,7 +111,10 @@ export async function commandQualityGate(options = {}) {
       };
     }
     const packageManager = detectPackageManager(target);
+    const declaredScripts = readPackageScripts(target) ?? {};
     for (const probe of contract.probes ?? []) {
+      const scriptText = declaredScripts[probe.command];
+      const commandSha256Actual = typeof scriptText === "string" ? sha256Text(scriptText) : null;
       const started = Date.now();
       const execution = runPackageScript(target, packageManager, probe.command, probe.timeout_ms ?? 120_000);
       const durationMs = Date.now() - started;
@@ -123,6 +127,7 @@ export async function commandQualityGate(options = {}) {
           exit_code: null,
           report_path: probe.emits,
           report_sha256: null,
+          command_sha256_actual: commandSha256Actual,
           duration_ms: durationMs,
           status: policy === "fail" ? "failed" : "not-configured",
           detail: `el consumidor no declara el script ${probe.command}`
@@ -138,6 +143,7 @@ export async function commandQualityGate(options = {}) {
         exit_code: execution.exitCode,
         report_path: probe.emits,
         report_sha256: report.reportSha256,
+        command_sha256_actual: commandSha256Actual,
         duration_ms: durationMs,
         status: execution.ok ? "ok" : "failed",
         detail: report.detail

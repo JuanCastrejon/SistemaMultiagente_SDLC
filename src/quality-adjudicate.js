@@ -9,7 +9,7 @@
 
 import path from "node:path";
 import YAML from "yaml";
-import { pathExists, readTextIfExists } from "./file-utils.js";
+import { pathExists, readPackageScripts, readTextIfExists, sha256Text } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { readEvidenceFile, detectEvidenceSmells } from "./evidence-validator.js";
 import { loadBaseline, loadBaselineMetrics } from "./quality-baseline.js";
@@ -41,6 +41,71 @@ export function checkSurfaces(target, contract) {
     }
   }
   return findings;
+}
+
+// El arbitro re-ejecuta lo que el package.json del EVALUADO declara para cada
+// probe (`validate:coverage`, etc.), sin ninguna garantia de que ese script
+// siga siendo el mismo que se reviso: reemplazarlo por algo que escribe
+// numeros perfectos sin correr nada real es indetectable sin esto. La
+// contramedida vive en quality-contract.yaml (ruta protegida por el guard de
+// frontera, ADR 0007 P2) porque cambiar el hash anclado exige el mismo review
+// humano que cualquier otro cambio de contrato.
+//
+// Un probe sin `command_sha256` no bloquea (escalera de adopcion, igual que
+// los gates): solo avisa y sugiere el valor a anclar, para no romper contratos
+// existentes el dia que esto se agrega.
+export function checkProbeAnchors(target, contract) {
+  const findings = [];
+  const declaredScripts = readPackageScripts(target) ?? {};
+  for (const probe of contract?.probes ?? []) {
+    const scriptText = declaredScripts[probe.command];
+    const actual = typeof scriptText === "string" ? sha256Text(scriptText) : null;
+
+    if (!probe.command_sha256) {
+      if (actual) {
+        findings.push({
+          level: "warning",
+          code: "probe-command-unpinned",
+          id: probe.id,
+          command: probe.command,
+          actual,
+          detail: `el probe ${probe.id} no ancla '${probe.command}' con command_sha256; valor actual para anclar en quality-contract.yaml: ${actual}`
+        });
+      }
+      continue;
+    }
+
+    if (actual === null) {
+      findings.push({
+        level: "error",
+        code: "probe-script-missing-pinned",
+        id: probe.id,
+        command: probe.command,
+        detail: `el probe ${probe.id} ancla '${probe.command}' (${probe.command_sha256.slice(0, 12)}) pero package.json ya no lo declara`
+      });
+      continue;
+    }
+
+    if (actual !== probe.command_sha256) {
+      findings.push({
+        level: "error",
+        code: "probe-script-drift",
+        id: probe.id,
+        command: probe.command,
+        actual,
+        detail: `el script '${probe.command}' del probe ${probe.id} cambio: anclado ${probe.command_sha256.slice(0, 12)}, ahora ${actual.slice(0, 12)}`
+      });
+    }
+  }
+  return findings;
+}
+
+// Para `sdlc doctor`: la misma verificacion, sin exigir que exista una
+// corrida de quality-gate. Si no hay contrato todavia, no hay nada que anclar.
+export function probeAnchorDoctorFindings(target) {
+  const loaded = loadQualityContract(target);
+  if (!loaded.ok) return [];
+  return checkProbeAnchors(target, loaded.contract);
 }
 
 export function resolveTier(contract, surfaceId = null) {

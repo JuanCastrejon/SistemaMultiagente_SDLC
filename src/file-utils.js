@@ -35,6 +35,17 @@ export function readTextIfExists(filePath) {
   return pathExists(filePath) ? fs.readFileSync(filePath, "utf8") : null;
 }
 
+export function readPackageScripts(target) {
+  const raw = readTextIfExists(path.join(target, "package.json"));
+  if (!raw) return null;
+  try {
+    const scripts = JSON.parse(raw).scripts;
+    return scripts && typeof scripts === "object" ? scripts : {};
+  } catch {
+    return null;
+  }
+}
+
 export function normalizeLF(value) {
   return value.replace(/\r\n/g, "\n");
 }
