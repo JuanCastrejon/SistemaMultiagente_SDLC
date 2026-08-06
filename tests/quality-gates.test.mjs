@@ -93,7 +93,17 @@ const regression = evaluateQualityGates({
   baseline: { coverage: { lines_pct: 80 } }
 });
 assert.equal(regression.evaluated[0].status, "regression");
-assert.equal(regression.status, "warning");
+// Un gate en modo ratchet BLOQUEA al regresionar: ese es el sentido del
+// ratchet. El default de on_regression es "block" cuando mode es "ratchet".
+assert.equal(regression.status, "blocked");
+assert.equal(regression.violations[0].code, "gate-regression");
+// Y se puede degradar explicitamente a aviso si el consumidor lo declara.
+const regressionWarnOnly = evaluateQualityGates({
+  gates: [{ ...ratchetGate, on_regression: "warn" }],
+  metrics: { coverage: { lines_pct: 71 } },
+  baseline: { coverage: { lines_pct: 80 } }
+});
+assert.equal(regressionWarnOnly.status, "warning");
 
 const improvement = evaluateQualityGates({
   gates: [ratchetGate],
@@ -135,6 +145,56 @@ const eqRegression = evaluateQualityGates({
 });
 assert.equal(eqRegression.evaluated[0].status, "regression");
 assert.equal(eqRegression.evaluated[0].regressed, true);
+
+// --- P0.1: el baseline se compara SIEMPRE, no solo en mode ratchet ---------
+// Antes, un gate en mode block con regresion pasaba inadvertido mientras el
+// valor siguiera cumpliendo el umbral absoluto.
+const blockWithRegression = evaluateQualityGates({
+  gates: [{ id: "cov", metric: "coverage.lines_pct", op: "gte", mode: "block", threshold: 80, on_regression: "block" }],
+  metrics: { coverage: { lines_pct: 85 } },
+  baseline: { coverage: { lines_pct: 95 } }
+});
+assert.equal(blockWithRegression.evaluated[0].regressed, true, "85 < 95 es regresion aunque cumpla el umbral 80");
+assert.equal(blockWithRegression.status, "blocked");
+assert.equal(blockWithRegression.violations[0].code, "gate-regression");
+
+// El umbral absoluto se sigue evaluando aunque haya regresion: antes el
+// `continue` tras detectarla impedia que se reportara el fallo de umbral.
+const bothFail = evaluateQualityGates({
+  gates: [{ id: "cov", metric: "coverage.lines_pct", op: "gte", mode: "ratchet", threshold: 80 }],
+  metrics: { coverage: { lines_pct: 12 } },
+  baseline: { coverage: { lines_pct: 95 } }
+});
+assert.equal(bothFail.evaluated[0].status, "regression");
+const codes = [...bothFail.violations, ...bothFail.warnings].map((f) => f.code).sort();
+assert.deepEqual(codes, ["gate-failed", "gate-regression"], "deben reportarse ambos hallazgos, no solo el primero");
+
+// on_regression separa modo de efecto: observe puede bloquear al regresionar.
+const observeButBlocksRegression = evaluateQualityGates({
+  gates: [{ id: "cov", metric: "coverage.lines_pct", op: "gte", mode: "observe", threshold: 0, on_regression: "block" }],
+  metrics: { coverage: { lines_pct: 70 } },
+  baseline: { coverage: { lines_pct: 90 } }
+});
+assert.equal(observeButBlocksRegression.status, "blocked");
+
+// --- P0.3: un gate declarado por la fase que no se mide es violacion -------
+const notMeasuredDeclared = evaluateQualityGates({
+  gates: [{ id: "F8.cov", phase: "F8", metric: "coverage.changed_lines_pct", op: "gte", mode: "observe", threshold: 90 }],
+  metrics: {},
+  phase: "F8",
+  declaredByContract: ["F8.cov"]
+});
+assert.equal(notMeasuredDeclared.status, "blocked", "la fase promete medir y no midio");
+assert.equal(notMeasuredDeclared.violations[0].code, "gate-not-measured");
+assert.equal(notMeasuredDeclared.evaluated[0].declaredByPhase, true);
+
+// El mismo gate NO declarado por la fase sigue siendo aviso en modo observe.
+const notMeasuredUndeclared = evaluateQualityGates({
+  gates: [{ id: "F8.cov", phase: "F8", metric: "coverage.changed_lines_pct", op: "gte", mode: "observe", threshold: 90 }],
+  metrics: {},
+  phase: "F8"
+});
+assert.equal(notMeasuredUndeclared.status, "warning");
 
 // --- errores de contrato ---------------------------------------------------
 const unknownOp = evaluateQualityGates({ gates: [{ id: "x", metric: "a", op: "aproximadamente" }], metrics: { a: 1 } });

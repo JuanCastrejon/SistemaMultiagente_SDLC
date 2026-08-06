@@ -95,7 +95,23 @@ function checkDenominator(gate, metrics) {
  * @param {object} [input.baseline] Linea base para los gates en modo ratchet.
  * @returns {{evaluated: Array, violations: Array, warnings: Array, vacuous: Array, status: string}}
  */
-export function evaluateQualityGates({ gates = [], metrics = {}, phase = null, tier = null, baseline = {} } = {}) {
+export function evaluateQualityGates({
+  gates = [],
+  metrics = {},
+  phase = null,
+  tier = null,
+  baseline = {},
+  // Ids de gates que la FASE declara en phase-contract.yaml. Un gate declarado
+  // por el contrato de fases es una promesa explicita de medir algo; si no se
+  // midio, la promesa se incumplio y eso no puede degradarse a aviso segun el
+  // modo. El modo gradua cuan exigente es el umbral, no si la medicion existe.
+  declaredByContract = null
+} = {}) {
+  const declaredSet = declaredByContract instanceof Set
+    ? declaredByContract
+    : Array.isArray(declaredByContract)
+      ? new Set(declaredByContract)
+      : null;
   const evaluated = [];
   const violations = [];
   const warnings = [];
@@ -103,6 +119,7 @@ export function evaluateQualityGates({ gates = [], metrics = {}, phase = null, t
 
   for (const gate of gates) {
     if (phase && gate.phase && gate.phase !== phase) continue;
+    const declaredByPhase = declaredSet ? declaredSet.has(gate.id) : false;
 
     const mode = GATE_MODES.has(gate.mode) ? gate.mode : "observe";
     const operator = GATE_OPERATORS[gate.op];
@@ -132,10 +149,15 @@ export function evaluateQualityGates({ gates = [], metrics = {}, phase = null, t
     // silencio, que es exactamente como se cuela un falso verde.
     if (actual === undefined && gate.op !== "absent") {
       entry.status = "not-measured";
-      entry.reason = `no hay metrica en ${gate.metric}`;
+      entry.declaredByPhase = declaredByPhase;
+      entry.reason = declaredByPhase
+        ? `la fase declara el gate ${gate.id} pero no hay metrica en ${gate.metric}`
+        : `no hay metrica en ${gate.metric}`;
       evaluated.push(entry);
-      const finding = { code: "gate-not-measured", id: gate.id, metric: gate.metric, mode };
-      if (mode === "block") violations.push(finding);
+      const finding = { code: "gate-not-measured", id: gate.id, metric: gate.metric, mode, declaredByPhase };
+      // Si la fase lo declara en su contrato, no medirlo es incumplir el
+      // contrato, sin importar el modo del gate.
+      if (mode === "block" || declaredByPhase) violations.push(finding);
       else warnings.push(finding);
       continue;
     }
@@ -169,39 +191,60 @@ export function evaluateQualityGates({ gates = [], metrics = {}, phase = null, t
       passed = operator(actual, threshold);
     }
 
-    // Ratchet: ademas del umbral, no se puede empeorar respecto de la base.
+    // El baseline se compara SIEMPRE que exista, no solo en mode "ratchet".
+    // Atarlo al modo tenia dos consecuencias malas: en mode "block" una
+    // regresion pasaba inadvertida mientras el valor siguiera cumpliendo el
+    // umbral, y en mode "ratchet" el umbral absoluto no llegaba a evaluarse
+    // nunca porque la deteccion de regresion cortaba el flujo.
+    //
     // La direccion de "empeorar" depende del operador, NO se puede asumir
     // "mas alto es mejor" como default: gte (cobertura) sube, lte y eq
-    // (violaciones, ciclos, mutantes) bajan. Un default equivocado aqui
-    // invierte el ratchet: marcaria como regresion justo las mejoras, que es
-    // el tipo de bug que este mismo diseno existe para atrapar en el
-    // consumidor, no para cometer en el engine.
-    if (mode === "ratchet") {
-      const baseValue = resolveMetric(baseline, gate.metric);
+    // (violaciones, ciclos, mutantes) bajan.
+    const baseValue = resolveMetric(baseline, gate.metric);
+    let regressed = false;
+    if (typeof baseValue === "number" && typeof actual === "number") {
+      entry.baseline = baseValue;
+      const worseIsHigher = gate.op === "lte" || gate.op === "eq";
+      regressed = worseIsHigher ? actual > baseValue : actual < baseValue;
+      entry.regressed = regressed;
+    } else {
       entry.baseline = baseValue ?? null;
-      if (typeof baseValue === "number" && typeof actual === "number") {
-        const worseIsHigher = gate.op === "lte" || gate.op === "eq";
-        const regressed = worseIsHigher ? actual > baseValue : actual < baseValue;
-        entry.regressed = regressed;
-        if (regressed) {
-          entry.status = "regression";
-          entry.reason = `regresion contra baseline: ${actual} vs ${baseValue}`;
-          evaluated.push(entry);
-          warnings.push({ code: "gate-regression", id: gate.id, detail: entry.reason, mode });
-          continue;
-        }
-      }
     }
 
-    entry.status = passed ? "pass" : "fail";
+    // Modo y efecto son cosas distintas. `mode` dice que tan exigente es el
+    // umbral absoluto; `on_regression` dice que pasa si ademas se empeora
+    // respecto de la linea base. Por defecto, un gate en ratchet bloquea al
+    // regresionar (es el sentido del ratchet) y en cualquier otro modo avisa.
+    const onRegression = gate.on_regression ?? (mode === "ratchet" ? "block" : "warn");
+    entry.onRegression = onRegression;
+
+    // El umbral absoluto se evalua SIEMPRE, haya o no regresion.
+    entry.status = regressed ? "regression" : passed ? "pass" : "fail";
+    const reasons = [];
     if (!passed) {
-      entry.reason = `${gate.metric}=${actual} no cumple ${OPERATOR_LABEL[gate.op] ?? gate.op} ${threshold}`;
+      reasons.push(`${gate.metric}=${actual} no cumple ${OPERATOR_LABEL[gate.op] ?? gate.op} ${threshold}`);
     }
+    if (regressed) {
+      reasons.push(`regresion contra baseline: ${actual} vs ${baseValue}`);
+    }
+    if (reasons.length > 0) entry.reason = reasons.join("; ");
     evaluated.push(entry);
 
+    if (regressed) {
+      const finding = {
+        code: "gate-regression",
+        id: gate.id,
+        detail: `regresion contra baseline: ${actual} vs ${baseValue}`,
+        mode,
+        onRegression
+      };
+      if (onRegression === "block") violations.push(finding);
+      else warnings.push(finding);
+    }
     if (!passed) {
-      const finding = { code: "gate-failed", id: gate.id, detail: entry.reason, mode };
-      // La escalera: observe y ratchet informan, solo block detiene.
+      const finding = { code: "gate-failed", id: gate.id, detail: reasons[0], mode };
+      // La escalera: observe y ratchet informan sobre el umbral absoluto,
+      // solo block detiene por el.
       if (mode === "block") violations.push(finding);
       else warnings.push(finding);
     }

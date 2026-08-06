@@ -75,10 +75,54 @@ export function readEvidenceFile(absolutePath) {
 /**
  * Señales de que la evidencia fue redactada en vez de anexada por el harness.
  * No prueban fraude: marcan lo que un revisor humano o el arbitro debe mirar.
+ *
+ * @param {object} evidence
+ * @param {object} [expectations]
+ * @param {boolean} [expectations.expectsQualityMetrics] La fase declara gates
+ *   de calidad en phase-contract.yaml, asi que DEBE traer mediciones.
+ * @param {boolean} [expectations.expectsSignoff] La fase tiene human_gate.
  */
-export function detectEvidenceSmells(evidence) {
+export function detectEvidenceSmells(evidence, expectations = {}) {
   const smells = [];
   const quality = evidence?.quality_metrics;
+
+  // La evidencia VACIA era el punto ciego: un YAML valido sin ninguna metrica
+  // pasaba sin un solo hallazgo, que es exactamente la forma de un gate
+  // satisfecho sin haber medido nada. La ausencia se detecta antes que la
+  // forma.
+  if (expectations.expectsQualityMetrics) {
+    if (!quality) {
+      smells.push({
+        level: "error",
+        code: "quality-metrics-absent",
+        detail: "la fase declara gates de calidad y la evidencia no trae quality_metrics: no se midio nada"
+      });
+    } else if (!quality.metrics || Object.keys(quality.metrics).length === 0) {
+      smells.push({
+        level: "error",
+        code: "quality-metrics-empty",
+        detail: "quality_metrics existe pero no contiene ninguna metrica"
+      });
+    } else if (!Array.isArray(quality.probes) || quality.probes.length === 0) {
+      smells.push({
+        level: "error",
+        code: "quality-metrics-without-probes",
+        detail: "hay metricas pero ningun probe declarado que las produjera"
+      });
+    }
+  }
+
+  if (expectations.expectsSignoff) {
+    const signoff = evidence?.human_gate_signoff;
+    if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
+      smells.push({
+        level: "error",
+        code: "signoff-absent",
+        detail: "la fase tiene gate humano y la evidencia no trae human_gate_signoff con aprobador"
+      });
+    }
+  }
+
   if (quality) {
     if (quality.source !== "harness" && quality.source !== "ci") {
       smells.push({ code: "evidence-source-unset", detail: "quality_metrics.source no es harness ni ci" });

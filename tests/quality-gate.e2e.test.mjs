@@ -480,4 +480,36 @@ const regressedRatchet = JSON.parse(
 assert.equal(regressedRatchet.evaluated[0].status, "regression");
 assert.equal(regressedRatchet.evaluated[0].regressed, true);
 
+// --- 10. evidencia valida pero VACIA en una fase que declara gates --------
+// Este es el caso real encontrado en el repo padre: un F12.yaml bien formado,
+// sin quality_metrics y con human_gate_signoff null, que pasaba con cero
+// hallazgos. La forma era correcta; lo que faltaba era el contenido.
+const emptyEvidenceDir = path.join(baselineTarget, ".github", "agent-state", "evidence", "slice-vacia");
+fs.mkdirSync(emptyEvidenceDir, { recursive: true });
+fs.writeFileSync(
+  path.join(emptyEvidenceDir, "F8.yaml"),
+  YAML.stringify({
+    phase: "F8",
+    slice: "slice-vacia",
+    agent_id: "dev",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: []
+  }),
+  "utf8"
+);
+const emptyGate = JSON.parse(
+  runCli(["phase-gate", "--target", baselineTarget, "--phase", "F8", "--slice", "slice-vacia", "--json"]).stdout
+);
+assert.equal(emptyGate.evidence.valid, true, "la FORMA del YAML es valida");
+assert.ok(
+  emptyGate.evidence.smells.some((smell) => smell.code === "quality-metrics-absent"),
+  "pero F8 declara quality_gates y no hay ninguna medicion"
+);
+assert.ok(
+  emptyGate.blockers.includes("quality-metrics-absent"),
+  "una fase que promete medir y no mide no puede pasar"
+);
+assert.equal(emptyGate.status, "blocked");
+
 console.log("quality-gate e2e: PASS");

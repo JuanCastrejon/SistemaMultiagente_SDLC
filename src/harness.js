@@ -248,10 +248,22 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
       if (evidence.required) evidenceBlockers.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
       else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
     } else {
-      const smells = detectEvidenceSmells(read.evidence);
+      // Las expectativas vienen del contrato de la fase: si declara gates de
+      // calidad tiene que traer mediciones, y si tiene gate humano tiene que
+      // traer firma. Sin esto, una evidencia valida pero VACIA pasaba limpia.
+      const declaresQualityGates = Array.isArray(phase.quality_gates) && phase.quality_gates.length > 0;
+      const smells = detectEvidenceSmells(read.evidence, {
+        expectsQualityMetrics: declaresQualityGates,
+        expectsSignoff: Boolean(phase.human_gate)
+      });
       if (smells.length > 0) {
         evidence.smells = smells;
-        evidenceWarnings.push(...smells.map((smell) => `${smell.code}`));
+        for (const smell of smells) {
+          // Un olor de nivel error en una fase que exige evidencia bloquea; el
+          // resto sigue siendo senal para el revisor.
+          if (smell.level === "error" && evidence.required) evidenceBlockers.push(smell.code);
+          else evidenceWarnings.push(smell.code);
+        }
       }
       // El gate humano deja de ser un campo de texto que el propio agente puede
       // escribir: exige la referencia a un review verificable.

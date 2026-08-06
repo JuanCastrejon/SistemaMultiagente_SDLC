@@ -111,7 +111,10 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     metrics,
     phase,
     tier: resolveTier(contract),
-    baseline
+    baseline,
+    // Los gates que la fase declara en phase-contract.yaml son promesas de
+    // medicion: no medirlos es incumplir el contrato, no un aviso.
+    declaredByContract: Array.isArray(gateIds) ? gateIds : null
   });
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
