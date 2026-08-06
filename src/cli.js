@@ -39,7 +39,8 @@ import {
   commandSkillEval,
   commandSkillPropose
 } from "./eval-runner.js";
-import { commandQualityGate } from "./quality.js";
+import { commandQualityGate, commandQualityBaseline } from "./quality.js";
+import { baselineDoctorFindings } from "./quality-baseline.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -613,6 +614,7 @@ function commandDoctor(options) {
     }
   }
   findings.push(...collectDoctorEnhancements(target, config));
+  findings.push(...baselineDoctorFindings(target));
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {
@@ -852,7 +854,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito."
     }
   };
 }
@@ -918,6 +920,8 @@ export function run(argv) {
     }
     case "quality-gate":
       return commandQualityGate(parsed.options);
+    case "quality-baseline":
+      return commandQualityBaseline(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":

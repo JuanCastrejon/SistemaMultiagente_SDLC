@@ -60,12 +60,14 @@ probes:
       min_subjects: 1
 
 gates:
-  # F8: el agente implementa. Aqui se observa, no se bloquea.
+  # F8: el agente implementa. Ratchet desde 1.11: no puede empeorar respecto
+  # del baseline, pero el umbral absoluto de mas abajo sigue vigente ademas.
+  # Con baseline vacio (aun no promovido), se comporta como observe puro.
   - id: F8.changed-lines-coverage
     phase: F8
     metric: coverage.changed_lines_pct
     op: gte
-    mode: observe
+    mode: ratchet
     thresholds:
       core: 90
       standard: 80
@@ -100,11 +102,14 @@ gates:
 
   # F10: arquitectura. Nace limpio en la mayoria de repos, pero igual entra por
   # la escalera: el denominador evita que "0 violaciones" signifique "0 modulos".
+  # Ratchet desde 1.11: el umbral absoluto (0) ya es la meta final, el ratchet
+  # aqui existe para que una regresion parcial (de 0 a N) se marque como tal
+  # incluso antes de que el umbral absoluto la capture.
   - id: F10.dependency-violations
     phase: F10
     metric: dependencies.violations
     op: eq
-    mode: observe
+    mode: ratchet
     threshold: 0
     min_denominator:
       metric: dependencies.modules_scanned
@@ -115,7 +120,7 @@ gates:
     phase: F10
     metric: dependencies.cycles
     op: eq
-    mode: observe
+    mode: ratchet
     threshold: 0
     min_denominator:
       metric: dependencies.modules_scanned

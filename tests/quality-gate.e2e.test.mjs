@@ -328,4 +328,156 @@ assert.ok(statusOut.quality, "status debe exponer el componente quality");
 assert.equal(statusOut.quality.advisory, true, "medido en local, nunca autoritativo");
 assert.ok(statusOut.quality.evaluated.length > 0);
 
+// --- 9. baseline: promocion, integridad y ratchet real ---------------------
+// Repo nuevo, instalado de verdad para tener quality-baseline.yaml de fabrica.
+const baselineTarget = path.join(tempRoot, "con-baseline");
+fs.mkdirSync(baselineTarget, { recursive: true });
+fs.writeFileSync(path.join(baselineTarget, "README.md"), "# demo\n", "utf8");
+execFileSync("node", [cli, "install", "--target", baselineTarget, "--mode", "greenfield", "--project-name", "Baseline Demo", "--json"], {
+  cwd: repoRoot,
+  encoding: "utf8"
+});
+
+const baselineFile = path.join(baselineTarget, ".github", "agent-state", "quality-baseline.yaml");
+// NO se instala por manifiesto (mismo tratamiento que .sdlc/session.json):
+// evita managed-file-drift contra las promociones legitimas que lo reescriben.
+assert.ok(!fs.existsSync(baselineFile), "antes de la primera promocion no existe fisicamente");
+
+// Sin --source ci y sin --allow-local, promover se rechaza.
+const refusedPromotion = runCli(["quality-baseline", "--target", baselineTarget, "--promote", "--slice", "slice-base", "--json"]);
+assert.notEqual(refusedPromotion.status, 0);
+assert.equal(JSON.parse(refusedPromotion.stdout).code, "baseline-promotion-requires-ci");
+
+// Evidencia de F15 con metricas reales para promover.
+const f15Dir = path.join(baselineTarget, ".github", "agent-state", "evidence", "slice-base");
+fs.mkdirSync(f15Dir, { recursive: true });
+fs.writeFileSync(
+  path.join(f15Dir, "F15.yaml"),
+  YAML.stringify({
+    phase: "F15",
+    slice: "slice-base",
+    agent_id: "orquestador",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: [],
+    quality_metrics: {
+      measured_at: new Date().toISOString(),
+      source: "ci",
+      tree_hash: "cafef00d",
+      probes: [],
+      metrics: { dependencies: { violations: 2, cycles: 0, modules_scanned: 12 }, coverage: { changed_lines_pct: 88, changed_lines_total: 15 } }
+    }
+  }),
+  "utf8"
+);
+
+const promoted = JSON.parse(
+  runCli(["quality-baseline", "--target", baselineTarget, "--promote", "--slice", "slice-base", "--allow-local", "--json"]).stdout
+);
+assert.equal(promoted.status, "ok");
+const promotedDoc = YAML.parse(fs.readFileSync(baselineFile, "utf8"));
+assert.ok(promotedDoc.promoted_at);
+assert.ok(promotedDoc.integrity_sha256);
+assert.equal(promotedDoc.metrics.dependencies.violations, 2);
+assert.match(promotedDoc.promoted_by, /^local:/, "una promocion sin --source ci debe quedar marcada como local");
+
+// doctor no marca tampering justo despues de una promocion legitima. Se usa
+// runCli (spawnSync) y no execFileSync: doctor puede salir con exit != 0 por
+// el warning esperado de "promocion local", y execFileSync lanzaria por eso.
+const doctorClean = JSON.parse(runCli(["doctor", "--target", baselineTarget, "--json"]).stdout);
+assert.ok(!doctorClean.findings.some((finding) => finding.code === "baseline-tampered"));
+assert.ok(doctorClean.findings.some((finding) => finding.code === "baseline-promoted-locally"));
+
+// Manipular el archivo a mano (bajar violations sin recalcular el hash) rompe
+// la integridad, y doctor lo detecta.
+const tampered = YAML.parse(fs.readFileSync(baselineFile, "utf8"));
+tampered.metrics.dependencies.violations = 0;
+fs.writeFileSync(baselineFile, YAML.stringify(tampered), "utf8");
+const doctorTamperedPayload = JSON.parse(runCli(["doctor", "--target", baselineTarget, "--json"]).stdout);
+assert.ok(doctorTamperedPayload.findings.some((finding) => finding.code === "baseline-tampered"));
+assert.equal(doctorTamperedPayload.status, "error");
+
+// Restaurar el baseline legitimo para el resto del test.
+fs.writeFileSync(baselineFile, YAML.stringify(promotedDoc), "utf8");
+
+// --- ratchet real: F10 compara contra lo promovido -------------------------
+writeContract({
+  gates: [
+    {
+      id: "F10.dependency-violations",
+      phase: "F10",
+      metric: "dependencies.violations",
+      op: "eq",
+      mode: "ratchet",
+      threshold: 0,
+      min_denominator: { metric: "dependencies.modules_scanned", value: 10 },
+      provenance: "decision-de-equipo"
+    }
+  ]
+});
+// El contrato de mas arriba usa `target`, no `baselineTarget`; se copia aqui
+// para reusar el helper sin reescribirlo. `writeContract` declara
+// packages/dominio como superficie por defecto: tiene que existir tambien en
+// baselineTarget o checkSurfaces lo marca como superficie fantasma.
+fs.mkdirSync(path.join(baselineTarget, "packages", "dominio"), { recursive: true });
+fs.copyFileSync(path.join(target, "quality-contract.yaml"), path.join(baselineTarget, "quality-contract.yaml"));
+
+const f10Dir = path.join(baselineTarget, ".github", "agent-state", "evidence", "slice-ratchet");
+fs.mkdirSync(f10Dir, { recursive: true });
+
+// Mismo nivel que el baseline (2): no es regresion, pero tampoco pasa el
+// absoluto (eq 0). Debe avisar, no bloquear.
+fs.writeFileSync(
+  path.join(f10Dir, "F10.yaml"),
+  YAML.stringify({
+    phase: "F10",
+    slice: "slice-ratchet",
+    agent_id: "qa",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: [],
+    quality_metrics: {
+      measured_at: new Date().toISOString(),
+      source: "harness",
+      tree_hash: "beefbeef",
+      probes: [],
+      metrics: { dependencies: { violations: 2, cycles: 0, modules_scanned: 12 } }
+    }
+  }),
+  "utf8"
+);
+const stableRatchet = JSON.parse(
+  runCli(["quality-gate", "--target", baselineTarget, "--slice", "slice-ratchet", "--phase", "F10", "--from-evidence", "--json"]).stdout
+);
+assert.equal(stableRatchet.evaluated[0].status, "fail");
+assert.equal(stableRatchet.evaluated[0].regressed, false);
+assert.equal(stableRatchet.status, "warning", "ratchet no bloquea aunque no llegue al absoluto");
+
+// Peor que el baseline (5 > 2): regresion real, detectada con la direccion
+// correcta despues del fix del bug de eq/gte.
+fs.writeFileSync(
+  path.join(f10Dir, "F10.yaml"),
+  YAML.stringify({
+    phase: "F10",
+    slice: "slice-ratchet",
+    agent_id: "qa",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: [],
+    quality_metrics: {
+      measured_at: new Date().toISOString(),
+      source: "harness",
+      tree_hash: "beefbeef2",
+      probes: [],
+      metrics: { dependencies: { violations: 5, cycles: 0, modules_scanned: 12 } }
+    }
+  }),
+  "utf8"
+);
+const regressedRatchet = JSON.parse(
+  runCli(["quality-gate", "--target", baselineTarget, "--slice", "slice-ratchet", "--phase", "F10", "--from-evidence", "--json"]).stdout
+);
+assert.equal(regressedRatchet.evaluated[0].status, "regression");
+assert.equal(regressedRatchet.evaluated[0].regressed, true);
+
 console.log("quality-gate e2e: PASS");

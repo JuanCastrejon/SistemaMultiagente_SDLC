@@ -24,6 +24,7 @@ const DEFAULT_LOCKED = [
   "openspec/changes/*/acceptance/",
   "quality-contract.yaml",
   "phase-contract.yaml",
+  ".github/agent-state/quality-baseline.yaml",
   ".github/workflows/",
   "vitest.config",
   "stryker.conf",

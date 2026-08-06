@@ -170,11 +170,18 @@ export function evaluateQualityGates({ gates = [], metrics = {}, phase = null, t
     }
 
     // Ratchet: ademas del umbral, no se puede empeorar respecto de la base.
+    // La direccion de "empeorar" depende del operador, NO se puede asumir
+    // "mas alto es mejor" como default: gte (cobertura) sube, lte y eq
+    // (violaciones, ciclos, mutantes) bajan. Un default equivocado aqui
+    // invierte el ratchet: marcaria como regresion justo las mejoras, que es
+    // el tipo de bug que este mismo diseno existe para atrapar en el
+    // consumidor, no para cometer en el engine.
     if (mode === "ratchet") {
       const baseValue = resolveMetric(baseline, gate.metric);
       entry.baseline = baseValue ?? null;
       if (typeof baseValue === "number" && typeof actual === "number") {
-        const regressed = gate.op === "lte" ? actual > baseValue : actual < baseValue;
+        const worseIsHigher = gate.op === "lte" || gate.op === "eq";
+        const regressed = worseIsHigher ? actual > baseValue : actual < baseValue;
         entry.regressed = regressed;
         if (regressed) {
           entry.status = "regression";

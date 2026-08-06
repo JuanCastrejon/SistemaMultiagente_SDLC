@@ -110,6 +110,32 @@ const ratchetLte = evaluateQualityGates({
 });
 assert.equal(ratchetLte.evaluated[0].status, "regression");
 
+// Bug real encontrado al conectar el baseline: `eq` (violaciones, ciclos)
+// heredaba la direccion de `gte` y marcaba una MEJORA como regresion.
+//
+// Bajar de 5 a 2 violaciones NO regresiona (el umbral absoluto sigue sin
+// cumplirse porque el objetivo final es 0, y ratchet no exime de el; lo que
+// importa aqui es que `regressed` sea false y el status NO sea "regression").
+const eqImprovement = evaluateQualityGates({
+  gates: [{ id: "deps", metric: "dependencies.violations", op: "eq", mode: "ratchet", threshold: 0 }],
+  metrics: { dependencies: { violations: 2 } },
+  baseline: { dependencies: { violations: 5 } }
+});
+assert.equal(eqImprovement.evaluated[0].status, "fail", "2 sigue sin ser 0, pero no es peor que el baseline");
+assert.equal(eqImprovement.evaluated[0].regressed, false);
+assert.equal(eqImprovement.violations.length, 0, "ratchet no bloquea, solo observa/avisa");
+
+// Subir de 2 a 5 violaciones SI es regresion: se detecta antes de mirar el
+// umbral absoluto, y con la direccion correcta (antes del fix, este caso se
+// habria colado como pass).
+const eqRegression = evaluateQualityGates({
+  gates: [{ id: "deps", metric: "dependencies.violations", op: "eq", mode: "ratchet", threshold: 0 }],
+  metrics: { dependencies: { violations: 5 } },
+  baseline: { dependencies: { violations: 2 } }
+});
+assert.equal(eqRegression.evaluated[0].status, "regression");
+assert.equal(eqRegression.evaluated[0].regressed, true);
+
 // --- errores de contrato ---------------------------------------------------
 const unknownOp = evaluateQualityGates({ gates: [{ id: "x", metric: "a", op: "aproximadamente" }], metrics: { a: 1 } });
 assert.equal(unknownOp.violations[0].code, "gate-invalid");

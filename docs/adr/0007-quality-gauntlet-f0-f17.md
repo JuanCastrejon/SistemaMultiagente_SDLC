@@ -199,6 +199,24 @@ Dos defectos del framework aparecieron al construir esto, ambos preexistentes:
 - El interpolador de plantillas destruía las expresiones `${{ ... }}` de GitHub Actions, así que **el framework no podía entregar ningún workflow** con sintaxis de Actions sin romperlo. Corregido en `interpolate` y en su validador.
 - `schemas/phase-evidence.schema.json` declara draft 2020-12 y Ajv 8 solo compila hasta draft-07 por defecto: el primer intento de validar evidencia fallaba con `no schema with key or ref`. Es la prueba de que el schema nunca se había compilado desde que se instaló en 1.5.0.
 
+### 1.11.0 — ratchet
+
+| Pieza | Estado | Verificación |
+|---|---|---|
+| `src/quality-baseline.js` (baseline versionado, tamper-evidente) | hecho | E2E: promoción, verificación de integridad, manipulación detectada por `doctor` |
+| `sdlc quality-baseline --promote` | hecho | Sin `--source ci` exige `--allow-local` explícito; sin ninguno se rechaza |
+| `evaluateQualityGates` compara contra baseline real | hecho | Conectado en `quality-adjudicate.js` y `quality.js`; ambos caminos (`--run`, `--from-evidence`, `phase-gate`, `status`) usan el mismo baseline |
+| `doctor` detecta `baseline-tampered` | hecho | Edición manual sin recalcular `integrity_sha256` produce `status: error` |
+| Gates de F8 y F10 suben a `ratchet` en el contrato por defecto | hecho | `F8.changed-lines-coverage`, `F10.dependency-violations`, `F10.dependency-cycles` |
+| `NOT_CONFIGURED` pasa de WARNING a BLOCKING en `VERDICT_STEPS` | pendiente | Es el cierre de la escalera completa; queda para cuando haya consumidores reales operando en modo `ratchet` con historial |
+| Guard anti-regresión explícito en F14 | **no resuelto, documentado como gap** | Ver nota abajo |
+
+**Bug real encontrado al conectar el baseline, no cosmético.** `evaluateQualityGates` calculaba la dirección de "empeorar" en modo `ratchet` con `gate.op === "lte" ? actual > baseValue : actual < baseValue`, es decir, asumía que cualquier operador distinto de `lte` se comporta como `gte` (más alto es mejor). Para gates con `op: eq` sobre conteos donde **menos es mejor** —violaciones de dependencias, ciclos— eso invierte el ratchet: bajar de 5 a 2 violaciones se marcaba como regresión, y subir de 2 a 5 como mejora. Es exactamente el tipo de falso verde que todo este diseño existe para impedir en el consumidor, cometido esta vez en el engine. Corregido antes de activar `ratchet` en el contrato por defecto, con test que cubre ambas direcciones.
+
+**Gap documentado, no resuelto por comodidad: guard anti-regresión en F14.** La síntesis original proponía que F14 (merge) re-verificara que las métricas del slice no empeoraran el baseline antes de fusionar. No lo conecté: el mecanismo de `quality_gates` por fase adjudica sobre la evidencia **de esa misma fase**, y F14 es la fase de merge — no produce mediciones propias. Conectarlo de verdad exige decidir cómo F14 hereda las métricas de F9/F10 (¿evidencia copiada hacia adelante? ¿el job de F14 vuelve a leer la evidencia de F10 directamente?), que es una decisión de proceso, no solo de código. Documentado aquí en vez de fabricar un mecanismo de "arrastre" no verificado. La protección real contra fusionar una regresión hoy es que F8/F10 ya la reportan como `warning` visible en el PR body (F12), y el gate humano de F13 la ve antes de aprobar.
+
+`quality-baseline.yaml` recibió el mismo tratamiento que `.sdlc/session.json` en 1.8.0: se sacó del manifiesto porque `promoteBaseline` lo reescribe en runtime, y un archivo gestionado que otra ruta legítima reescribe produce `managed-file-drift` permanente contra sí mismo. Antes de la primera promoción no existe físicamente; `loadBaseline()` devuelve un baseline vacío en memoria y todo gate `ratchet` se evalúa sin comparación.
+
 ## Primer paso
 
 Un solo cambio, con test de regresión, sin tocar ningún archivo gestionado del consumidor: añadir en `commandVerdict` (`src/harness.js`) un precheck de existencia contra `packageJson.scripts` antes de invocar el package manager, y clasificar el paso ausente como `NOT_CONFIGURED` en vez de `pass`.

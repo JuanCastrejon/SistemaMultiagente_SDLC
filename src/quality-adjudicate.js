@@ -12,6 +12,7 @@ import YAML from "yaml";
 import { pathExists, readTextIfExists } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { readEvidenceFile, detectEvidenceSmells } from "./evidence-validator.js";
+import { loadBaseline, loadBaselineMetrics } from "./quality-baseline.js";
 
 export function loadQualityContract(target) {
   const contractPath = path.join(target, "quality-contract.yaml");
@@ -86,6 +87,20 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
   const smells = detectEvidenceSmells(read.evidence).map((smell) => ({ level: "warning", ...smell }));
   const surfaceFindings = checkSurfaces(target, contract);
 
+  // Un baseline manipulado no puede alimentar un ratchet: si el hash de
+  // integridad no cuadra, se adjudica como si no hubiera baseline (todo gate
+  // ratchet pasa sin comparar) y se reporta el hallazgo por separado, para que
+  // quien lea el resultado sepa que el ratchet no esta comparando nada.
+  const baselineState = loadBaseline(target);
+  if (baselineState.tampered) {
+    surfaceFindings.push({
+      level: "error",
+      code: "baseline-tampered",
+      detail: "el baseline no supero su verificacion de integridad; los gates ratchet se evaluaron sin comparacion"
+    });
+  }
+  const baseline = baselineState.tampered ? {} : loadBaselineMetrics(target);
+
   // Si la fase declara sus gates en phase-contract, solo esos se adjudican.
   const gates = Array.isArray(gateIds) && gateIds.length > 0
     ? (contract.gates ?? []).filter((gate) => gateIds.includes(gate.id))
@@ -95,7 +110,8 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     gates,
     metrics,
     phase,
-    tier: resolveTier(contract)
+    tier: resolveTier(contract),
+    baseline
   });
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
@@ -106,6 +122,7 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     status: blocked ? "blocked" : adjudication.status === "warning" || smells.length > 0 ? "warning" : "ok",
     evidenceSource: read.evidence?.quality_metrics?.source ?? null,
     treeHash: read.evidence?.quality_metrics?.tree_hash ?? null,
+    baselinePromotedAt: baselineState.baseline?.promoted_at ?? null,
     findings: [...surfaceFindings, ...smells]
   };
 }

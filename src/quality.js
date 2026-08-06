@@ -23,6 +23,7 @@ import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { detectPackageManager, runPackageScript } from "./harness.js";
 import { checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
+import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -180,11 +181,22 @@ export async function commandQualityGate(options = {}) {
     };
   }
 
+  const baselineState = loadBaseline(target);
+  if (baselineState.tampered) {
+    surfaceFindings.push({
+      level: "error",
+      code: "baseline-tampered",
+      detail: "el baseline no supero su verificacion de integridad; los gates ratchet se evaluaron sin comparacion"
+    });
+  }
+  const baseline = baselineState.tampered ? {} : loadBaselineMetrics(target);
+
   const adjudication = evaluateQualityGates({
     gates: contract.gates ?? [],
     metrics,
     phase,
-    tier
+    tier,
+    baseline
   });
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
@@ -210,4 +222,36 @@ export async function commandQualityGate(options = {}) {
 
   const exitCode = blocked && exitCodeMode ? EXIT_ACTION_REQUIRED : EXIT_OK;
   return { exitCode, payload };
+}
+
+/**
+ * `sdlc quality-baseline --promote`
+ *
+ * Mueve la linea base de los gates en modo ratchet a lo que dice la evidencia
+ * de una fase ya escrita. Sin `--source ci` exige `--allow-local` explicito: la
+ * promocion autoritativa es el job post-merge de F15, no una corrida local.
+ */
+export function commandQualityBaseline(options = {}) {
+  const target = path.resolve(options.target ?? process.cwd());
+  if (!options.promote) {
+    return {
+      exitCode: EXIT_ERROR,
+      payload: { status: "error", message: "Uso: sdlc quality-baseline --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]" }
+    };
+  }
+  const slice = options.slice ?? null;
+  if (!slice) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "--promote exige --slice <id>." } };
+  }
+  const result = promoteBaseline(target, {
+    slice,
+    phase: options.phase ?? "F15",
+    commitSha: options["commit-sha"] ?? options.commitSha ?? null,
+    source: options.source ?? "local",
+    allowLocal: Boolean(options["allow-local"] ?? options.allowLocal)
+  });
+  if (!result.ok) {
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", ...result } };
+  }
+  return { exitCode: EXIT_OK, payload: { status: "ok", ...result } };
 }

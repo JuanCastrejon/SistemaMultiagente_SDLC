@@ -113,6 +113,12 @@ templates:
     target: .github/workflows/quality-verify.yml
   - source: .github/agent-state/spec-boundary-allowlist.yaml
     target: .github/agent-state/spec-boundary-allowlist.yaml
+  # .github/agent-state/quality-baseline.yaml NO se gestiona: `promoteBaseline`
+  # lo reescribe en cada promocion, igual que .sdlc/session.json con
+  # session-start. Gestionarlo producia el mismo problema: managed-file-drift
+  # permanente contra una promocion legitima. Sin archivo instalado,
+  # loadBaseline() devuelve un baseline vacio en memoria hasta la primera
+  # promocion, que crea el archivo.
   - source: scripts/validate-local-gate.mjs
     target: scripts/validate-local-gate.mjs
   - source: scripts/agent-skills.manifest.json
