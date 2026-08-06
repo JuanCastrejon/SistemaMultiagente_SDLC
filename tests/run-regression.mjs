@@ -331,6 +331,19 @@ assert.ok(!npmToolsDoctorOutput.findings.some((finding) => finding.code === "too
 assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "headroom-start.ps1")));
 assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "register-headroom-task.ps1")));
 
+// Gate fantasma: un paso BLOCKING cuyo script no existe se reportaba pass
+// porque npm/pnpm salen 0 con --if-present. Ahora es not-configured.
+const verdictOutput = JSON.parse(
+  runStatus(["verdict", "--target", pmNpmInstalled, "--json"]).stdout
+);
+assert.ok(Array.isArray(verdictOutput.notConfigured));
+assert.ok(verdictOutput.notConfigured.includes("control-plane"));
+const controlPlaneStep = verdictOutput.steps.find((step) => step.key === "control-plane");
+assert.equal(controlPlaneStep.status, "not-configured");
+assert.equal(controlPlaneStep.exitCode, null);
+assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
+assert.deepEqual(verdictOutput.blockers, []);
+
 // Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd.
 fs.writeFileSync(
   path.join(pmNpmInstalled, "scripts", "obsidian-memory.config.local.json"),

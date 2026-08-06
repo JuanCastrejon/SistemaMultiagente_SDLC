@@ -257,6 +257,22 @@ const VERDICT_STEPS = [
   { key: "active-slices",        script: "validate:active-slices",         level: "WARNING"  },
 ];
 
+// Un paso cuyo script no existe en el package.json del consumidor NO se ejecuta.
+// Los invocadores usan `--if-present` (npm/pnpm), que sale 0 cuando el script
+// falta: sin este precheck, un paso BLOCKING inexistente se reportaba `pass` y
+// contribuia a un READY falso. Se reporta `not-configured`, que no es pass ni
+// fail y no dispara el fail-fast.
+function readPackageScripts(target) {
+  const raw = readTextIfExists(path.join(target, "package.json"));
+  if (!raw) return null;
+  try {
+    const scripts = JSON.parse(raw).scripts;
+    return scripts && typeof scripts === "object" ? scripts : {};
+  } catch {
+    return null;
+  }
+}
+
 export function commandVerdict(options) {
   const target = path.resolve(options.target ?? process.cwd());
   const write = Boolean(options.write);
@@ -264,10 +280,26 @@ export function commandVerdict(options) {
   const phase = options.phase ?? null;
   const blockers = [];
   const warnings = [];
+  const notConfigured = [];
   const steps = [];
   const packageManager = detectPackageManager(target);
+  // null = no hay package.json legible: no se puede prechequear y se ejecuta
+  // todo como antes, para no romper consumidores que no son Node.
+  const declaredScripts = readPackageScripts(target);
 
   for (const step of VERDICT_STEPS) {
+    if (declaredScripts && !Object.prototype.hasOwnProperty.call(declaredScripts, step.script)) {
+      notConfigured.push(step.key);
+      steps.push({
+        key: step.key,
+        script: step.script,
+        level: step.level,
+        status: "not-configured",
+        exitCode: null,
+        detail: `El consumidor no declara el script ${step.script} en package.json.`
+      });
+      continue;
+    }
     const [command, args] = packageManager.runScript(step.script);
     const result = runCommand(command, args, target, 60_000);
     const passed = result.ok;
@@ -297,6 +329,7 @@ export function commandVerdict(options) {
     packageManager: { name: packageManager.name, source: packageManager.source },
     blockers,
     warnings,
+    notConfigured,
     steps
   };
 
