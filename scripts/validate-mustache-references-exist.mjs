@@ -12,6 +12,7 @@ const context = defaultConfig({
 });
 context.surfacesTable = "| `backend` | `apps/api` | `api-agent` |";
 context.surfacesList = "- `apps/api`";
+context.qualityContractSurfaces = '[{ id: "backend", path: "apps/api", tier: "core", money_path: false, has_ui: false }]';
 context.sdlcSharedRulesBlock = "<!-- SDLC_SHARED_RULES_START sha256:example -->\nshared rules\n<!-- SDLC_SHARED_RULES_END -->";
 
 const files = listFiles(path.join(root, "templates")).filter((file) => {

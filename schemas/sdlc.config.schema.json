@@ -35,13 +35,22 @@
     },
     "surfaces": {
       "type": "array",
+      "description": "Fuente unica de las superficies del repo. quality-contract.yaml se genera desde esta lista en vez de traer superficies inventadas (ADR 0007, P6): sin esto, un repo cuyo layout no coincide con el ejemplo del template media gates sobre paths que no existen.",
       "items": {
         "type": "object",
         "required": ["id", "path", "owner"],
         "properties": {
           "id": { "type": "string" },
           "path": { "type": "string" },
-          "owner": { "type": "string" }
+          "owner": { "type": "string" },
+          "tier": {
+            "type": "string",
+            "enum": ["core", "standard", "shell"],
+            "default": "standard",
+            "description": "Dinero/maquina de estados/datos regulados = core. Producto sin impacto directo en dinero = standard. UI/scaffolding/herramientas internas = shell."
+          },
+          "moneyPath": { "type": "boolean", "default": false },
+          "hasUi": { "type": "boolean", "default": false }
         }
       }
     },

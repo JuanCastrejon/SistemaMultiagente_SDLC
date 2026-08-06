@@ -22,15 +22,11 @@ tiers:
   shell:
     description: UI, scaffolding, documentacion y herramientas internas.
 
-surfaces:
-  - id: backend
-    path: apps/api
-    tier: core
-    money_path: false
-  - id: web
-    path: apps/web
-    tier: standard
-    has_ui: true
+# Generado desde config.surfaces (sdlc.config.schema.json), no inventado: un
+# path que no existe en disco hace vacuo cualquier gate sobre esa superficie
+# (checkSurfaces lo bloquea siempre). Si esto sale `[]`, es que config.surfaces
+# esta vacio todavia -- agregar superficies ahi, no aqui a mano.
+surfaces: {{qualityContractSurfaces}}
 
 probes:
   # `command` es el NOMBRE de un script de package.json, no una linea de shell:
