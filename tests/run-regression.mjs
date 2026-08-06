@@ -355,6 +355,96 @@ assert.equal(controlPlaneStep.exitCode, null);
 assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
 assert.deepEqual(verdictOutput.blockers, []);
 
+// El interpolador preserva las expresiones de GitHub Actions: sin esto, cada
+// workflow instalado perdia sus ${{ ... }} y llegaba roto al consumidor.
+const { interpolate } = await import(new URL("../src/template-loader.js", import.meta.url).href);
+const workflowSample = "on:\n  push:\n    branches: [{{gitFlow.integrationBranch}}]\nname: x-${{ github.sha }}\nrun: echo ${{ steps.a.outputs.b }}";
+const interpolated = interpolate(workflowSample, { gitFlow: { integrationBranch: "develop" } });
+assert.match(interpolated, /branches: \[develop\]/);
+assert.match(interpolated, /x-\$\{\{ github\.sha \}\}/);
+assert.match(interpolated, /echo \$\{\{ steps\.a\.outputs\.b \}\}/);
+
+// El workflow arbitro llega instalado y con sus expresiones intactas.
+const installedWorkflow = fs.readFileSync(path.join(greenfield, ".github", "workflows", "quality-verify.yml"), "utf8");
+assert.match(installedWorkflow, /\$\{\{ github\.ref \}\}/);
+assert.match(installedWorkflow, /branches: \[develop, main\]/);
+assert.ok(fs.existsSync(path.join(greenfield, "scripts", "validate-spec-boundary.mjs")));
+assert.ok(fs.existsSync(path.join(greenfield, "quality-contract.yaml")));
+
+// phase-gate ahora ABRE la evidencia en vez de solo comprobar que exista.
+function writeEvidence(repo, slice, phase, body) {
+  const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${phase}.yaml`), body, "utf8");
+}
+
+// Evidencia ilegible: antes pasaba porque el archivo existia.
+writeEvidence(greenfield, "slice-ev", "F1", "esto: no: es: yaml: valido:\n  - [\n");
+const corruptGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev", "--json"])
+);
+assert.equal(corruptGate.status, "blocked");
+assert.ok(corruptGate.blockers.some((blocker) => blocker.startsWith("evidence-unparseable")));
+
+// Evidencia con forma invalida segun el schema que el framework ya instalaba.
+writeEvidence(greenfield, "slice-ev2", "F1", "phase: 123\nslice: []\n");
+const invalidGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev2", "--json"])
+);
+assert.equal(invalidGate.status, "blocked");
+assert.ok(invalidGate.blockers.some((blocker) => blocker.startsWith("evidence-invalid")));
+
+// Evidencia valida: el gate deja de bloquear por evidencia.
+const validEvidence = [
+  "phase: F1",
+  "slice: slice-ev3",
+  "agent_id: analista",
+  "started_at: 2026-08-06T00:00:00Z",
+  "outputs: []",
+  "validators_run: []"
+].join("\n");
+writeEvidence(greenfield, "slice-ev3", "F1", validEvidence);
+const validGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev3", "--json"])
+);
+assert.equal(validGate.evidence.valid, true);
+assert.ok(!validGate.blockers.some((blocker) => blocker.startsWith("evidence-")));
+
+// Fase con gate humano: la firma no puede faltar, y si es texto libre sin
+// review verificable se reporta como tal.
+writeEvidence(
+  greenfield,
+  "slice-hg",
+  "F13",
+  ["phase: F13", "slice: slice-hg", "agent_id: pm", "started_at: 2026-08-06T00:00:00Z", "outputs: []", "validators_run: []"].join("\n")
+);
+const humanGateMissing = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg", "--json"])
+);
+assert.ok(humanGateMissing.blockers.includes("human-gate-signoff-missing"));
+
+writeEvidence(
+  greenfield,
+  "slice-hg2",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg2",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien"
+  ].join("\n")
+);
+const humanGateUnverifiable = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
+);
+assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
+assert.ok(humanGateUnverifiable.warnings.includes("human-gate-signoff-unverifiable"));
+
 // tools-doctor detecta scripts de gate que resuelven @latest en cada corrida.
 const floatingRepo = makeRepo("floating-tooling");
 fs.writeFileSync(

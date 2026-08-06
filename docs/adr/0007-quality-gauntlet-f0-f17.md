@@ -176,6 +176,27 @@ Piezas de 1.8.0 ya entregadas en la rama `feature/entregabilidad-y-gauntlet-adr-
 
 Con esto, 1.8.0 queda funcionalmente completo salvo el re-baseline del manifiesto en los otros dos consumidores, que exige acceso a esos repos.
 
+### 1.9.0 — observación y árbitro
+
+| Pieza | Estado | Verificación |
+|---|---|---|
+| `src/quality-gates.js` (función pura, no-vacuidad, escalera) | hecho | Tests unitarios: gate vacuo nunca es `pass`; el mismo fallo bloquea o avisa según el modo |
+| `src/evidence-validator.js` | hecho | Primer consumidor real del schema; detecta evidencia redactada a mano |
+| `src/evidence-writer.js` (append-only, hash de árbol) | hecho | E2E: la segunda medición conserva la primera en `history` |
+| `sdlc quality-gate --run / --from-evidence` | hecho | E2E con probe y adapter reales; `--from-evidence` se marca `advisory` |
+| `quality-contract.yaml` + schema | hecho | Instalado por manifiesto |
+| `phase-gate` lee y valida la evidencia | hecho | YAML corrupto o inválido ahora bloquea; gate humano exige firma |
+| `quality-verify.yml` (árbitro en CI) | hecho | Instalado con sus expresiones intactas |
+| `validate-spec-boundary.mjs` | hecho | Exit 2 al tocar ruta protegida, incluyendo working tree |
+| `commandStatus` con componente `quality` | pendiente | — |
+| `phase-contract` v2 con `quality_gates` por fase | pendiente | El contrato declarativo vive hoy en `quality-contract.yaml` |
+| Baseline y modo `ratchet` operativo | pendiente | Es el alcance de 1.11.0 |
+
+Dos defectos del framework aparecieron al construir esto, ambos preexistentes:
+
+- El interpolador de plantillas destruía las expresiones `${{ ... }}` de GitHub Actions, así que **el framework no podía entregar ningún workflow** con sintaxis de Actions sin romperlo. Corregido en `interpolate` y en su validador.
+- `schemas/phase-evidence.schema.json` declara draft 2020-12 y Ajv 8 solo compila hasta draft-07 por defecto: el primer intento de validar evidencia fallaba con `no schema with key or ref`. Es la prueba de que el schema nunca se había compilado desde que se instaló en 1.5.0.
+
 ## Primer paso
 
 Un solo cambio, con test de regresión, sin tocar ningún archivo gestionado del consumidor: añadir en `commandVerdict` (`src/harness.js`) un precheck de existencia contra `packageJson.scripts` antes de invocar el package manager, y clasificar el paso ausente como `NOT_CONFIGURED` en vez de `pass`.

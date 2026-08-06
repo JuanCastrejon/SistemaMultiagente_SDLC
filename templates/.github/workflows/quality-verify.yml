@@ -1,0 +1,88 @@
+# Arbitro de calidad (ADR 0007, D1)
+#
+# El harness local calcula los mismos controles, pero se autodeclara advisory:
+# corre en la maquina donde el agente escribe. Este workflow es el que cuenta,
+# porque RE-EJECUTA los probes y compara lo recomputado contra lo que la
+# evidencia declara. Esa discrepancia (`evidence-mismatch`) es el detector de
+# fraude: no depende de confiar en quien produjo el YAML.
+#
+# Requisitos de configuracion, fuera del alcance de este archivo:
+#   1. Marcar este check como required status check en la rama protegida.
+#   2. Restringir quien puede editar .github/workflows (CODEOWNERS), o el
+#      arbitro es editable por el evaluado y no arbitra nada.
+
+name: quality-verify
+
+on:
+  pull_request:
+  push:
+    branches: [{{gitFlow.integrationBranch}}, {{gitFlow.stableBranch}}]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: quality-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # El guard de frontera compara contra la rama de integracion remota:
+          # sin historia no hay merge-base que valga.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # El CLI se instala por version publicada, NUNCA por link al working copy
+      # del framework: si el codigo que juzga lo puede editar el juzgado, el
+      # arbitro es decorativo.
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Resolver slice y fase vigentes
+        id: state
+        run: |
+          SLICE=$(grep -E '^current_slice:' .github/agent-state/phase-status.yaml | sed 's/.*: *//' | tr -d '"')
+          PHASE=$(grep -E '^current_phase:' .github/agent-state/phase-status.yaml | sed 's/.*: *//' | tr -d '"')
+          echo "slice=$SLICE" >> "$GITHUB_OUTPUT"
+          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+
+      - name: Gobernanza
+        run: npx --no-install sdlc governance-check --target . --json
+
+      # Aqui esta la diferencia con el harness local: se vuelve a medir.
+      - name: Recomputar calidad
+        run: >
+          npx --no-install sdlc quality-gate
+          --target .
+          --slice "${{ steps.state.outputs.slice }}"
+          --phase "${{ steps.state.outputs.phase }}"
+          --run
+          --source ci
+          --exit-code
+          --json
+
+      - name: Frontera de especificacion
+        run: >
+          node scripts/validate-spec-boundary.mjs
+          --base "origin/{{gitFlow.integrationBranch}}"
+
+      - name: Publicar evidencia recomputada
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evidence-${{ github.sha }}
+          path: |
+            .github/agent-state/evidence/**
+            coverage/**
+            reports/**
+          retention-days: 90
+          if-no-files-found: ignore

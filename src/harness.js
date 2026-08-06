@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { pathExists, readTextIfExists } from "./file-utils.js";
+import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -213,16 +214,56 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
   const outputs = checkArtifacts(target, slice, phase.outputs_required ?? []);
   const missingInputs = inputs.filter((entry) => !entry.exists);
   const missingOutputs = outputs.filter((entry) => !entry.exists);
+  const evidenceAbsolute = evidencePath(target, slice, phase.id);
   const evidence = {
-    path: evidencePath(target, slice, phase.id),
+    path: evidenceAbsolute,
     required: Boolean(phase.evidence_required),
-    exists: pathExists(evidencePath(target, slice, phase.id))
+    exists: pathExists(evidenceAbsolute)
   };
-  const blocked = missingInputs.length > 0 || missingOutputs.length > 0 || (evidence.required && !evidence.exists);
+
+  // Hasta 1.8.0 el gate solo comprobaba que el archivo EXISTIERA: nunca lo
+  // abria. Un YAML vacio, corrupto o con cualquier forma pasaba igual. Ahora se
+  // lee y se valida contra el schema que el framework ya instalaba sin usar.
+  const evidenceBlockers = [];
+  const evidenceWarnings = [];
+  if (evidence.exists) {
+    const read = readEvidenceFile(evidenceAbsolute);
+    evidence.valid = read.ok;
+    if (!read.ok) {
+      evidence.errors = read.errors;
+      // Evidencia invalida solo bloquea donde la evidencia es obligatoria; en
+      // el resto de fases se reporta sin detener el flujo.
+      if (evidence.required) evidenceBlockers.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+      else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+    } else {
+      const smells = detectEvidenceSmells(read.evidence);
+      if (smells.length > 0) {
+        evidence.smells = smells;
+        evidenceWarnings.push(...smells.map((smell) => `${smell.code}`));
+      }
+      // El gate humano deja de ser un campo de texto que el propio agente puede
+      // escribir: exige la referencia a un review verificable.
+      if (phase.human_gate) {
+        const signoff = read.evidence.human_gate_signoff;
+        if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
+          evidenceBlockers.push("human-gate-signoff-missing");
+        } else if (!signoff.review_id) {
+          evidenceWarnings.push("human-gate-signoff-unverifiable");
+        }
+      }
+    }
+  }
+
+  const blocked =
+    missingInputs.length > 0 ||
+    missingOutputs.length > 0 ||
+    (evidence.required && !evidence.exists) ||
+    evidenceBlockers.length > 0;
 
   return {
     status: blocked ? "blocked" : "ok",
     contractPath: contract.path,
+    contractVersion: contract.version ?? 1,
     phase: phase.id,
     slice,
     owner: phase.owner,
@@ -234,10 +275,12 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
     evidence,
     missingInputs,
     missingOutputs,
+    warnings: evidenceWarnings,
     blockers: [
       ...missingInputs.map((entry) => `input-missing:${entry.path}`),
       ...missingOutputs.map((entry) => `output-missing:${entry.path}`),
-      ...(evidence.required && !evidence.exists ? [`evidence-missing:${path.relative(target, evidence.path)}`] : [])
+      ...(evidence.required && !evidence.exists ? [`evidence-missing:${path.relative(target, evidence.path)}`] : []),
+      ...evidenceBlockers
     ]
   };
 }

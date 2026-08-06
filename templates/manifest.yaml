@@ -107,6 +107,12 @@ templates:
     target: scripts/validate-enhanced-research.mjs
   - source: scripts/validate-local-gate.ps1
     target: scripts/validate-local-gate.ps1
+  - source: scripts/validate-spec-boundary.mjs
+    target: scripts/validate-spec-boundary.mjs
+  - source: .github/workflows/quality-verify.yml
+    target: .github/workflows/quality-verify.yml
+  - source: .github/agent-state/spec-boundary-allowlist.yaml
+    target: .github/agent-state/spec-boundary-allowlist.yaml
   - source: scripts/validate-local-gate.mjs
     target: scripts/validate-local-gate.mjs
   - source: scripts/agent-skills.manifest.json
