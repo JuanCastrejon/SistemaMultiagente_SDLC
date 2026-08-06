@@ -849,6 +849,11 @@ function commandHelp() {
 
 export function run(argv) {
   const parsed = parseArgs(argv);
+  // `--version` se parsea como opcion booleana, no como subcomando, asi que caia
+  // en la ayuda con exit 0 sin decir nunca la version.
+  if (parsed.options.version === true || parsed.command === "version") {
+    return { exitCode: EXIT_OK, payload: { status: "ok", version: FRAMEWORK_VERSION } };
+  }
   switch (parsed.command) {
     case "init":
     case "install":
@@ -904,8 +909,20 @@ export function run(argv) {
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":
-    default:
+    case null:
+    case undefined:
       return commandHelp();
+    default:
+      // Un subcomando desconocido salia 0 imprimiendo la ayuda: un typo en un
+      // paso de CI se contabilizaba como exito.
+      return {
+        exitCode: EXIT_ERROR,
+        payload: {
+          status: "error",
+          message: `Comando desconocido: ${parsed.command}`,
+          help: commandHelp().payload.message
+        }
+      };
   }
 }
 

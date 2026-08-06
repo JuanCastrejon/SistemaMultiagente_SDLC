@@ -15,8 +15,10 @@ templates:
     target: indice-operativo.md
   - source: .sdlc/README.md
     target: .sdlc/README.md
-  - source: .sdlc/session.json
-    target: .sdlc/session.json
+  # .sdlc/session.json NO se gestiona: es estado local de maquina que `sdlc
+  # session-start` reescribe en cada sesion con rutas absolutas y salud del
+  # entorno. Gestionarlo generaba drift permanente en doctor y conflictos de
+  # upgrade por un archivo que nunca debe versionarse.
   - source: .github/AGENTS.md
     target: .github/AGENTS.md
   - source: .github/agents/ownership-matrix.md

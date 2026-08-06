@@ -344,6 +344,14 @@ assert.equal(controlPlaneStep.exitCode, null);
 assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
 assert.deepEqual(verdictOutput.blockers, []);
 
+// Contrato de CLI: --version informa la version y un comando desconocido falla.
+const versionOutput = JSON.parse(run(["--version", "--json"]));
+assert.equal(versionOutput.version, FRAMEWORK_VERSION);
+const unknownCommand = runStatus(["comando-que-no-existe", "--json"]);
+assert.equal(unknownCommand.status, 1);
+assert.match(JSON.parse(unknownCommand.stdout).message, /Comando desconocido/);
+assert.equal(runStatus(["--json"]).status, 0);
+
 // Entregabilidad: un archivo gestionado con personalizacion local bloqueaba el
 // upgrade COMPLETO. Ahora se puede aceptar por archivo y queda registrado.
 const overrideRepo = makeRepo("upgrade-accept-managed");
