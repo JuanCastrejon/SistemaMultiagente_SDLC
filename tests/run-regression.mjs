@@ -209,9 +209,17 @@ assert.deepEqual(
   readGolden("register-task-dryrun.json")
 );
 
+// Un repo recien instalado no tiene NINGUNA muestra de calibracion. Antes esto
+// devolvia agreement 1.0 y status "ok": concordancia perfecta sobre el conjunto
+// vacio, el mismo falso verde por denominador vacio que los gates de calidad
+// rechazan. Ahora dice lo que realmente sabe.
 const calibrationOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "compute-calibration.ps1"), ["-Json"], greenfield));
-assert.equal(calibrationOutput.status, "ok");
-assert.equal(typeof calibrationOutput.agreement, "number");
+assert.equal(calibrationOutput.status, "not-measured");
+assert.equal(calibrationOutput.agreement, null, "sin muestras no hay concordancia que reportar");
+assert.equal(calibrationOutput.scored, 0);
+assert.equal(calibrationOutput.graduation_threshold, 0.8);
+assert.equal(calibrationOutput.freeze_threshold, 0.75);
+assert.match(calibrationOutput.interpretation, /falta evidencia/);
 
 const bootstrapSkillsOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "bootstrap-agent-skills.ps1"), ["-SkipExternalInstall", "-Json"], greenfield));
 assert.equal(bootstrapSkillsOutput.status, "ok");

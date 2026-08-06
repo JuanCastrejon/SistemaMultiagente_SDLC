@@ -41,11 +41,44 @@ jobs:
         with:
           node-version: '22'
 
-      # El CLI se instala por version publicada, NUNCA por link al working copy
-      # del framework: si el codigo que juzga lo puede editar el juzgado, el
-      # arbitro es decorativo.
+      # El gestor de paquetes se DETECTA, no se asume. Hardcodear `npm ci` aqui
+      # romperia en cualquier consumidor pnpm o yarn — que es justo el caso del
+      # consumidor mas maduro. El engine ya sabe detectarlo desde 1.8.0; el
+      # arbitro tiene que ser igual de agnostico.
+      - name: Resolver gestor de paquetes
+        id: pm
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            echo "install=corepack pnpm install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "exec=corepack pnpm exec" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            echo "install=corepack yarn install --immutable" >> "$GITHUB_OUTPUT"
+            echo "exec=corepack yarn exec" >> "$GITHUB_OUTPUT"
+          else
+            echo "install=npm ci" >> "$GITHUB_OUTPUT"
+            echo "exec=npx --no-install" >> "$GITHUB_OUTPUT"
+          fi
+
+      # El CLI se resuelve por la dependencia declarada y fijada en el lockfile,
+      # NUNCA por link al working copy del framework: si el codigo que juzga lo
+      # puede editar el juzgado, el arbitro es decorativo.
       - name: Instalar dependencias
-        run: npm ci
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Verificar que el CLI no viene de un link local
+        run: |
+          RESOLVED=$(node -e "console.log(require.resolve('sistema-multiagente-sdlc/package.json'))" 2>/dev/null || echo "")
+          if [ -z "$RESOLVED" ]; then
+            echo "El consumidor no declara sistema-multiagente-sdlc como dependencia."
+            echo "El arbitro exige una version fijada por lockfile, no un link global."
+            exit 1
+          fi
+          case "$RESOLVED" in
+            *node_modules*) echo "CLI resuelto desde node_modules: $RESOLVED" ;;
+            *) echo "CLI resuelto FUERA de node_modules ($RESOLVED): posible link local."; exit 1 ;;
+          esac
 
       - name: Resolver slice y fase vigentes
         id: state
@@ -56,12 +89,12 @@ jobs:
           echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
 
       - name: Gobernanza
-        run: npx --no-install sdlc governance-check --target . --json
+        run: ${{ steps.pm.outputs.exec }} sdlc governance-check --target . --json
 
       # Aqui esta la diferencia con el harness local: se vuelve a medir.
       - name: Recomputar calidad
         run: >
-          npx --no-install sdlc quality-gate
+          ${{ steps.pm.outputs.exec }} sdlc quality-gate
           --target .
           --slice "${{ steps.state.outputs.slice }}"
           --phase "${{ steps.state.outputs.phase }}"
