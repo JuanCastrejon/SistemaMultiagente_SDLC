@@ -14,6 +14,8 @@ Brechas detectadas al instalar el framework en `PasarelaDePago`, un consumidor c
 
 ### Added
 
+- `docs/research/2026-08-quality-gauntlet-agentic.md` y `docs/adr/0007-quality-gauntlet-f0-f17.md`: investigación y decisión para adoptar el gauntlet de calidad verificable (tests, Gherkin firmado, métricas estructurales, mutación y QA) sobre las fases F0-F17, con árbitro en CI, evidencia anexada por el harness y escalera observa → ratchet → absoluto.
+- `scripts/validate-template-sanitization.mjs`: `docs/research/` entra en la allowlist junto a `docs/extraction/` y `docs/adr/`. La regla protege lo que se instala en un consumidor; la documentación interna que razona sobre consumidores reales no se instala.
 - Casos de regresión para la detección de package manager (`packageManager`, lockfile y default), para el reporte de `tools-doctor` en un consumidor npm y para la entrega efectiva de los scripts de headroom. Caso adicional para la resolución de un `vaultRoot` relativo contra el repo destino.
 
 ## [1.7.1] — 2026-08-03
