@@ -24,6 +24,7 @@ import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js"
 import { detectPackageManager, runPackageScript } from "./harness.js";
 import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
+import { detectEvidenceMismatch } from "./quality-verify.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -162,6 +163,15 @@ export async function commandQualityGate(options = {}) {
     });
     evidenceWritten = written.path;
     advisory = options.source !== "ci";
+
+    // El arbitro es CI, no el harness local (ADR 0007, D1): esto es lo que
+    // hace ese diseño real en vez de una frase. `history` acaba de recibir lo
+    // que este mismo write rotó fuera de `quality_metrics` -- es la corrida
+    // inmediatamente anterior para esta fase/slice, sin releer nada del disco.
+    if (options.source === "ci") {
+      const priorEntry = written.evidence?.history?.at(-1)?.quality_metrics ?? null;
+      surfaceFindings.push(...detectEvidenceMismatch({ prior: priorEntry, fresh: written.evidence.quality_metrics }));
+    }
   } else if (fromEvidence) {
     if (!slice || !phase) {
       return {
