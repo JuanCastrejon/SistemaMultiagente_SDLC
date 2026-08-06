@@ -103,10 +103,23 @@ jobs:
           --exit-code
           --json
 
+      # Se ejecuta la copia del guard que vive en la rama de integracion, NO la
+      # del checkout del PR: si un PR neutraliza su propia copia del script
+      # (el ejemplo mas barato: reemplazarla por `process.exit(0)`), ninguna
+      # lista de rutas protegidas ayuda si el codigo que arbitra es justo el
+      # codigo que el PR controla. `.sdlc/locked-paths.txt` se lee del
+      # checkout de todas formas: eso es seguro porque solo puede EXTENDER
+      # proteccion, nunca quitarla (ver ALWAYS_LOCKED en el script).
       - name: Frontera de especificacion
-        run: >
-          node scripts/validate-spec-boundary.mjs
-          --base "origin/{{gitFlow.integrationBranch}}"
+        run: |
+          BASE="origin/{{gitFlow.integrationBranch}}"
+          TRUSTED="$RUNNER_TEMP/validate-spec-boundary.trusted.mjs"
+          if git show "$BASE:scripts/validate-spec-boundary.mjs" > "$TRUSTED" 2>/dev/null && [ -s "$TRUSTED" ]; then
+            node "$TRUSTED" --base "$BASE"
+          else
+            echo "aviso: $BASE no tiene scripts/validate-spec-boundary.mjs (bootstrap); se usa la copia del checkout"
+            node scripts/validate-spec-boundary.mjs --base "$BASE"
+          fi
 
       - name: Publicar evidencia recomputada
         if: always()

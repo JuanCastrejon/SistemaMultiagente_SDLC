@@ -32,6 +32,18 @@ const DEFAULT_LOCKED = [
   "eslint.config"
 ];
 
+// Rutas que el guard protege SIEMPRE, sin importar que diga locked-paths.txt
+// ni ningun otro archivo de configuracion. Sin esto, la ruta mas barata para
+// desactivar el guard entero no es tocar una ruta protegida (eso se detecta):
+// es reescribir el script del guard, vaciar su propia lista de rutas
+// protegidas, o agregarse a mano a su propia allowlist. Ninguna de esas tres
+// cosas dejaria rastro si el guard no se incluyera a si mismo en su alcance.
+const ALWAYS_LOCKED = [
+  "scripts/validate-spec-boundary.mjs",
+  ".sdlc/locked-paths.txt",
+  ".github/agent-state/spec-boundary-allowlist.yaml"
+];
+
 function parseArgs(argv) {
   const options = { base: null, lockedFile: ".sdlc/locked-paths.txt", allowlist: ".github/agent-state/spec-boundary-allowlist.yaml", json: false };
   for (let index = 0; index < argv.length; index += 1) {
@@ -67,13 +79,21 @@ function resolveBase(explicit) {
   return null;
 }
 
+// `lockedFile` EXTIENDE la proteccion, nunca la reemplaza. Antes, un
+// locked-paths.txt custom sustituia DEFAULT_LOCKED entero: un consumidor que
+// queria agregar una ruta propia perdia sin darse cuenta la proteccion de
+// quality-contract.yaml, phase-contract.yaml y el resto -- el mismo modo de
+// fallo por vacio silencioso que el resto del gauntlet combate. ALWAYS_LOCKED
+// tampoco se puede excluir desde este archivo bajo ninguna circunstancia.
 function loadLockedPatterns(lockedFile) {
-  if (!fs.existsSync(lockedFile)) return DEFAULT_LOCKED;
-  return fs
-    .readFileSync(lockedFile, "utf8")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"));
+  const custom = fs.existsSync(lockedFile)
+    ? fs
+        .readFileSync(lockedFile, "utf8")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#"))
+    : [];
+  return [...new Set([...ALWAYS_LOCKED, ...DEFAULT_LOCKED, ...custom])];
 }
 
 function loadAllowlist(allowlistFile) {
@@ -107,13 +127,19 @@ if (!base) {
 }
 
 const mergeBase = git(["merge-base", base, "HEAD"]) || base;
-// Commits del branch MAS working tree y staged: en CI solo hay commits, pero en
-// local el guard tiene que ver el cambio antes de que exista un commit, que es
-// justo cuando sirve para algo.
+// Commits del branch MAS working tree, staged Y sin trackear: `git diff` por
+// si solo es ciego a un archivo nuevo que nunca se agrego al indice. Sin la
+// linea de `status`, crear `.sdlc/locked-paths.txt` o un spec nuevo sin hacer
+// `git add` pasaba el guard en silencio -- el mismo modo de fallo por vacio
+// que el resto del gauntlet, aplicado al propio guard.
 const changed = [
   ...git(["diff", "--name-only", `${mergeBase}...HEAD`]).split(/\r?\n/),
   ...git(["diff", "--name-only"]).split(/\r?\n/),
-  ...git(["diff", "--name-only", "--cached"]).split(/\r?\n/)
+  ...git(["diff", "--name-only", "--cached"]).split(/\r?\n/),
+  ...git(["status", "--porcelain", "--untracked-files=all"])
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("?? "))
+    .map((line) => line.slice(3))
 ]
   .map((line) => line.trim())
   .filter(Boolean)
