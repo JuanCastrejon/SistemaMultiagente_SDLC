@@ -344,6 +344,54 @@ assert.equal(controlPlaneStep.exitCode, null);
 assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
 assert.deepEqual(verdictOutput.blockers, []);
 
+// Entregabilidad: un archivo gestionado con personalizacion local bloqueaba el
+// upgrade COMPLETO. Ahora se puede aceptar por archivo y queda registrado.
+const overrideRepo = makeRepo("upgrade-accept-managed");
+fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(overrideRepo, "README.md"));
+run(["install", "--target", overrideRepo, "--mode", "greenfield", "--project-name", "Override Repo", "--json"]);
+
+const customizedPath = path.join(overrideRepo, ".github", "AGENTS.md");
+const customizedContent = `${fs.readFileSync(customizedPath, "utf8")}\n\n## Personalizacion local\n\nRegla propia del consumidor.\n`;
+fs.writeFileSync(customizedPath, customizedContent, "utf8");
+
+// Sin flags sigue bloqueando, pero ahora dice que el conflicto es aceptable.
+const blockedUpgrade = runStatus(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"]);
+assert.equal(blockedUpgrade.status, 2);
+const blockedPayload = JSON.parse(blockedUpgrade.stdout);
+assert.equal(blockedPayload.status, "conflict");
+assert.ok(blockedPayload.acceptable.includes(".github/AGENTS.md"));
+
+// Aceptar una ruta inexistente en el conflicto es un error de uso, no un no-op.
+const badAccept = runStatus([
+  "upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION,
+  "--accept-managed", "docs/no-existe.md", "--json"
+]);
+assert.equal(badAccept.status, 1);
+assert.ok(JSON.parse(badAccept.stdout).unknownAccepts.includes("docs/no-existe.md"));
+
+// Con --accept-managed el upgrade completa y el archivo local se conserva.
+const acceptedUpgrade = JSON.parse(run([
+  "upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION,
+  "--accept-managed", ".github/AGENTS.md", "--json"
+]));
+assert.equal(acceptedUpgrade.status, "ok");
+assert.deepEqual(acceptedUpgrade.accepted, [".github/AGENTS.md"]);
+assert.equal(fs.readFileSync(customizedPath, "utf8"), customizedContent);
+assert.ok(fs.existsSync(path.join(overrideRepo, ".sdlc", "overrides.yaml")));
+
+// doctor deja de reportarlo como drift anonimo y lo reporta como override.
+const overrideDoctor = JSON.parse(runStatus(["doctor", "--target", overrideRepo, "--json"]).stdout);
+assert.ok(overrideDoctor.findings.some((f) => f.code === "managed-file-override" && f.path === ".github/AGENTS.md"));
+assert.ok(!overrideDoctor.findings.some((f) => f.code === "managed-file-drift" && f.path === ".github/AGENTS.md"));
+
+// Un segundo upgrade ya no pide aceptar de nuevo lo mismo.
+assert.equal(JSON.parse(run(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"])).status, "ok");
+
+// Si el archivo cambia despues de aceptarlo, el override queda stale.
+fs.writeFileSync(customizedPath, `${customizedContent}\nOtra edicion posterior.\n`, "utf8");
+const staleDoctor = JSON.parse(runStatus(["doctor", "--target", overrideRepo, "--json"]).stdout);
+assert.ok(staleDoctor.findings.some((f) => f.code === "managed-file-override-stale" && f.path === ".github/AGENTS.md"));
+
 // Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd.
 fs.writeFileSync(
   path.join(pmNpmInstalled, "scripts", "obsidian-memory.config.local.json"),

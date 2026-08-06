@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import YAML from "yaml";
 import {
   copyFilePreservingPath,
   ensureDir,
@@ -244,13 +245,93 @@ function createBackup(target, relativePaths, reason) {
   return id;
 }
 
-function writeManagedFiles(target, files, config, previousManifest = null) {
+function writeManagedFiles(target, files, config, previousManifest = null, skipWrite = new Set()) {
   for (const [relativePath, content] of Object.entries(files)) {
+    if (skipWrite.has(relativePath)) {
+      // Divergencia local aceptada: el archivo del consumidor se conserva tal
+      // cual y solo se registra su hash en el manifiesto.
+      continue;
+    }
     writeText(path.join(target, relativePath), content);
   }
   const manifest = buildManifest(config, files, previousManifest ?? {});
   writeManifest(target, manifest);
   return manifest;
+}
+
+// ---------------------------------------------------------------------------
+// Overrides de archivos gestionados (.sdlc/overrides.yaml)
+//
+// `upgrade` abortaba entero ante cualquier archivo gestionado modificado
+// localmente, asi que un consumidor que personaliza gobernanza a proposito
+// quedaba sin via de actualizacion. Un override declara que esa divergencia es
+// intencional: el archivo local se conserva y doctor deja de reportarlo como
+// drift anonimo.
+// ---------------------------------------------------------------------------
+
+function overridesPath(target) {
+  return path.join(target, ".sdlc", "overrides.yaml");
+}
+
+function readOverrides(target) {
+  const raw = readTextIfExists(overridesPath(target));
+  if (!raw) {
+    return { version: 1, overrides: [] };
+  }
+  try {
+    const parsed = YAML.parse(raw);
+    const overrides = Array.isArray(parsed?.overrides) ? parsed.overrides : [];
+    return { version: parsed?.version ?? 1, overrides };
+  } catch {
+    return { version: 1, overrides: [] };
+  }
+}
+
+function writeOverrides(target, document) {
+  const header = [
+    "# Archivos gestionados con divergencia local aceptada.",
+    "# Cada entrada declara que el consumidor mantiene su propia version de un",
+    "# archivo del framework. `sdlc doctor` los reporta como override y no como",
+    "# drift; si el archivo cambia despues de aceptarlo, el override queda stale.",
+    ""
+  ].join("\n");
+  writeText(overridesPath(target), `${header}${YAML.stringify(document)}`);
+}
+
+function overrideIndex(target) {
+  const index = new Map();
+  for (const entry of readOverrides(target).overrides) {
+    if (entry && typeof entry.path === "string") {
+      index.set(entry.path, entry);
+    }
+  }
+  return index;
+}
+
+function parsePathList(value) {
+  if (!value || value === true) return [];
+  return String(value)
+    .split(",")
+    .map((item) => toPosixPath(item.trim()))
+    .filter(Boolean);
+}
+
+function registerOverrides(target, entries, frameworkVersion) {
+  const document = readOverrides(target);
+  const byPath = new Map(document.overrides.filter((entry) => entry?.path).map((entry) => [entry.path, entry]));
+  const acceptedAt = new Date().toISOString();
+  for (const entry of entries) {
+    byPath.set(entry.path, {
+      path: entry.path,
+      sha256: entry.sha256,
+      reason: entry.reason,
+      acceptedAt,
+      frameworkVersion
+    });
+  }
+  const next = { version: 1, overrides: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) };
+  writeOverrides(target, next);
+  return next;
 }
 
 function pruneBackupsInternal(target, keep) {
@@ -331,6 +412,9 @@ function collectDrift(target, config, manifest) {
   const files = buildManagedFiles(config);
   const drift = [];
   const missing = [];
+  const overridden = [];
+  const staleOverrides = [];
+  const overrides = overrideIndex(target);
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     const existing = readTextIfExists(absolute);
@@ -339,16 +423,32 @@ function collectDrift(target, config, manifest) {
       continue;
     }
     if (normalizeLF(existing) !== content) {
+      // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
+      // en Windows el CRLF del working tree daria dos hashes distintos para el
+      // mismo archivo segun quien lo mire.
+      const actualSha256 = sha256Text(normalizeLF(existing));
+      const override = overrides.get(relativePath);
+      if (override) {
+        // La divergencia esta declarada. Solo sigue siendo la misma divergencia
+        // si el archivo no cambio desde que se acepto.
+        const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
+        if (override.sha256 === actualSha256) {
+          overridden.push(entry);
+        } else {
+          staleOverrides.push(entry);
+        }
+        continue;
+      }
       drift.push({
         path: relativePath,
-        actualSha256: sha256Text(existing),
+        actualSha256,
         expectedSha256: sha256Text(content)
       });
     }
   }
   const managedPathSet = getManagedPathSet(manifest);
   const unmanaged = Object.keys(files).filter((filePath) => !managedPathSet.has(filePath));
-  return { files, drift, missing, unmanaged };
+  return { files, drift, missing, unmanaged, overridden, staleOverrides };
 }
 
 function checkCommand(command, args = ["--version"]) {
@@ -504,6 +604,12 @@ function commandDoctor(options) {
     for (const entry of drift.drift) {
       findings.push({ level: "warning", code: "managed-file-drift", ...entry });
     }
+    for (const entry of drift.overridden) {
+      findings.push({ level: "info", code: "managed-file-override", ...entry });
+    }
+    for (const entry of drift.staleOverrides) {
+      findings.push({ level: "warning", code: "managed-file-override-stale", ...entry });
+    }
   }
   findings.push(...collectDoctorEnhancements(target, config));
   const hasErrors = findings.some((finding) => finding.level === "error");
@@ -564,23 +670,113 @@ function commandUpgrade(options) {
   const migrations = migrationsToRun(fromVersion, toVersion);
   const files = applyMigrations(buildManagedFiles(nextConfig), migrations);
   const conflicts = detectConflicts(target, files, manifest);
-  if (conflicts.length > 0) {
+
+  // Resolucion por archivo: sin esto, un solo archivo gestionado con
+  // personalizacion local bloquea el upgrade completo y el consumidor se queda
+  // sin via de actualizacion. `--accept-managed` conserva la version local de
+  // los paths indicados y la registra en .sdlc/overrides.yaml.
+  const acceptAll = Boolean(options["accept-all-managed"]);
+  const acceptRequested = new Set(parsePathList(options["accept-managed"]));
+  const alreadyOverridden = overrideIndex(target);
+  const accepted = [];
+  const blocking = [];
+  for (const conflict of conflicts) {
+    const isManaged = conflict.reason === "archivo gestionado modificado localmente";
+    const previouslyAccepted = alreadyOverridden.get(conflict.path)?.sha256 === conflict.existingSha256;
+    if (isManaged && (acceptAll || acceptRequested.has(conflict.path) || previouslyAccepted)) {
+      accepted.push(conflict);
+    } else {
+      blocking.push(conflict);
+    }
+  }
+  const unknownAccepts = [...acceptRequested].filter(
+    (candidate) => !conflicts.some((conflict) => conflict.path === candidate)
+  );
+  if (unknownAccepts.length > 0) {
+    return {
+      exitCode: EXIT_ERROR,
+      payload: {
+        status: "error",
+        message: "Se pidio aceptar rutas que no estan en conflicto.",
+        unknownAccepts
+      }
+    };
+  }
+
+  if (blocking.length > 0) {
     if (!dryRun) {
       createBackup(target, [".sdlc/patch-plan.json"], "patch-plan-conflict");
     }
-    const patchPlan = dryRun ? { conflicts, proposedFiles: Object.keys(files).sort() } : writePatchPlan(target, conflicts, files);
-    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "conflict", conflicts, patchPlan } };
+    const patchPlan = dryRun
+      ? { conflicts: blocking, proposedFiles: Object.keys(files).sort() }
+      : writePatchPlan(target, blocking, files);
+    return {
+      exitCode: EXIT_ACTION_REQUIRED,
+      payload: {
+        status: "conflict",
+        conflicts: blocking,
+        acceptable: blocking.filter((conflict) => conflict.reason === "archivo gestionado modificado localmente").map((conflict) => conflict.path),
+        hint: "Repetir con --accept-managed <paths separados por coma> o --accept-all-managed para conservar la version local de esos archivos.",
+        patchPlan
+      }
+    };
   }
+
   if (dryRun) {
-    return { exitCode: EXIT_OK, payload: { status: "ok", message: `Dry-run upgrade a ${toVersion}` } };
+    return {
+      exitCode: EXIT_OK,
+      payload: {
+        status: "ok",
+        message: `Dry-run upgrade a ${toVersion}`,
+        accepted: accepted.map((conflict) => conflict.path)
+      }
+    };
   }
+
   const backup = createBackup(target, [...new Set([...Object.keys(files), ...manifest.managedFiles.map((entry) => entry.path)])], "upgrade");
-  const nextManifest = writeManagedFiles(target, files, nextConfig, {
-    ...manifest,
-    migrationsApplied: [...new Set([...(manifest.migrationsApplied ?? []), ...migrations.map((m) => m.version)])]
-  });
+
+  // El manifiesto debe registrar lo que queda EN DISCO, no lo que el framework
+  // habria escrito: si guardara el hash del framework, el archivo conservado
+  // volveria a detectarse como conflicto en el siguiente upgrade.
+  const effectiveFiles = { ...files };
+  const skipWrite = new Set();
+  const overrideEntries = [];
+  for (const conflict of accepted) {
+    const localContent = readTextIfExists(path.join(target, conflict.path));
+    if (localContent === null) continue;
+    const normalized = normalizeLF(localContent);
+    effectiveFiles[conflict.path] = normalized;
+    skipWrite.add(conflict.path);
+    overrideEntries.push({
+      path: conflict.path,
+      sha256: sha256Text(normalized),
+      reason: alreadyOverridden.get(conflict.path)?.reason ?? "divergencia local aceptada en upgrade"
+    });
+  }
+  if (overrideEntries.length > 0) {
+    registerOverrides(target, overrideEntries, toVersion);
+  }
+
+  const nextManifest = writeManagedFiles(
+    target,
+    effectiveFiles,
+    nextConfig,
+    {
+      ...manifest,
+      migrationsApplied: [...new Set([...(manifest.migrationsApplied ?? []), ...migrations.map((m) => m.version)])]
+    },
+    skipWrite
+  );
   pruneBackupsInternal(target, nextConfig.backup?.keepLast ?? 5);
-  return { exitCode: EXIT_OK, payload: { status: "ok", backup, frameworkVersion: nextManifest.frameworkVersion } };
+  return {
+    exitCode: EXIT_OK,
+    payload: {
+      status: "ok",
+      backup,
+      frameworkVersion: nextManifest.frameworkVersion,
+      accepted: overrideEntries.map((entry) => entry.path)
+    }
+  };
 }
 
 function commandMigrateConfig(options) {
@@ -646,7 +842,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdiet: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]"
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml."
     }
   };
 }
