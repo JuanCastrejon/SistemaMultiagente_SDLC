@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { pathExists, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
+import { adjudicateFromEvidence } from "./quality-adjudicate.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -149,6 +150,10 @@ function contractCandidates(target) {
   ];
 }
 
+// Version de contrato que este engine entiende. v2 anade `quality_gates` por
+// fase; v1 sigue siendo valido y simplemente no adjudica calidad.
+export const CONTRACT_VERSION_EXPECTED = 2;
+
 export function loadPhaseContract(target) {
   for (const candidate of contractCandidates(target)) {
     if (!pathExists(candidate)) continue;
@@ -226,6 +231,13 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
   // lee y se valida contra el schema que el framework ya instalaba sin usar.
   const evidenceBlockers = [];
   const evidenceWarnings = [];
+
+  // Guard de version: un contrato v1 leido por un engine que ya entiende v2
+  // funciona, pero se dice en voz alta en vez de degradar en silencio.
+  const contractVersion = contract.version ?? 1;
+  if (contractVersion < CONTRACT_VERSION_EXPECTED) {
+    evidenceWarnings.push(`contract-version-outdated:v${contractVersion}`);
+  }
   if (evidence.exists) {
     const read = readEvidenceFile(evidenceAbsolute);
     evidence.valid = read.ok;
@@ -254,6 +266,35 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
     }
   }
 
+  // phase-contract v2: la fase puede declarar que gates del contrato de calidad
+  // le aplican. Se adjudican desde la evidencia ya escrita, sin ejecutar nada:
+  // ejecutar es responsabilidad de `quality-gate --run`.
+  let quality = null;
+  const declaredGates = Array.isArray(phase.quality_gates) ? phase.quality_gates : null;
+  if (declaredGates && declaredGates.length > 0 && evidence.exists) {
+    const adjudication = adjudicateFromEvidence(target, {
+      slice,
+      phase: phase.id,
+      gateIds: declaredGates
+    });
+    if (adjudication.status !== "not-configured") {
+      quality = {
+        status: adjudication.status,
+        gates: declaredGates,
+        evaluated: adjudication.evaluated,
+        vacuous: adjudication.vacuous,
+        evidenceSource: adjudication.evidenceSource,
+        treeHash: adjudication.treeHash
+      };
+      for (const violation of adjudication.violations) {
+        evidenceBlockers.push(`quality-${violation.code}:${violation.id ?? violation.metric ?? ""}`);
+      }
+      for (const warning of adjudication.warnings) {
+        evidenceWarnings.push(`quality-${warning.code}:${warning.id ?? ""}`);
+      }
+    }
+  }
+
   const blocked =
     missingInputs.length > 0 ||
     missingOutputs.length > 0 ||
@@ -273,6 +314,7 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
     inputs,
     outputs,
     evidence,
+    quality,
     missingInputs,
     missingOutputs,
     warnings: evidenceWarnings,
@@ -492,10 +534,35 @@ export function commandStatus(options) {
     phaseGateExitCode = pgResult.exitCode;
   }
 
+  // Cuarto componente: la calidad medida. Se adjudica desde la evidencia ya
+  // escrita, sin ejecutar probes, porque `status` es una foto y no una medicion.
+  // Un `no-configurado` no cuenta como fallo: la mayoria de consumidores todavia
+  // no tiene contrato de calidad y no se les puede poner en no-go por eso.
+  let qualityResult = null;
+  if (resolvedPhase && resolvedSlice) {
+    const adjudication = adjudicateFromEvidence(target, { slice: resolvedSlice, phase: resolvedPhase });
+    qualityResult = {
+      status: adjudication.status,
+      code: adjudication.code ?? null,
+      evaluated: adjudication.evaluated ?? [],
+      violations: adjudication.violations ?? [],
+      vacuous: adjudication.vacuous ?? [],
+      findings: adjudication.findings ?? [],
+      evidenceSource: adjudication.evidenceSource ?? null,
+      advisory: adjudication.evidenceSource !== "ci"
+    };
+  }
+
   const govOk = govResult.exitCode === EXIT_OK;
   const toolsOk = toolsResult.exitCode === EXIT_OK;
   const phaseOk = phaseGateResult === null || phaseGateExitCode === EXIT_OK;
-  const ready = govOk && toolsOk && phaseOk;
+  const qualityOk =
+    qualityResult === null ||
+    qualityResult.status === "ok" ||
+    qualityResult.status === "warning" ||
+    qualityResult.status === "not-configured" ||
+    qualityResult.status === "no-evidence";
+  const ready = govOk && toolsOk && phaseOk && qualityOk;
 
   const payload = {
     ready,
@@ -504,13 +571,30 @@ export function commandStatus(options) {
     tools: { exitCode: toolsResult.exitCode, ...toolsResult.payload },
     phaseGate: phaseGateResult
       ? { exitCode: phaseGateExitCode, phase: resolvedPhase, slice: resolvedSlice, ...phaseGateResult }
-      : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" }
+      : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" },
+    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" }
   };
 
   if (writeMd) {
     const govStatus = govOk ? "✅ OK" : "❌ ERROR";
     const toolsStatus = toolsOk ? "✅ OK" : "⚠️ WARNINGS";
     const phaseStatus = phaseOk ? "✅ OK" : "🔴 BLOCKED";
+    const qualityLabel =
+      qualityResult === null
+        ? "➖ n/a"
+        : qualityResult.status === "not-configured"
+          ? "➖ sin contrato"
+          : qualityResult.status === "no-evidence"
+            ? "➖ sin evidencia"
+            : qualityResult.status === "blocked"
+              ? "🔴 BLOCKED"
+              : qualityResult.status === "warning"
+                ? "⚠️ WARNINGS"
+                : "✅ OK";
+    // Un veredicto de calidad calculado en local no es autoritativo: se dice.
+    const qualityStatus = qualityResult?.advisory && qualityResult.evaluated?.length > 0
+      ? `${qualityLabel} (advisory)`
+      : qualityLabel;
     const readinessLine = ready ? "## ✅ GO — Governance ready" : "## ❌ NO-GO — Governance not ready";
     const lines = [
       `# Governance Status — ${new Date().toISOString()}`,
@@ -522,6 +606,7 @@ export function commandStatus(options) {
       `| governance-check | ${govStatus} |`,
       `| tools-doctor | ${toolsStatus} |`,
       `| phase-gate (${resolvedPhase ?? "?"}/${resolvedSlice ?? "?"}) | ${phaseStatus} |`,
+      `| quality | ${qualityStatus} |`,
       "",
       "## Details",
       "",
@@ -537,6 +622,9 @@ export function commandStatus(options) {
     ];
     if (phaseGateResult) {
       lines.push("", "### phase-gate", "```json", JSON.stringify(phaseGateResult, null, 2), "```");
+    }
+    if (qualityResult) {
+      lines.push("", "### quality", "```json", JSON.stringify(qualityResult, null, 2), "```");
     }
     const md = lines.join("\n") + "\n";
     try {

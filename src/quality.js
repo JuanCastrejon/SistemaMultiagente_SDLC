@@ -17,61 +17,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
-import { pathExists, readTextIfExists } from "./file-utils.js";
+import { pathExists } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { detectPackageManager, runPackageScript } from "./harness.js";
+import { checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
 const EXIT_ACTION_REQUIRED = 2;
 
-export function loadQualityContract(target) {
-  const contractPath = path.join(target, "quality-contract.yaml");
-  const raw = readTextIfExists(contractPath);
-  if (!raw) return { ok: false, code: "quality-contract-missing", path: contractPath, contract: null };
-  try {
-    const contract = YAML.parse(raw);
-    return { ok: true, code: null, path: contractPath, contract };
-  } catch (error) {
-    return { ok: false, code: "quality-contract-unparseable", path: contractPath, contract: null, detail: error.message };
-  }
-}
-
-// Superficies cuyo path no existe producen "0 violaciones" sobre la nada. Es el
-// falso verde mas barato del sistema y se detecta antes de medir.
-export function checkSurfaces(target, contract) {
-  const findings = [];
-  for (const surface of contract?.surfaces ?? []) {
-    if (!pathExists(path.join(target, surface.path))) {
-      findings.push({
-        level: "error",
-        code: "surface-path-unresolved",
-        id: surface.id,
-        path: surface.path,
-        detail: "la superficie declarada no existe en disco: cualquier gate sobre ella seria vacuo"
-      });
-    }
-  }
-  return findings;
-}
-
-function tierForPhaseScope(contract, surfaceId) {
-  const surfaces = contract?.surfaces ?? [];
-  if (surfaceId) {
-    const found = surfaces.find((surface) => surface.id === surfaceId);
-    return found?.tier ?? null;
-  }
-  // Sin superficie explicita se aplica el tier mas estricto declarado, no el
-  // mas laxo: si hay dudas, el gate debe pedir mas y no menos.
-  const order = ["core", "standard", "shell"];
-  for (const tier of order) {
-    if (surfaces.some((surface) => surface.tier === tier)) return tier;
-  }
-  return null;
-}
+export { checkSurfaces, loadQualityContract };
 
 function loadAdapter(target, format) {
   // Los adapters viven en el consumidor (o en un paquete aparte), nunca en el
@@ -137,7 +94,7 @@ export async function commandQualityGate(options = {}) {
   }
   const contract = loaded.contract;
   const surfaceFindings = checkSurfaces(target, contract);
-  const tier = tierForPhaseScope(contract, options.surface ?? null);
+  const tier = resolveTier(contract, options.surface ?? null);
 
   let metrics = {};
   let probeResults = [];

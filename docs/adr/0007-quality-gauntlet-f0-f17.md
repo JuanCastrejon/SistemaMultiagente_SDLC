@@ -188,9 +188,11 @@ Con esto, 1.8.0 queda funcionalmente completo salvo el re-baseline del manifiest
 | `phase-gate` lee y valida la evidencia | hecho | YAML corrupto o inválido ahora bloquea; gate humano exige firma |
 | `quality-verify.yml` (árbitro en CI) | hecho | Instalado con sus expresiones intactas |
 | `validate-spec-boundary.mjs` | hecho | Exit 2 al tocar ruta protegida, incluyendo working tree |
-| `commandStatus` con componente `quality` | pendiente | — |
-| `phase-contract` v2 con `quality_gates` por fase | pendiente | El contrato declarativo vive hoy en `quality-contract.yaml` |
-| Baseline y modo `ratchet` operativo | pendiente | Es el alcance de 1.11.0 |
+| `commandStatus` con componente `quality` | hecho | Cuarto componente en el payload y en `status.md`, marcado `advisory` cuando se midió en local |
+| `phase-contract` v2 con `quality_gates` por fase | hecho | F8, F9 y F10 declaran sus gates; guard de versión avisa sobre contratos v1 sin romperlos |
+| Baseline y modo `ratchet` operativo | pendiente | El modo está implementado y probado; falta el baseline versionado, que es 1.11.0 |
+
+**1.9.0 cerrado.** Un contrato v1 sigue funcionando y solo recibe el aviso `contract-version-outdated`; un consumidor sin `quality-contract.yaml` obtiene `quality: not-configured`, que no lo pone en no-go. Ninguna de las dos situaciones rompe a los consumidores instalados.
 
 Dos defectos del framework aparecieron al construir esto, ambos preexistentes:
 

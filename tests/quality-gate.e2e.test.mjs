@@ -244,4 +244,88 @@ assert.ok(smellCodes.includes("evidence-source-unset"));
 assert.ok(smellCodes.includes("evidence-without-tree-hash"));
 assert.ok(smellCodes.includes("metrics-without-probes"));
 
+// --- 8. phase-contract v2: la fase adjudica los gates que declara ----------
+// Repo instalado de verdad, para que exista phase-contract y agent-state.
+const installed = path.join(tempRoot, "instalado");
+fs.mkdirSync(installed, { recursive: true });
+fs.writeFileSync(path.join(installed, "README.md"), "# demo\n", "utf8");
+execFileSync("node", [cli, "install", "--target", installed, "--mode", "greenfield", "--project-name", "Demo", "--json"], {
+  cwd: repoRoot,
+  encoding: "utf8"
+});
+
+// El contrato instalado ya es v2 y F9 declara sus gates.
+const phaseContract = fs.readFileSync(path.join(installed, "phase-contract.yaml"), "utf8");
+assert.match(phaseContract, /^version: 2$/m);
+assert.match(phaseContract, /quality_gates: \[F9\.mutation-survivors/);
+
+// Las superficies del contrato instalado deben existir: si no, todo gate sobre
+// ellas es vacuo y el adjudicador lo reporta como error (comportamiento
+// correcto, verificado en el caso 5).
+fs.mkdirSync(path.join(installed, "apps", "api"), { recursive: true });
+fs.writeFileSync(path.join(installed, "apps", "api", "index.ts"), "export const api = 1;\n", "utf8");
+fs.mkdirSync(path.join(installed, "apps", "web"), { recursive: true });
+fs.writeFileSync(path.join(installed, "apps", "web", "index.ts"), "export const web = 1;\n", "utf8");
+
+// F9 exige la evidencia de F8 como input: la cadena de fases se respeta.
+const f9Dir = path.join(installed, ".github", "agent-state", "evidence", "slice-v2");
+fs.mkdirSync(f9Dir, { recursive: true });
+fs.writeFileSync(
+  path.join(f9Dir, "F8.yaml"),
+  YAML.stringify({
+    phase: "F8",
+    slice: "slice-v2",
+    agent_id: "dev",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: []
+  }),
+  "utf8"
+);
+fs.writeFileSync(
+  path.join(f9Dir, "F9.yaml"),
+  YAML.stringify({
+    phase: "F9",
+    slice: "slice-v2",
+    agent_id: "qa",
+    started_at: new Date().toISOString(),
+    outputs: [],
+    validators_run: [],
+    quality_metrics: {
+      measured_at: new Date().toISOString(),
+      source: "harness",
+      tree_hash: "abc123",
+      probes: [{ id: "mutation", command: "validate:mutation", exit_code: 0, report_sha256: "deadbeef", status: "ok" }],
+      metrics: { mutation: { survived: 3, total: 40, no_coverage: 0 } }
+    }
+  }),
+  "utf8"
+);
+
+const v2Gate = JSON.parse(
+  execFileSync("node", [cli, "phase-gate", "--target", installed, "--phase", "F9", "--slice", "slice-v2", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  })
+);
+assert.equal(v2Gate.contractVersion, 2);
+assert.ok(v2Gate.quality, "una fase con quality_gates debe adjudicar calidad");
+assert.ok(!v2Gate.warnings.some((w) => w.startsWith("contract-version-outdated")));
+// El gate del template esta en modo observe: informa, no bloquea.
+assert.ok(v2Gate.warnings.some((warning) => warning.startsWith("quality-gate-failed")));
+assert.equal(v2Gate.status, "ok");
+
+// `status` incorpora el cuarto componente.
+fs.writeFileSync(
+  path.join(installed, ".github", "agent-state", "phase-status.yaml"),
+  ["version: 1", 'current_slice: "slice-v2"', 'current_phase: "F9"'].join("\n"),
+  "utf8"
+);
+const statusOut = JSON.parse(
+  execFileSync("node", [cli, "status", "--target", installed, "--json"], { cwd: repoRoot, encoding: "utf8" })
+);
+assert.ok(statusOut.quality, "status debe exponer el componente quality");
+assert.equal(statusOut.quality.advisory, true, "medido en local, nunca autoritativo");
+assert.ok(statusOut.quality.evaluated.length > 0);
+
 console.log("quality-gate e2e: PASS");
