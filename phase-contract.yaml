@@ -168,6 +168,13 @@ phases:
     outputs_required: [.github/agent-state/evidence/<slice>/F14.yaml]
     evidence_required: true
     human_gate: true
+    # F14 no mide nada propio: son gates HEREDADOS de F8/F9/F10, re-verificados
+    # leyendo la evidencia de la fase que si los midio (src/quality-adjudicate.js
+    # detecta la herencia por `gate.phase` != "F14"). Guard anti-regresion antes
+    # de fusionar (ADR 0007, gap documentado en 1.11.0, cerrado en P7): si el
+    # slice empeoro el baseline en cobertura o dependencias, F14 bloquea aunque
+    # F13 ya haya aprobado.
+    quality_gates: [F8.changed-lines-coverage, F10.dependency-violations, F10.dependency-cycles]
     next_phase: F15
   - id: F15
     name: post-merge

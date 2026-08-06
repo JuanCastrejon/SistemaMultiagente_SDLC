@@ -148,7 +148,6 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     };
   }
 
-  const metrics = read.evidence?.quality_metrics?.metrics ?? {};
   const smells = detectEvidenceSmells(read.evidence).map((smell) => ({ level: "warning", ...smell }));
   const surfaceFindings = checkSurfaces(target, contract);
 
@@ -165,22 +164,64 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     });
   }
   const baseline = baselineState.tampered ? {} : loadBaselineMetrics(target);
+  const tier = resolveTier(contract);
 
   // Si la fase declara sus gates en phase-contract, solo esos se adjudican.
   const gates = Array.isArray(gateIds) && gateIds.length > 0
     ? (contract.gates ?? []).filter((gate) => gateIds.includes(gate.id))
     : contract.gates ?? [];
 
-  const adjudication = evaluateQualityGates({
-    gates,
-    metrics,
-    phase,
-    tier: resolveTier(contract),
-    baseline,
-    // Los gates que la fase declara en phase-contract.yaml son promesas de
-    // medicion: no medirlos es incumplir el contrato, no un aviso.
-    declaredByContract: Array.isArray(gateIds) ? gateIds : null
-  });
+  // Un gate que esta fase declara puede pertenecer a OTRA fase de origen
+  // (gate.phase != phase): es HEREDADO. F14 (merge) no mide nada propio -- sus
+  // gates son siempre de F8/F9/F10, y se re-verifican leyendo la evidencia de
+  // la fase que SI los midio, en vez de fabricar un mecanismo de arrastre no
+  // verificado (ADR 0007, gap documentado en 1.11.0, cerrado aqui). El gate
+  // nunca se evalua contra la evidencia de ESTA fase si no es la que lo midio.
+  const ownGates = [];
+  const inheritedGroups = new Map();
+  for (const gate of gates) {
+    const origin = gate.phase ?? phase;
+    if (origin === phase) {
+      ownGates.push(gate);
+    } else {
+      if (!inheritedGroups.has(origin)) inheritedGroups.set(origin, []);
+      inheritedGroups.get(origin).push(gate);
+    }
+  }
+
+  const declaredByContract = Array.isArray(gateIds) ? gateIds : null;
+  const ownMetrics = read.evidence?.quality_metrics?.metrics ?? {};
+  const groupResults = [evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract })];
+  const inherited = [];
+
+  for (const [originPhase, originGates] of inheritedGroups) {
+    const originAbsolute = path.join(target, ".github", "agent-state", "evidence", String(slice), `${originPhase}.yaml`);
+    const originRead = readEvidenceFile(originAbsolute);
+    // Sin evidencia legible en la fase de origen, se adjudica sobre metricas
+    // vacias: cada gate heredado sale `not-measured`, nunca `pass` por vacio.
+    const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
+    groupResults.push(
+      evaluateQualityGates({ gates: originGates, metrics: originMetrics, phase: originPhase, tier, baseline, declaredByContract })
+    );
+    inherited.push({
+      phase: originPhase,
+      evidenceFound: originRead.ok,
+      evidenceSource: originRead.ok ? originRead.evidence?.quality_metrics?.source ?? null : null,
+      treeHash: originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null
+    });
+  }
+
+  const adjudication = {
+    status: groupResults.some((result) => result.violations.length > 0)
+      ? "blocked"
+      : groupResults.some((result) => result.warnings.length > 0)
+        ? "warning"
+        : "ok",
+    evaluated: groupResults.flatMap((result) => result.evaluated),
+    violations: groupResults.flatMap((result) => result.violations),
+    warnings: groupResults.flatMap((result) => result.warnings),
+    vacuous: groupResults.flatMap((result) => result.vacuous)
+  };
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
   const blocked = adjudication.violations.length > 0 || surfaceErrors.length > 0;
@@ -190,6 +231,7 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     status: blocked ? "blocked" : adjudication.status === "warning" || smells.length > 0 ? "warning" : "ok",
     evidenceSource: read.evidence?.quality_metrics?.source ?? null,
     treeHash: read.evidence?.quality_metrics?.tree_hash ?? null,
+    inherited: inherited.length > 0 ? inherited : undefined,
     baselinePromotedAt: baselineState.baseline?.promoted_at ?? null,
     findings: [...surfaceFindings, ...smells]
   };

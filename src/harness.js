@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
-import { adjudicateFromEvidence } from "./quality-adjudicate.js";
+import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -249,11 +249,33 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
       else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
     } else {
       // Las expectativas vienen del contrato de la fase: si declara gates de
-      // calidad tiene que traer mediciones, y si tiene gate humano tiene que
-      // traer firma. Sin esto, una evidencia valida pero VACIA pasaba limpia.
-      const declaresQualityGates = Array.isArray(phase.quality_gates) && phase.quality_gates.length > 0;
+      // calidad PROPIOS tiene que traer mediciones, y si tiene gate humano
+      // tiene que traer firma. Sin esto, una evidencia valida pero VACIA
+      // pasaba limpia.
+      //
+      // "Propios" no es lo mismo que "declarados": F14 (merge) declara gates
+      // de F8/F9/F10 para re-verificarlos antes de fusionar (herencia,
+      // src/quality-adjudicate.js), pero F14 nunca mide nada por si misma. Si
+      // se exigiera quality_metrics en F14.yaml por el solo hecho de listar
+      // gates heredados, toda evidencia de F14 legitima (sin mediciones
+      // propias) se marcaria como sospechosa por algo que nunca prometio.
+      const declaredGateIds = Array.isArray(phase.quality_gates) ? phase.quality_gates : [];
+      let declaresOwnQualityGates = declaredGateIds.length > 0;
+      if (declaredGateIds.length > 0) {
+        const qualityContractLoaded = loadQualityContract(target);
+        if (qualityContractLoaded.ok) {
+          const gatesById = new Map((qualityContractLoaded.contract.gates ?? []).map((gate) => [gate.id, gate]));
+          // Un id declarado que no resuelve en quality-contract.yaml se trata
+          // como propio por omision: silenciar el aviso por un id roto seria
+          // el vacio equivocado.
+          declaresOwnQualityGates = declaredGateIds.some((gateId) => {
+            const gate = gatesById.get(gateId);
+            return !gate || gate.phase === phase.id;
+          });
+        }
+      }
       const smells = detectEvidenceSmells(read.evidence, {
-        expectsQualityMetrics: declaresQualityGates,
+        expectsQualityMetrics: declaresOwnQualityGates,
         expectsSignoff: Boolean(phase.human_gate)
       });
       if (smells.length > 0) {
