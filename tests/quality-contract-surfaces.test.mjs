@@ -2,7 +2,7 @@
 // P6 (ADR 0007): quality-contract.yaml generado desde config.surfaces, no
 // inventado. Antes, el template traia `apps/api`/`apps/web` como literales
 // PROPIOS, desconectados de config.surfaces: un consumidor real (el piloto,
-// dominio en packages/payment-core) terminaba con un contrato que declaraba
+// dominio en packages/checkout-core) terminaba con un contrato que declaraba
 // superficies que no existen en su disco, y checkSurfaces las bloqueaba
 // SIEMPRE por "surface-path-unresolved" sin importar que tan bien configurado
 // estuviera config.json.
@@ -43,7 +43,7 @@ assert.equal(web.has_ui, true);
 // --- 2. el piloto real: superficie propia, no apps/api/apps/web ------------
 const config = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
 config.surfaces = [
-  { id: "payment-core", path: "packages/payment-core", owner: "payments-agent", tier: "core", moneyPath: true }
+  { id: "checkout-core", path: "packages/checkout-core", owner: "payments-agent", tier: "core", moneyPath: true }
 ];
 fs.writeFileSync(path.join(greenfield, ".sdlc", "config.json"), JSON.stringify(config, null, 2), "utf8");
 
@@ -52,8 +52,8 @@ assert.equal(upgraded.status, "ok", JSON.stringify(upgraded));
 
 const regenerated = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"));
 assert.equal(regenerated.surfaces.length, 1);
-assert.equal(regenerated.surfaces[0].id, "payment-core");
-assert.equal(regenerated.surfaces[0].path, "packages/payment-core");
+assert.equal(regenerated.surfaces[0].id, "checkout-core");
+assert.equal(regenerated.surfaces[0].path, "packages/checkout-core");
 assert.equal(regenerated.surfaces[0].tier, "core");
 assert.equal(regenerated.surfaces[0].money_path, true);
 assert.equal(regenerated.surfaces[0].has_ui, false);
@@ -64,8 +64,8 @@ assert.ok(
 
 // El contrato regenerado sigue siendo valido y, si la superficie real existe
 // en disco, checkSurfaces no la marca como fantasma.
-fs.mkdirSync(path.join(greenfield, "packages", "payment-core"), { recursive: true });
-fs.writeFileSync(path.join(greenfield, "packages", "payment-core", "index.js"), "export const x = 1;\n", "utf8");
+fs.mkdirSync(path.join(greenfield, "packages", "checkout-core"), { recursive: true });
+fs.writeFileSync(path.join(greenfield, "packages", "checkout-core", "index.js"), "export const x = 1;\n", "utf8");
 const loaded = loadQualityContract(greenfield);
 assert.ok(loaded.ok, JSON.stringify(loaded));
 assert.equal(checkSurfaces(greenfield, loaded.contract).length, 0);

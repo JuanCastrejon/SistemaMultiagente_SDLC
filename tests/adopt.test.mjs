@@ -38,7 +38,7 @@ const target = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-adopt-")), 
 fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(
   path.join(target, "package.json"),
-  JSON.stringify({ name: "facturacion-dian", version: "1.0.0" }, null, 2),
+  JSON.stringify({ name: "repo-maduro-demo", version: "1.0.0" }, null, 2),
   "utf8"
 );
 execFileSync("git", ["init", "--quiet"], { cwd: target });
@@ -47,7 +47,7 @@ execFileSync("git", ["config", "user.name", "Test"], { cwd: target });
 execFileSync("git", ["add", "."], { cwd: target });
 execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: target });
 
-const adopted = commandAdopt({ target, "project-name": "FacturacionDian" });
+const adopted = commandAdopt({ target, "project-name": "RepoMaduroDemo" });
 assert.equal(adopted.exitCode, 0, JSON.stringify(adopted.payload));
 assert.ok(adopted.payload.created.some((entry) => entry.includes("package.json")));
 assert.ok(adopted.payload.created.includes(".sdlc/config.json"));
@@ -60,7 +60,7 @@ assert.ok(packageJsonAfter.devDependencies["sistema-multiagente-sdlc"], "debe ag
 const config = JSON.parse(fs.readFileSync(path.join(target, ".sdlc", "config.json"), "utf8"));
 assert.equal(config.mode, "legacy");
 assert.deepEqual(config.surfaces, [], "adopt no inventa superficies de ejemplo sobre un repo maduro");
-assert.equal(config.project.name, "FacturacionDian");
+assert.equal(config.project.name, "RepoMaduroDemo");
 
 const contract = YAML.parse(fs.readFileSync(path.join(target, "quality-contract.yaml"), "utf8"));
 assert.deepEqual(contract.surfaces, [], "sin superficies declaradas todavia, el contrato lo dice explicitamente");
@@ -70,7 +70,7 @@ console.log("adopt e2e (repo nuevo): PASS");
 // --- E2E: aditivo puro -- correrlo de nuevo no pisa lo que ya existe -------
 fs.writeFileSync(
   path.join(target, "quality-contract.yaml"),
-  "version: 1\nenforcement: observe\ntiers: {}\nsurfaces: [{ id: \"payment-core\", path: \"packages/payment-core\", tier: \"core\", money_path: true, has_ui: false }]\nprobes: []\ngates: []\n",
+  "version: 1\nenforcement: observe\ntiers: {}\nsurfaces: [{ id: \"checkout-core\", path: \"packages/checkout-core\", tier: \"core\", money_path: true, has_ui: false }]\nprobes: []\ngates: []\n",
   "utf8"
 );
 const handEdited = fs.readFileSync(path.join(target, "quality-contract.yaml"), "utf8");
