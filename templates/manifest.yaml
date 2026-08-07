@@ -317,6 +317,9 @@ templates:
   - source: openspec/schemas/greenfield-sdd/templates/tasks.md
     target: openspec/schemas/greenfield-sdd/templates/tasks.md
     modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/acceptance.md
+    target: openspec/schemas/greenfield-sdd/templates/acceptance.md
+    modes: [greenfield]
   - source: openspec/specs/.gitkeep
     target: openspec/specs/.gitkeep
   - source: openspec/changes/.gitkeep

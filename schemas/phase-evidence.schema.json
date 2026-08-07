@@ -109,7 +109,11 @@
         "type": "object",
         "required": ["sc_id", "test_ref"],
         "properties": {
-          "sc_id": { "type": "string", "pattern": "^SC-[0-9]{3,}$" },
+          "sc_id": {
+            "type": "string",
+            "description": "Secuencial (SC-001) para escenarios legacy-unversioned exentos permanentemente; hash de (capability, requirement, titulo) via computeScenarioId para escenarios nuevos o modificados (ADR 0007, P9).",
+            "pattern": "^SC-([0-9]{3,}|[0-9a-f]{8,})$"
+          },
           "test_ref": { "type": ["string", "null"] },
           "red_proof_run_id": { "type": ["string", "null"] },
           "red_proof_sha": { "type": ["string", "null"] },

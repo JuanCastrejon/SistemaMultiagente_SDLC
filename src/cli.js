@@ -45,6 +45,7 @@ import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudi
 import { commandCoverageDiff } from "./coverage-diff.js";
 import { computeTreeHash } from "./evidence-writer.js";
 import { createAttestationCommit, verifySignoff } from "./signoff.js";
+import { verifyAcceptanceDir } from "./acceptance.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -707,6 +708,38 @@ function commandSignoff(options) {
   };
 }
 
+/**
+ * `sdlc acceptance-verify` (ADR 0007, P9)
+ *
+ * Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario
+ * debe traer un `sc_id` cuyo hash coincida con (capability, requirement,
+ * titulo) ACTUALES. No ejecuta ningun test; eso es responsabilidad de
+ * `test_ref` y del control spec-trace, fuera de esta pieza.
+ */
+function commandAcceptanceVerify(options) {
+  const target = requireTarget(options);
+  const changeSlug = options.change ?? null;
+  if (!changeSlug) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "acceptance-verify exige --change <slug>." } };
+  }
+  const result = verifyAcceptanceDir(target, changeSlug);
+  if (!result.exists) {
+    return {
+      exitCode: EXIT_ACTION_REQUIRED,
+      payload: { status: "not-configured", code: "acceptance-dir-missing", change: changeSlug }
+    };
+  }
+  return {
+    exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+    payload: {
+      status: result.ok ? "ok" : "blocked",
+      change: changeSlug,
+      files: result.files.map((entry) => entry.file),
+      findings: result.findings
+    }
+  };
+}
+
 function commandDiff(options) {
   const target = requireTarget(options);
   const config = loadConfig(target);
@@ -929,7 +962,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales."
     }
   };
 }
@@ -1001,6 +1034,8 @@ export function run(argv) {
       return commandCoverageDiff(parsed.options);
     case "signoff":
       return commandSignoff(parsed.options);
+    case "acceptance-verify":
+      return commandAcceptanceVerify(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":
