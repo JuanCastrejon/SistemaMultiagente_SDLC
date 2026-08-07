@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const adaptersDir = path.join(repoRoot, "templates", "scripts", "quality-adapters");
 
 function adapterUrl(name) {
-  return `file://${path.join(adaptersDir, `${name}.mjs`).split(path.sep).join("/")}`;
+  return pathToFileURL(path.join(adaptersDir, `${name}.mjs`)).href;
 }
 
 // --- istanbul-summary --------------------------------------------------

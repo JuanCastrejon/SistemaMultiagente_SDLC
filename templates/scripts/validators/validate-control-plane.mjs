@@ -31,7 +31,7 @@ function personaExists(id) {
 
 const missing = [...new Set(declared)].filter((id) => !personaExists(id));
 if (missing.length > 0) {
-  fail(`${missing.length} persona(s) declaradas en config.agents sin archivo .agent.md: ${missing.join(", ")}`);
+  fail(`${missing.length} persona(s) declaradas en config.agents sin archivo ${PERSONA_EXTENSIONS.join(" ni ")} en ${PERSONA_DIRS.join(" ni ")}: ${missing.join(", ")}`);
   process.exit(1);
 }
 ok(`${declared.length} referencia(s) de persona resuelven a un archivo real`);

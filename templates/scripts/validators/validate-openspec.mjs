@@ -30,6 +30,9 @@ try {
   const stdout = execFileSync(process.execPath, [cli, "validate", "--strict"], { encoding: "utf8" });
   ok(`openspec validate --strict paso limpio\n${stdout.trim()}`);
 } catch (error) {
-  fail(`openspec validate --strict fallo:\n${(error.stdout ?? error.message ?? "").toString().trim()}`);
+  // Muchos CLIs escriben el detalle del fallo en stderr, no en stdout: sin
+  // esto el mensaje salia vacio y poco accionable.
+  const detail = [error.stdout, error.stderr, error.message].filter(Boolean).join("\n").trim();
+  fail(`openspec validate --strict fallo:\n${detail}`);
   process.exit(1);
 }

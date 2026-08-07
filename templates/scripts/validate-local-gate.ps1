@@ -60,7 +60,7 @@ function Resolve-PackageManager {
   $definitions = @{
     pnpm = @{ Name = "pnpm"; Exe = "corepack"; Run = @("pnpm", "run"); Exec = @("pnpm", "exec"); Install = @("pnpm", "install", "--frozen-lockfile"); Version = @("pnpm", "--version") }
     npm  = @{ Name = "npm";  Exe = "npm";      Run = @("run");         Exec = @("exec", "--");   Install = @("ci");                            Version = @("--version") }
-    yarn = @{ Name = "yarn"; Exe = "yarn";     Run = @("run");         Exec = @("exec");         Install = @("install", "--immutable");         Version = @("--version") }
+    yarn = @{ Name = "yarn"; Exe = "corepack"; Run = @("yarn", "run"); Exec = @("yarn", "exec"); Install = @("yarn", "install", "--immutable"); Version = @("yarn", "--version") }
     bun  = @{ Name = "bun";  Exe = "bun";      Run = @("run");         Exec = @("x");            Install = @("install", "--frozen-lockfile");   Version = @("--version") }
   }
 

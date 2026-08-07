@@ -18,6 +18,7 @@
 // ---------------------------------------------------------------------------
 
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { pathExists } from "./file-utils.js";
 import { readEvidenceFile } from "./evidence-validator.js";
 import { evidencePath } from "./evidence-writer.js";
@@ -157,7 +158,7 @@ export async function commandRedProofVerify(options = {}) {
   const raw = fs.readFileSync(reportAbsolute, "utf8");
   let report;
   try {
-    const adapter = await import(`file://${adapterPath.split(path.sep).join("/")}`);
+    const adapter = await import(pathToFileURL(adapterPath).href);
     const parse = adapter.parse ?? adapter.default;
     if (typeof parse !== "function") {
       return {

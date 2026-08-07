@@ -17,6 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { pathExists, readPackageScripts, sha256Text } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
@@ -56,7 +57,7 @@ async function readReportMetrics(target, probe) {
     return { metrics: null, reportSha256, detail: `sin adapter para el formato ${probe.format}` };
   }
   try {
-    const adapter = await import(`file://${adapterPath.split(path.sep).join("/")}`);
+    const adapter = await import(pathToFileURL(adapterPath).href);
     const parse = adapter.parse ?? adapter.default;
     if (typeof parse !== "function") {
       return { metrics: null, reportSha256, detail: `el adapter ${probe.format} no exporta parse()` };

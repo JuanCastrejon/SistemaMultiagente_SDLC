@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import YAML from "yaml";
 import { verifyRedProof } from "../src/red-proof.js";
 
@@ -50,7 +50,7 @@ assert.equal(findings.length, 4);
 console.log("red-proof unit: PASS");
 
 // --- unidad: adapter vitest-json ---------------------------------------------
-const { parse } = await import(`file://${adapterSource.split(path.sep).join("/")}`);
+const { parse } = await import(pathToFileURL(adapterSource).href);
 
 const vitestReport = {
   testResults: [
