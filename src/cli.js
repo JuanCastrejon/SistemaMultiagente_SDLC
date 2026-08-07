@@ -47,6 +47,7 @@ import { computeTreeHash } from "./evidence-writer.js";
 import { createAttestationCommit, verifySignoff } from "./signoff.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
+import { verifyChangeClosure } from "./change-closure.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -741,6 +742,39 @@ function commandAcceptanceVerify(options) {
   };
 }
 
+/**
+ * `sdlc change-close` (ADR 0007, P11)
+ *
+ * No archiva nada por si mismo: solo dice si el change puede cerrarse.
+ * Archivar (mover openspec/changes/<slug> a archive/) sigue siendo accion del
+ * CLI de OpenSpec; esta pieza es el gate que decide si corresponde llamarlo.
+ */
+function commandChangeClose(options) {
+  const target = requireTarget(options);
+  const changeSlug = options.change ?? null;
+  if (!changeSlug) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "change-close exige --change <slug>." } };
+  }
+  const tasksPath = path.join(target, "openspec", "changes", changeSlug, "tasks.md");
+  if (!pathExists(tasksPath)) {
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", code: "tasks-file-missing", path: tasksPath } };
+  }
+  let integrationBranch = options["integration-branch"] ?? options.integrationBranch ?? null;
+  if (!integrationBranch) {
+    try {
+      integrationBranch = loadConfig(target)?.gitFlow?.integrationBranch ?? null;
+    } catch {
+      integrationBranch = null;
+    }
+  }
+  const raw = fs.readFileSync(tasksPath, "utf8");
+  const result = verifyChangeClosure({ target, raw, slice: options.slice ?? null, integrationBranch });
+  return {
+    exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+    payload: { status: result.ok ? "ok" : "blocked", change: changeSlug, tasks: result.tasks, findings: result.findings }
+  };
+}
+
 function commandDiff(options) {
   const target = requireTarget(options);
   const config = loadConfig(target);
@@ -963,7 +997,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok."
     }
   };
 }
@@ -1039,6 +1073,8 @@ export function run(argv) {
       return commandAcceptanceVerify(parsed.options);
     case "red-proof-verify":
       return commandRedProofVerify(parsed.options);
+    case "change-close":
+      return commandChangeClose(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":
