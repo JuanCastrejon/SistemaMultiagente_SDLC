@@ -109,6 +109,24 @@ templates:
     target: scripts/validate-local-gate.ps1
   - source: scripts/validate-spec-boundary.mjs
     target: scripts/validate-spec-boundary.mjs
+  - source: scripts/validators/_shared.mjs
+    target: scripts/validators/_shared.mjs
+  - source: scripts/validators/validate-drift.mjs
+    target: scripts/validators/validate-drift.mjs
+  - source: scripts/validators/validate-openspec.mjs
+    target: scripts/validators/validate-openspec.mjs
+  - source: scripts/validators/validate-surface-traceability.mjs
+    target: scripts/validators/validate-surface-traceability.mjs
+  - source: scripts/validators/validate-control-plane.mjs
+    target: scripts/validators/validate-control-plane.mjs
+  - source: scripts/validators/validate-semantic-guardrails.mjs
+    target: scripts/validators/validate-semantic-guardrails.mjs
+  - source: scripts/validators/validate-adr-integrity.mjs
+    target: scripts/validators/validate-adr-integrity.mjs
+  - source: scripts/validators/validate-active-slices.mjs
+    target: scripts/validators/validate-active-slices.mjs
+  - source: scripts/validators/validate-slice-traceability.mjs
+    target: scripts/validators/validate-slice-traceability.mjs
   - source: .github/workflows/quality-verify.yml
     target: .github/workflows/quality-verify.yml
   - source: .github/agent-state/spec-boundary-allowlist.yaml
