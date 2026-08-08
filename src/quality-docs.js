@@ -32,6 +32,18 @@ function formatThreshold(gate) {
   return "_(sin umbral)_";
 }
 
+// El denominador minimo no es un detalle de implementacion: es lo que separa
+// un gate que juzga de uno VACUO. "0 violaciones permitidas" y "0 violaciones
+// permitidas, y solo cuenta si se escanearon al menos 10 modulos" son
+// controles distintos, y la doc omitia el segundo dato por completo -- quien
+// la leia no podia saber si el gate era satisfacible por vacio.
+function formatDenominator(gate) {
+  const declared = gate.min_denominator;
+  if (!declared || !declared.metric) return "_(ninguno)_";
+  const minimum = typeof declared.value === "number" ? declared.value : 1;
+  return `\`${declared.metric}\` >= ${minimum}`;
+}
+
 export function renderQualityDocs({ contract, phaseContract }) {
   const lines = [];
   lines.push("# Contrato de calidad");
@@ -77,13 +89,14 @@ export function renderQualityDocs({ contract, phaseContract }) {
 
   lines.push("## Gates");
   lines.push(table(
-    ["id", "fase de origen", "metrica", "operador", "umbral", "modo", "procedencia"],
+    ["id", "fase de origen", "metrica", "operador", "umbral", "denominador minimo", "modo", "procedencia"],
     (contract.gates ?? []).map((gate) => [
       gate.id,
       gate.phase ?? "",
       `\`${gate.metric}\``,
       gate.op,
       formatThreshold(gate),
+      formatDenominator(gate),
       gate.mode,
       gate.provenance ?? "_(sin declarar)_"
     ])
@@ -126,9 +139,49 @@ export function commandQualityDocs(options = {}) {
 
   const outputRelative = options.out ?? "docs/quality-gates.md";
   const outputAbsolute = path.join(target, outputRelative);
+
+  // Se compara SIEMPRE contra lo que hay comiteado. Antes, este comando solo
+  // sabia sobreescribir: `--dry-run` se saltaba la escritura y devolvia
+  // `status: ok` sin haber leido el archivo existente, asi que una doc
+  // desactualizada era indetectable — justo el modo de fallo (dos fuentes de
+  // verdad divergiendo en silencio) que esta pieza existe para cerrar.
+  const existing = fs.existsSync(outputAbsolute) ? fs.readFileSync(outputAbsolute, "utf8") : null;
+  const drifted = existing !== markdown;
+  const divergence = {
+    exists: existing !== null,
+    drifted,
+    reason: existing === null ? "la doc generada no existe todavia" : drifted ? "la doc comiteada no coincide con el contrato actual" : null
+  };
+
+  // `--check` no escribe nunca: es el modo para CI. Si la doc no esta al dia,
+  // falla y dice que comando la regenera. Se ofrece como comando, no como paso
+  // obligatorio del workflow: en este framework ningun control nace en `block`.
+  if (options.check) {
+    return {
+      exitCode: drifted ? 2 : 0,
+      payload: {
+        status: drifted ? "stale" : "ok",
+        path: outputRelative,
+        ...divergence,
+        hint: drifted ? `regenerar con: sdlc quality-docs --out ${outputRelative}` : undefined
+      }
+    };
+  }
+
   if (!options["dry-run"]) {
     fs.mkdirSync(path.dirname(outputAbsolute), { recursive: true });
     fs.writeFileSync(outputAbsolute, markdown, "utf8");
   }
-  return { exitCode: 0, payload: { status: "ok", path: outputRelative, bytes: markdown.length, dryRun: Boolean(options["dry-run"]) } };
+  return {
+    exitCode: 0,
+    payload: {
+      status: "ok",
+      path: outputRelative,
+      bytes: markdown.length,
+      dryRun: Boolean(options["dry-run"]),
+      // En dry-run esto es lo unico que informa de algo: dice si la corrida
+      // real habria cambiado el archivo, en vez de un `ok` incondicional.
+      ...divergence
+    }
+  };
 }

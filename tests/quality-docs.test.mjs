@@ -22,8 +22,9 @@ const contract = {
   surfaces: [{ id: "s", path: "packages/s", tier: "core", money_path: true, has_ui: false }],
   probes: [{ id: "coverage", command: "validate:coverage", format: "istanbul-summary", emits: "coverage/coverage-summary.json" }],
   gates: [
-    { id: "F8.gate-a", phase: "F8", metric: "coverage.changed_lines_pct", op: "gte", mode: "ratchet", thresholds: { core: 90 }, provenance: "decision-de-equipo" },
-    { id: "F10.gate-b", phase: "F10", metric: "dependencies.violations", op: "eq", mode: "ratchet", threshold: 0, provenance: "decision-de-equipo" }
+    { id: "F8.gate-a", phase: "F8", metric: "coverage.changed_lines_pct", op: "gte", mode: "ratchet", thresholds: { core: 90 }, provenance: "decision-de-equipo", min_denominator: { metric: "coverage.changed_lines_total", value: 1 } },
+    { id: "F10.gate-b", phase: "F10", metric: "dependencies.violations", op: "eq", mode: "ratchet", threshold: 0, provenance: "decision-de-equipo", min_denominator: { metric: "dependencies.modules_scanned", value: 10 } },
+    { id: "F9.gate-sin-denominador", phase: "F9", metric: "mutation.survived", op: "eq", mode: "observe", threshold: 0, provenance: "decision-de-equipo" }
   ]
 };
 const phaseContract = {
@@ -45,6 +46,17 @@ assert.match(f14Row, /ninguno/, "F14 no tiene gates propios");
 assert.match(f14Row, /F8\.gate-a.*F10\.gate-b|F10\.gate-b.*F8\.gate-a/);
 const f8Row = markdown.split("\n").find((line) => line.startsWith("| F8"));
 assert.match(f8Row, /F8\.gate-a/);
+
+// El denominador minimo es lo que separa un gate que juzga de uno VACUO:
+// "0 violaciones" y "0 violaciones, y solo cuenta si se escanearon >=10
+// modulos" son controles distintos. La doc lo omitia por completo, asi que
+// quien la leia no podia saber si el gate era satisfacible por vacio.
+const gateRowA = markdown.split("\n").find((line) => line.startsWith("| F8.gate-a"));
+assert.match(gateRowA, /coverage\.changed_lines_total.*>= 1/, "la tabla de gates debe declarar el denominador minimo");
+const gateRowB = markdown.split("\n").find((line) => line.startsWith("| F10.gate-b"));
+assert.match(gateRowB, /dependencies\.modules_scanned.*>= 10/);
+const gateRowSin = markdown.split("\n").find((line) => line.startsWith("| F9.gate-sin-denominador"));
+assert.match(gateRowSin, /ninguno/, "un gate sin denominador declarado tiene que decirlo, no dejar la celda ambigua");
 
 console.log("quality-docs unit: PASS");
 
@@ -69,3 +81,54 @@ assert.ok(installedF14Row);
 assert.match(installedF14Row, /F10\.dependency-violations/);
 
 console.log("quality-docs cli e2e: PASS");
+
+// --- DIVERGENCIA: una doc comiteada que ya no describe el contrato ---------
+// Sin esto la pieza no cerraba su propia tesis. El comando solo sabia
+// SOBREESCRIBIR: `--dry-run` se saltaba la escritura y devolvia `status: ok`
+// sin haber leido siquiera el archivo existente, asi que una doc
+// desactualizada era indetectable — el modo de fallo (dos fuentes de verdad
+// divergiendo en silencio) que P14 existe para cerrar, dentro de P14.
+function docsCommand(args) {
+  const result = execFileSync("node", [cli, "quality-docs", "--target", target, ...args, "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  return JSON.parse(result);
+}
+function docsCommandExpectingFailure(args) {
+  try {
+    execFileSync("node", [cli, "quality-docs", "--target", target, ...args, "--json"], { cwd: repoRoot, encoding: "utf8" });
+    return { threw: false };
+  } catch (error) {
+    return { threw: true, payload: JSON.parse(error.stdout.toString()), status: error.status };
+  }
+}
+
+// 1. Recien generada: --check pasa. Sin este caso el modo podria bloquear
+// siempre y el test no notaria la diferencia (muro, no control).
+const fresh = docsCommand(["--check"]);
+assert.equal(fresh.status, "ok");
+assert.equal(fresh.drifted, false);
+
+// 2. Cambia el contrato y la doc se queda vieja: --check tiene que fallar.
+const contractPath = path.join(target, "quality-contract.yaml");
+fs.writeFileSync(contractPath, fs.readFileSync(contractPath, "utf8").replace("core: 90", "core: 55"), "utf8");
+
+const stale = docsCommandExpectingFailure(["--check"]);
+assert.equal(stale.threw, true, "una doc que ya no describe el contrato no puede salir con exito");
+assert.equal(stale.status, 2);
+assert.equal(stale.payload.status, "stale");
+assert.equal(stale.payload.drifted, true);
+assert.match(stale.payload.hint, /quality-docs/, "el fallo debe decir como regenerarla, no solo que algo no cuadra");
+
+// 3. --dry-run sobre la misma divergencia: antes devolvia `ok` a ciegas.
+const dry = docsCommand(["--dry-run"]);
+assert.equal(dry.dryRun, true);
+assert.equal(dry.drifted, true, "dry-run debe informar que la corrida real habria cambiado el archivo");
+
+// 4. Regenerar cierra la divergencia: el control vuelve a verde.
+docsCommand([]);
+assert.equal(docsCommand(["--check"]).drifted, false);
+assert.match(fs.readFileSync(path.join(target, "docs", "quality-gates.md"), "utf8"), /core=55/);
+
+console.log("quality-docs divergencia: PASS");
