@@ -828,6 +828,18 @@ function commandUpgrade(options) {
   }
   const fromVersion = config.frameworkVersion;
   const nextConfig = { ...config, frameworkVersion: toVersion };
+  // A diferencia de `install`, `upgrade` lee `nextConfig` de `.sdlc/config.json`
+  // en disco -- un archivo que spec-boundary-guard NO protege. `buildManagedFiles`
+  // interpola sus campos (project.name, gitFlow.*, etc.) como texto crudo dentro
+  // de YAML/comentarios (`template-loader.js: interpolate`), sin escapar. Sin este
+  // chequeo, un `project.name` con un salto de linea inyectaba una key YAML real
+  // (`enforcement: block`) en quality-contract.yaml -- el mismo archivo que
+  // spec-boundary-guard bloquea editar directamente, alcanzado por la puerta de
+  // al lado. Reproducido con PoC antes de este fix.
+  const configErrors = validateConfigShape(nextConfig);
+  if (configErrors.length > 0) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", errors: configErrors } };
+  }
   const migrations = migrationsToRun(fromVersion, toVersion);
   const migrationContext = {
     target,

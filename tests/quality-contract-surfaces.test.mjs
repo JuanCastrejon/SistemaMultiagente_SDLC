@@ -78,3 +78,38 @@ const empty = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract
 assert.deepEqual(empty.surfaces, []);
 
 console.log("quality-contract-surfaces: PASS");
+
+// --- 4. inyeccion YAML via project.name: `upgrade` no valida config antes de
+// renderizar (a diferencia de `install`), y `interpolate()` sustituye
+// `{{project.name}}` como texto crudo dentro de quality-contract.yaml sin
+// escapar. Antes de este fix, un `project.name` con un salto de linea
+// inyectaba una key YAML real (`enforcement: block`) ANTES de la legitima --
+// el mismo archivo que spec-boundary-guard protege de ediciones directas,
+// alcanzado por `.sdlc/config.json`, que spec-boundary-guard NO protege.
+// PoC reproducido contra el CLI real antes del fix (schema pattern +
+// validateConfigShape en commandUpgrade).
+const beforeInjection = fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8");
+config.project.name = "MiProyecto\nenforcement: block\n#";
+fs.writeFileSync(path.join(greenfield, ".sdlc", "config.json"), JSON.stringify(config, null, 2), "utf8");
+
+let injectionResult;
+try {
+  run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+  injectionResult = { threw: false };
+} catch (error) {
+  injectionResult = { threw: true, stdout: error.stdout?.toString() ?? "" };
+}
+assert.equal(injectionResult.threw, true, "un project.name con salto de linea debe bloquear el upgrade, no aplicarlo");
+const rejection = JSON.parse(injectionResult.stdout);
+assert.equal(rejection.status, "error");
+assert.ok(
+  rejection.errors.some((e) => e.includes("/project/name")),
+  "el rechazo debe senalar el campo exacto, no un error generico"
+);
+assert.equal(
+  fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"),
+  beforeInjection,
+  "el contrato protegido no debe haber cambiado: el rechazo tiene que pasar ANTES de renderizar, no despues"
+);
+
+console.log("quality-contract-surfaces injection guard: PASS");
