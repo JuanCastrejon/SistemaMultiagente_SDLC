@@ -198,4 +198,58 @@ assert.ok(
   "una excepcion que ya paso por review y vive en la base debe seguir concediendo el permiso"
 );
 
+// --- 9. RENAME: sacar un archivo protegido de su ruta protegida -----------
+// `git diff --name-only` con la deteccion de renames que git trae activa por
+// defecto imprime SOLO la ruta destino; la origen desaparece. Antes de
+// `--no-renames`, `git mv openspec/specs/x.md notas/x.md` daba `status: ok,
+// violations: 0`: el criterio contra el que se juzga al agente se podia BORRAR
+// del arbol protegido sin dejar rastro, y lo mismo valia para los tres
+// archivos de ALWAYS_LOCKED (incluido el propio guard).
+fs.mkdirSync(path.join(target, "openspec", "specs"), { recursive: true });
+fs.writeFileSync(path.join(target, "openspec", "specs", "movible.md"), "criterio original\n", "utf8");
+git(["add", "-A"]);
+git(["commit", "--quiet", "-m", "spec que el atacante querra mover"]);
+git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+fs.mkdirSync(path.join(target, "notas"), { recursive: true });
+git(["mv", "openspec/specs/movible.md", "notas/movible.md"]);
+const renamed = runTrustedGuard();
+assert.equal(renamed.status, "blocked", JSON.stringify(renamed));
+assert.ok(
+  renamed.violations.some((v) => v.path === "openspec/specs/movible.md"),
+  "mover un archivo protegido fuera de su ruta protegida tiene que verse: la ruta ORIGEN es la que importa"
+);
+git(["reset", "--hard", "HEAD"]);
+git(["clean", "-fd", "notas"]);
+
+// --- 10. RUTA CON TILDE: el corpus de este framework esta en espanol -------
+// `core.quotePath` viene activo por defecto y hace que git imprima
+// `"openspec/specs/facturaci\303\263n/spec.md"` — entrecomillado y en octal.
+// matchesPattern compara con startsWith, asi que la comilla inicial rompia el
+// prefijo y TODO lo que colgara de un directorio con tilde quedaba fuera del
+// guard de forma permanente y silenciosa.
+const acentuado = path.join(target, "openspec", "specs", "facturación");
+fs.mkdirSync(acentuado, { recursive: true });
+fs.writeFileSync(path.join(acentuado, "spec.md"), "criterio con tilde\n", "utf8");
+const conTilde = runTrustedGuard();
+assert.equal(conTilde.status, "blocked", JSON.stringify(conTilde));
+assert.ok(
+  conTilde.violations.some((v) => v.path.includes("facturaci")),
+  "una ruta con caracteres no-ASCII no puede quedar invisible para el guard"
+);
+fs.rmSync(acentuado, { recursive: true, force: true });
+
+// --- 11. BASE IRRESOLUBLE: no medir no es aprobar --------------------------
+// Antes devolvia `status: skipped` con exit 0 — verde — mientras su propio
+// detail admitia que no podia comparar contra nada verificable.
+// `resolveBase` cae a origin/develop y origin/main si el --base explicito no
+// resuelve, asi que para probar la condicion real hay que dejar el repo sin
+// NINGUNA ref remota — el caso del checkout superficial o del consumidor cuya
+// rama de integracion se renombro.
+const savedOriginMain = git(["rev-parse", "refs/remotes/origin/main"]).trim();
+git(["update-ref", "-d", "refs/remotes/origin/main"]);
+const sinBase = spawnSync("node", [trustedCopy, "--base", "origin/no-existe", "--json"], { cwd: target, encoding: "utf8" });
+git(["update-ref", "refs/remotes/origin/main", savedOriginMain]);
+assert.equal(sinBase.status, 2, "un guard que no puede comparar debe bloquear, no pasar");
+assert.equal(JSON.parse(sinBase.stdout).code, "spec-boundary-base-unresolvable");
+
 console.log("spec-boundary-guard: PASS");

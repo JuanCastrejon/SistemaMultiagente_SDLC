@@ -56,12 +56,36 @@ function parseArgs(argv) {
   return options;
 }
 
-function git(args) {
+// Cuatro decisiones de esta funcion, todas por hallazgos reproducidos en la
+// auditoria adversarial sobre la lista `changed` que alimenta el guard:
+//
+// 1. `core.quotePath=false`: por defecto git entrecomilla y escapa en octal
+//    cualquier ruta con byte no-ASCII (`"openspec/specs/facturaci\303\263n/..."`).
+//    `matchesPattern` compara con startsWith, asi que la comilla inicial rompia
+//    el prefijo y el archivo quedaba fuera del guard. En un framework cuyo
+//    corpus entero esta en espanol, un solo directorio con tilde bastaba.
+// 2. `maxBuffer` amplio: el default de Node es 1 MiB y `execFileSync` lanza
+//    ENOBUFS al superarlo. Con el catch de abajo tragandose el error, un PR
+//    grande dejaba el diff en CERO rutas y el guard seguia como si nada.
+// 3. El fallo se DEVUELVE, no se traga: quien llama decide. Para los diffs, no
+//    poder medir no puede parecerse a no tener nada que reportar.
+// 4. Sin `allowFailure`, un error es un error. `resolveBase` si lo usa, porque
+//    ahi probar refs que no existen es el modo normal de operar.
+function git(args, { allowFailure = false } = {}) {
   try {
-    return execFileSync("git", args, { encoding: "utf8" }).trim();
-  } catch {
-    return "";
+    const stdout = execFileSync("git", ["-c", "core.quotePath=false", ...args], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024
+    });
+    return { ok: true, stdout: stdout.trim(), error: null };
+  } catch (error) {
+    return { ok: allowFailure, stdout: "", error };
   }
+}
+
+// Azucar para los sitios donde solo interesa el texto y el fallo ya se manejo.
+function gitText(args) {
+  return git(args, { allowFailure: true }).stdout;
 }
 
 function resolveBase(explicit) {
@@ -74,7 +98,7 @@ function resolveBase(explicit) {
   for (const candidate of candidates) {
     // Se resuelve contra la ref REMOTA a proposito: una rama local puede
     // reescribirse para que el diff parezca vacio.
-    if (git(["rev-parse", "--verify", "--quiet", candidate])) return candidate;
+    if (gitText(["rev-parse", "--verify", "--quiet", candidate])) return candidate;
   }
   return null;
 }
@@ -100,11 +124,9 @@ function loadLockedPatterns(lockedFile) {
 // alli (o `git show` falla por cualquier motivo), devuelve null: quien llama
 // debe interpretarlo como "sin contenido", nunca caer al checkout.
 function readFromBase(base, filePath) {
-  try {
-    return execFileSync("git", ["show", `${base}:${filePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-  } catch {
-    return null;
-  }
+  const result = git(["show", `${base}:${filePath}`], { allowFailure: true });
+  // Ausente en la base = sin excepciones. Nunca se cae al checkout.
+  return result.error ? null : result.stdout;
 }
 
 // Se parsea sin dependencia de YAML: solo lineas `- path: <ruta>`.
@@ -157,27 +179,69 @@ const base = resolveBase(options.base);
 const result = { status: "ok", base, locked: [], violations: [], allowed: [] };
 
 if (!base) {
-  result.status = "skipped";
-  result.detail = "no hay rama base remota resoluble; el guard no puede comparar contra nada verificable";
+  // Antes esto era `skipped` con exit 0: verde. El propio detail admitia que
+  // "no puede comparar contra nada verificable" y aun asi devolvia exito —
+  // el patron "no se pudo medir se ve igual que todo bien" que el ADR 0007
+  // prohibe, en el control que sostiene todos los demas. Un guard que no
+  // puede hacer su trabajo bloquea; desbloquearlo es una decision humana.
+  result.status = "blocked";
+  result.code = "spec-boundary-base-unresolvable";
+  result.detail =
+    "no hay rama base remota resoluble; el guard no puede comparar contra nada verificable. Verificar que el checkout traiga la rama de integracion (fetch-depth: 0) y que gitFlow.integrationBranch coincida con la rama real.";
   console.log(options.json ? JSON.stringify(result, null, 2) : `spec-boundary: ${result.detail}`);
-  process.exit(0);
+  process.exit(2);
 }
 
-const mergeBase = git(["merge-base", base, "HEAD"]) || base;
+const mergeBase = gitText(["merge-base", base, "HEAD"]) || base;
 // Commits del branch MAS working tree, staged Y sin trackear: `git diff` por
 // si solo es ciego a un archivo nuevo que nunca se agrego al indice. Sin la
 // linea de `status`, crear `.sdlc/locked-paths.txt` o un spec nuevo sin hacer
 // `git add` pasaba el guard en silencio -- el mismo modo de fallo por vacio
 // que el resto del gauntlet, aplicado al propio guard.
-const changed = [
-  ...git(["diff", "--name-only", `${mergeBase}...HEAD`]).split(/\r?\n/),
-  ...git(["diff", "--name-only"]).split(/\r?\n/),
-  ...git(["diff", "--name-only", "--cached"]).split(/\r?\n/),
-  ...git(["status", "--porcelain", "--untracked-files=all"])
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("?? "))
-    .map((line) => line.slice(3))
-]
+// `--no-renames` NO es cosmetico. Con la deteccion de renames que git trae
+// activa por defecto, `--name-only` imprime SOLO la ruta destino de un par
+// renombrado y la ruta ORIGEN desaparece de la salida. Eso permitia sacar
+// cualquier archivo protegido de su ruta protegida sin dejar rastro:
+// `git mv openspec/specs/algo/spec.md notas/archivo.md` daba `status: ok,
+// violations: 0` — reproducido. Vaciaba el control entero, incluida su propia
+// autoproteccion: los tres archivos de ALWAYS_LOCKED se podian mover igual.
+// Con `--no-renames`, git reporta el par como borrado + alta y ambas rutas
+// entran a `changed`.
+const diffSources = [
+  ["diff", "--no-renames", "--name-only", `${mergeBase}...HEAD`],
+  ["diff", "--no-renames", "--name-only"],
+  ["diff", "--no-renames", "--name-only", "--cached"]
+];
+
+const collected = [];
+const diffFailures = [];
+for (const args of diffSources) {
+  const result = git(args);
+  if (!result.ok) {
+    // No poder medir NO puede parecerse a no tener nada que reportar: esa es
+    // la regla de no-vacuidad del ADR 0007 aplicada al propio guard. Antes,
+    // un `git()` que se tragaba el error dejaba el diff en cero rutas y el
+    // guard seguia en verde — autoinfligible por el evaluado con solo hacer
+    // el PR lo bastante grande para desbordar el buffer.
+    diffFailures.push({ command: `git ${args.join(" ")}`, detail: result.error?.message ?? "fallo desconocido" });
+    continue;
+  }
+  collected.push(...result.stdout.split(/\r?\n/));
+}
+
+const statusResult = git(["status", "--porcelain", "--untracked-files=all"]);
+if (!statusResult.ok) {
+  diffFailures.push({ command: "git status --porcelain", detail: statusResult.error?.message ?? "fallo desconocido" });
+} else {
+  collected.push(
+    ...statusResult.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("?? "))
+      .map((line) => line.slice(3))
+  );
+}
+
+const changed = collected
   .map((line) => line.trim())
   .filter(Boolean)
   .filter((value, index, all) => all.indexOf(value) === index);
@@ -199,7 +263,15 @@ for (const file of changed) {
   result.violations.push({ path: file, pattern });
 }
 
-if (result.violations.length > 0) {
+result.filesCompared = changed.length;
+if (diffFailures.length > 0) {
+  // Un comando de git que fallo significa que el guard NO pudo ver parte del
+  // cambio. Reportarlo como `ok` seria exactamente el falso verde por
+  // denominador vacio que este framework existe para impedir.
+  result.status = "blocked";
+  result.diffFailures = diffFailures;
+  result.detail = "el guard no pudo enumerar el cambio completo: no se puede afirmar que no toca rutas protegidas";
+} else if (result.violations.length > 0) {
   result.status = "blocked";
   result.detail = "el diff toca especificacion o configuracion de gates sin excepcion declarada";
 }
