@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { computeTreeHash } from "../src/evidence-writer.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(repoRoot, "bin", "sdlc.js");
@@ -207,4 +208,79 @@ assert.ok(
   "el payload declara de que fases hereda, para que 'adjudico' y 'no adjudico nada' no se vean igual"
 );
 
+// --- 5. HERENCIA OBSOLETA: la metrica heredada midio OTRO arbol ------------
+// Los casos 1-4 cerraron "que los gates heredados se adjudiquen". Faltaba la
+// otra mitad: que lo heredado se haya medido sobre EL ARBOL QUE SE VA A
+// FUSIONAR. Sin este anclaje, F14 -- que existe justamente como guard
+// anti-regresion antes del merge -- adjudicaba con la foto de un arbol
+// anterior. Reproducido con PoC antes del fix: con F8/F10 medidos sobre un
+// arbol limpio, se ensucia el arbol, la corrida fresca de F14 mide 7
+// violaciones / 3 ciclos / 12% de cobertura, las escribe en F14.yaml, y los
+// tres gates salen `pass` con los valores viejos: `status: ok`, exit 0. Los dos
+// tree_hash ya estaban en disco, en los mismos archivos que el codigo lee.
+const sliceStale = "slice-stale";
+const surfacePaths = ["apps/api", "apps/web"];
+const treeAntes = computeTreeHash(target, surfacePaths);
+
+function evidenciaConArbol(phase, metrics, treeHash) {
+  return baseEvidence(phase, sliceStale, {
+    quality_metrics: {
+      measured_at: new Date(0).toISOString(),
+      source: "ci",
+      ci_provider: "github-actions",
+      ci_run_id: "run-stale",
+      tree_hash: treeHash,
+      probes: [],
+      metrics
+    }
+  });
+}
+function arbitroSobre(slice) {
+  return JSON.parse(
+    spawnSync(
+      "node",
+      [cli, "quality-gate", "--target", target, "--slice", slice, "--phase", "F14", "--run", "--source", "ci", "--exit-code", "--json"],
+      { cwd: repoRoot, encoding: "utf8", env: { ...AS_CI, GITHUB_RUN_ID: "run-stale" } }
+    ).stdout
+  );
+}
+
+// 5a. CONTROL: medido sobre el arbol actual y sin regresion -> el merge pasa.
+// Sin este caso, el fix podria ser un muro (bloquear siempre) en vez de un
+// control, y el test no notaria la diferencia.
+writeEvidence(sliceStale, "F8", evidenciaConArbol("F8", { coverage: { changed_lines_pct: 95, changed_lines_total: 50 } }, treeAntes.hash));
+writeEvidence(sliceStale, "F10", evidenciaConArbol("F10", { dependencies: { violations: 0, cycles: 0, modules_scanned: 30 } }, treeAntes.hash));
+const fresco = arbitroSobre(sliceStale);
+assert.equal(fresco.status, "ok", JSON.stringify(fresco.surfaceFindings ?? fresco));
+assert.ok(
+  fresco.inherited?.every((entry) => entry.treeMatches === true),
+  "medido sobre el arbol actual, la herencia es valida y el merge debe poder avanzar"
+);
+
+// 5b. Se ensucia el arbol DESPUES de que F8/F10 quedaron medidos. Las metricas
+// heredadas siguen diciendo que todo esta bien, porque miraron otra cosa.
+fs.writeFileSync(path.join(target, "apps", "api", "backdoor.ts"), "export const backdoor = 1;\n", "utf8");
+const treeDespues = computeTreeHash(target, surfacePaths);
+assert.notEqual(treeDespues.hash, treeAntes.hash, "el arbol tiene que haber cambiado de verdad para que el caso pruebe algo");
+
+const obsoleto = arbitroSobre(sliceStale);
+assert.equal(obsoleto.status, "blocked", JSON.stringify(obsoleto.evaluated));
+const stale = (obsoleto.surfaceFindings ?? []).filter((finding) => finding.code === "inherited-evidence-stale");
+assert.equal(stale.length, 2, "las dos fases de origen (F8 y F10) midieron un arbol que ya no es el que se fusiona");
+assert.ok(
+  stale.every((finding) => finding.actual === treeAntes.hash && finding.expected === treeDespues.hash),
+  "el hallazgo debe nombrar los dos hashes, no solo decir que algo no cuadra"
+);
+assert.ok(
+  obsoleto.inherited?.every((entry) => entry.treeMatches === false),
+  "el payload debe dejar ver que la herencia no corresponde al arbol actual"
+);
+// Los gates en si siguen 'pass' con los valores viejos: por eso el bloqueo NO
+// puede depender de que alguna metrica falle. Es la frescura lo que falta.
+assert.ok(
+  obsoleto.evaluated.every((entry) => entry.status === "pass"),
+  "el bypass consistia justo en esto: las metricas heredadas pasan, y sin anclaje eso bastaba para fusionar"
+);
+
 console.log("phase-inheritance: PASS");
+console.log("phase-inheritance herencia obsoleta: PASS");

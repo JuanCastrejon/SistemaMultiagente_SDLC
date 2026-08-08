@@ -106,6 +106,11 @@ export async function commandQualityGate(options = {}) {
   let evidenceWritten = null;
   let advisory = true;
   let sourceResolution = null;
+  // Se eleva al scope de la funcion: la adjudicacion de gates HEREDADOS (mas
+  // abajo) necesita el hash del arbol actual para comprobar que la evidencia
+  // que hereda midio este mismo arbol, y esa comprobacion ocurre fuera del
+  // bloque `--run` donde el hash se calculaba.
+  let currentTree = null;
 
   if (runProbes) {
     if (!slice || !phase) {
@@ -167,6 +172,7 @@ export async function commandQualityGate(options = {}) {
     sourceResolution = effectiveSource;
 
     const tree = computeTreeHash(target, (contract.surfaces ?? []).map((surface) => surface.path));
+    currentTree = tree;
     const written = appendQualityEvidence({
       target,
       slice,
@@ -260,11 +266,25 @@ export async function commandQualityGate(options = {}) {
     evaluateQualityGates({ gates: ownGates, metrics, phase, tier, baseline, declaredByContract: effectiveDeclaredIds })
   ];
   const inherited = [];
+  // Heredar una metrica es heredar tambien EL ARBOL sobre el que se midio. Sin
+  // este anclaje, F14 -- que no mide nada propio y existe precisamente como
+  // guard anti-regresion antes de fusionar -- adjudicaba contra la medicion de
+  // un arbol anterior. Reproducido con PoC: con la evidencia de F8/F10 tomada
+  // sobre un arbol limpio, se ensucia el arbol, y la corrida fresca de F14 mide
+  // 7 violaciones de dependencias, 3 ciclos y 12% de cobertura, las escribe en
+  // F14.yaml... y los tres gates salen `pass` con los valores viejos, con
+  // `status: ok` y exit 0. Los dos tree_hash ya estaban en disco, en los mismos
+  // archivos que este codigo lee; nadie los comparaba.
+  const inheritedTree =
+    inheritedByOrigin.size > 0
+      ? (currentTree ??= computeTreeHash(target, (contract.surfaces ?? []).map((surface) => surface.path)))
+      : null;
   for (const [originPhase, originGates] of inheritedByOrigin) {
     // Un gate heredado se evalua contra la evidencia de la fase que SI lo
     // midio, nunca contra las metricas frescas de esta fase (que no las tiene).
     const originRead = readEvidenceFile(evidencePath(target, slice, originPhase));
     const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
+    const originTreeHash = originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null;
     groups.push(
       evaluateQualityGates({
         gates: originGates,
@@ -275,13 +295,39 @@ export async function commandQualityGate(options = {}) {
         declaredByContract: effectiveDeclaredIds
       })
     );
-    inherited.push({ phase: originPhase, evidenceFound: originRead.ok, gates: originGates.map((gate) => gate.id) });
+    inherited.push({
+      phase: originPhase,
+      evidenceFound: originRead.ok,
+      gates: originGates.map((gate) => gate.id),
+      treeHash: originTreeHash,
+      currentTreeHash: inheritedTree?.hash ?? null,
+      treeMatches: originRead.ok ? originTreeHash === inheritedTree?.hash : null
+    });
     if (!originRead.ok) {
       surfaceFindings.push({
         level: "error",
         code: "inherited-evidence-missing",
         phase: originPhase,
         detail: `${phase} hereda gates de ${originPhase} pero su evidencia no es legible (${originRead.code}): no se puede re-verificar antes de fusionar`
+      });
+    } else if (originTreeHash === null) {
+      // Sin hash no se puede demostrar frescura. No poder verificar no puede
+      // parecerse a haber verificado: se bloquea, igual que el resto del
+      // gauntlet trata la ausencia de medicion.
+      surfaceFindings.push({
+        level: "error",
+        code: "inherited-evidence-unanchored",
+        phase: originPhase,
+        detail: `${phase} hereda gates de ${originPhase} pero esa evidencia no declara tree_hash: no se puede demostrar que midio el arbol que se va a fusionar`
+      });
+    } else if (originTreeHash !== inheritedTree?.hash) {
+      surfaceFindings.push({
+        level: "error",
+        code: "inherited-evidence-stale",
+        phase: originPhase,
+        expected: inheritedTree?.hash ?? null,
+        actual: originTreeHash,
+        detail: `${phase} hereda gates de ${originPhase}, pero esa evidencia midio otro arbol (${originTreeHash.slice(0, 12)} != ${(inheritedTree?.hash ?? "").slice(0, 12)}): las superficies cambiaron despues de medirse y hay que volver a correr ${originPhase}`
       });
     }
   }

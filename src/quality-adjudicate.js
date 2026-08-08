@@ -249,12 +249,20 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
   const groupResults = [evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract })];
   const inherited = [];
 
+  // El arbol sobre el que ESTA fase se midio. Es la referencia contra la que se
+  // comprueba la frescura de lo heredado: aqui no se recorre el disco a
+  // proposito (este modulo es sincrono y no ejecuta nada), y comparar contra el
+  // arbol de trabajo daria falso positivo en cualquier lectura advisory con
+  // cambios sin medir. Comparar los dos hashes YA REGISTRADOS responde justo lo
+  // que importa: ¿la metrica heredada se midio sobre el mismo arbol que esta?
+  const ownTreeHash = read.evidence?.quality_metrics?.tree_hash ?? null;
   for (const [originPhase, originGates] of inheritedGroups) {
     const originAbsolute = path.join(target, ".github", "agent-state", "evidence", String(slice), `${originPhase}.yaml`);
     const originRead = readEvidenceFile(originAbsolute);
     // Sin evidencia legible en la fase de origen, se adjudica sobre metricas
     // vacias: cada gate heredado sale `not-measured`, nunca `pass` por vacio.
     const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
+    const originTreeHash = originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null;
     groupResults.push(
       evaluateQualityGates({ gates: originGates, metrics: originMetrics, phase: originPhase, tier, baseline, declaredByContract })
     );
@@ -262,8 +270,23 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
       phase: originPhase,
       evidenceFound: originRead.ok,
       evidenceSource: originRead.ok ? originRead.evidence?.quality_metrics?.source ?? null : null,
-      treeHash: originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null
+      treeHash: originTreeHash,
+      ownTreeHash,
+      treeMatches: originRead.ok && originTreeHash !== null && ownTreeHash !== null ? originTreeHash === ownTreeHash : null
     });
+    // Heredar una metrica es heredar el arbol sobre el que se midio. Sin este
+    // anclaje, una fase que no mide nada propio (F14) adjudicaba con metricas
+    // de un arbol anterior y salia `ok`. Ver el PoC en tests/phase-inheritance.
+    if (originRead.ok && originTreeHash !== null && ownTreeHash !== null && originTreeHash !== ownTreeHash) {
+      surfaceFindings.push({
+        level: "error",
+        code: "inherited-evidence-stale",
+        phase: originPhase,
+        expected: ownTreeHash,
+        actual: originTreeHash,
+        detail: `${phase} hereda gates de ${originPhase}, pero esa evidencia midio otro arbol (${originTreeHash.slice(0, 12)} != ${ownTreeHash.slice(0, 12)}): hay que volver a correr ${originPhase} sobre el arbol actual`
+      });
+    }
   }
 
   const adjudication = {
