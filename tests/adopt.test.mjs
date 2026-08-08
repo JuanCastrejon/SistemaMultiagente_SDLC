@@ -13,16 +13,51 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { commandAdopt, detectCliLinked } from "../src/adopt.js";
+import { validateConfigShape } from "../src/config-validator.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(repoRoot, "bin", "sdlc.js");
+const PACKAGE_NAME = "sistema-multiagente-sdlc";
 
-// --- unidad: detectCliLinked --------------------------------------------
-// Sin la dependencia declarada en absoluto (este mismo repo no se depende a
-// si mismo): declared debe ser false, nunca un `linked` inventado.
-const undeclaredResult = detectCliLinked();
-assert.equal(undeclaredResult.declared, false);
-assert.equal(undeclaredResult.linked, null);
+function fixturePackage(dir, version) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: PACKAGE_NAME, version }, null, 2), "utf8");
+}
+
+// --- unidad: detectCliLinked debe resolver desde el TARGET, no desde el
+// modulo del framework (P13: resolver desde el framework es ciego
+// exactamente en el escenario de `npm link`, que es el que este chequeo
+// existe para detectar). ----------------------------------------------
+{
+  // Sin la dependencia declarada en absoluto: declared debe ser false, nunca
+  // un `linked` inventado.
+  const noDepTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-nodep-"));
+  const undeclaredResult = detectCliLinked(noDepTarget);
+  assert.equal(undeclaredResult.declared, false);
+  assert.equal(undeclaredResult.linked, null);
+
+  // Paquete real instalado bajo target/node_modules (no symlink): declared
+  // true, linked false.
+  const installedTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-installed-"));
+  fixturePackage(path.join(installedTarget, "node_modules", PACKAGE_NAME), "1.8.0");
+  const installedResult = detectCliLinked(installedTarget);
+  assert.equal(installedResult.declared, true);
+  assert.equal(installedResult.linked, false);
+
+  // Escenario `npm link`: target/node_modules/<paquete> es un symlink hacia
+  // un working tree del framework fuera de node_modules. Este es exactamente
+  // el caso que P13 rompia: resolver desde import.meta.url (el propio modulo
+  // del framework, que no se depende a si mismo) revienta y cae al catch,
+  // reportando declared:false en vez de declared:true, linked:true.
+  const linkedTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-linked-"));
+  const externalFrameworkDir = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-external-fw-"));
+  fixturePackage(externalFrameworkDir, "1.8.0-dev");
+  fs.mkdirSync(path.join(linkedTarget, "node_modules"), { recursive: true });
+  fs.symlinkSync(externalFrameworkDir, path.join(linkedTarget, "node_modules", PACKAGE_NAME), "junction");
+  const linkedResult = detectCliLinked(linkedTarget);
+  assert.equal(linkedResult.declared, true, "npm link debe seguir resolviendo la dependencia, no reportar declared:false");
+  assert.equal(linkedResult.linked, true, "el symlink resuelve fuera de node_modules del target -> linked debe ser true");
+}
 
 console.log("adopt detectCliLinked unit: PASS");
 
@@ -62,10 +97,37 @@ assert.equal(config.mode, "legacy");
 assert.deepEqual(config.surfaces, [], "adopt no inventa superficies de ejemplo sobre un repo maduro");
 assert.equal(config.project.name, "RepoMaduroDemo");
 
+// El config que adopt escribe debe pasar el propio validador del framework
+// (P13: `governance.maintainers: []` violaba minItems:1 del schema -- adopt
+// generaba un archivo que `sdlc doctor` reportaria como invalido).
+assert.deepEqual(validateConfigShape(config), [], "el config generado por adopt debe ser valido segun sdlc.config.schema.json");
+
 const contract = YAML.parse(fs.readFileSync(path.join(target, "quality-contract.yaml"), "utf8"));
 assert.deepEqual(contract.surfaces, [], "sin superficies declaradas todavia, el contrato lo dice explicitamente");
 
 console.log("adopt e2e (repo nuevo): PASS");
+
+// --- E2E: file:/link: previo se migra, no se deja pasar como "ya declarada"
+// (decision 9 abandona npm link; una declaracion file:/link: es el mismo
+// problema con otro nombre) -------------------------------------------------
+const linkedDepTarget = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-adopt-")), "consumidor-linkeado");
+fs.mkdirSync(linkedDepTarget, { recursive: true });
+fs.writeFileSync(
+  path.join(linkedDepTarget, "package.json"),
+  JSON.stringify({ name: "consumidor-linkeado", dependencies: { "sistema-multiagente-sdlc": "file:../../sistema-multiagente-sdlc" } }, null, 2),
+  "utf8"
+);
+const migrated = commandAdopt({ target: linkedDepTarget });
+assert.equal(migrated.exitCode, 0, JSON.stringify(migrated.payload));
+assert.ok(
+  migrated.payload.created.some((entry) => entry.startsWith("package.json") && entry.includes("file:")),
+  "debe reportar la migracion del file:, no un skip silencioso"
+);
+const migratedPackageJson = JSON.parse(fs.readFileSync(path.join(linkedDepTarget, "package.json"), "utf8"));
+assert.ok(!migratedPackageJson.dependencies?.["sistema-multiagente-sdlc"], "el file: en dependencies debe quedar eliminado");
+assert.match(migratedPackageJson.devDependencies["sistema-multiagente-sdlc"], /^\^/, "debe quedar una version semver real, no file:/link:");
+
+console.log("adopt e2e (migracion file:): PASS");
 
 // --- E2E: aditivo puro -- correrlo de nuevo no pisa lo que ya existe -------
 fs.writeFileSync(

@@ -627,7 +627,7 @@ function commandDoctor(options) {
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
   findings.push(...checkRetentionPolicy(target));
-  const cliLinked = detectCliLinked();
+  const cliLinked = detectCliLinked(target);
   if (cliLinked.declared && cliLinked.linked) {
     findings.push({
       level: "warning",

@@ -32,13 +32,21 @@ const PACKAGE_NAME = "sistema-multiagente-sdlc";
  * Mismo chequeo que `quality-verify.yml` hace en bash para el arbitro de CI,
  * expuesto como funcion real para que `doctor` y `adopt` lo compartan en vez
  * de reimplementarlo cada uno a su manera.
+ *
+ * Debe resolver desde el TARGET (el repo consumidor), nunca desde
+ * `import.meta.url` (el propio modulo del framework): resolver desde el
+ * framework es ciego exactamente en el escenario de `npm link` que este
+ * chequeo existe para detectar -- el framework no se depende a si mismo, asi
+ * que la resolucion revienta y cae al catch, indistinguible de "no hay
+ * dependencia" (`declared:false`).
  */
-export function detectCliLinked() {
+export function detectCliLinked(target = process.cwd()) {
   try {
-    const require = createRequire(import.meta.url);
+    const resolvedTarget = path.resolve(target);
+    const require = createRequire(path.join(resolvedTarget, "package.json"));
     const resolved = require.resolve(`${PACKAGE_NAME}/package.json`);
-    const normalized = resolved.split(path.sep).join("/");
-    return { declared: true, linked: !normalized.includes("/node_modules/"), resolved };
+    const expectedInstallDir = path.join(resolvedTarget, "node_modules", PACKAGE_NAME) + path.sep;
+    return { declared: true, linked: !resolved.startsWith(expectedInstallDir), resolved };
   } catch {
     return { declared: false, linked: null, resolved: null };
   }
@@ -79,15 +87,25 @@ export function commandAdopt(options = {}) {
 
   // 1. devDependency versionada. Es el punto central de esta pieza: la
   // decision 9 abandona npm link porque el evaluado no puede ser quien
-  // controla el codigo que lo arbitra.
+  // controla el codigo que lo arbitra. Una declaracion `file:`/`link:` es el
+  // mismo problema con otro nombre -- sigue apuntando a un working tree local
+  // en vez de una version publicada -- asi que se migra, no se deja pasar
+  // como "ya declarada".
   const packageJson = readJson(packageJsonPath);
-  const alreadyDeclared =
-    Boolean(packageJson.dependencies?.[PACKAGE_NAME]) || Boolean(packageJson.devDependencies?.[PACKAGE_NAME]);
+  const declaredIn = packageJson.dependencies?.[PACKAGE_NAME] ? "dependencies" : packageJson.devDependencies?.[PACKAGE_NAME] ? "devDependencies" : null;
+  const declaredValue = declaredIn ? packageJson[declaredIn][PACKAGE_NAME] : null;
+  const isLinkProtocol = typeof declaredValue === "string" && /^(file|link):/.test(declaredValue);
+  const alreadyDeclared = Boolean(declaredIn) && !isLinkProtocol;
   if (!alreadyDeclared) {
+    if (isLinkProtocol) delete packageJson[declaredIn][PACKAGE_NAME];
     packageJson.devDependencies = packageJson.devDependencies ?? {};
     packageJson.devDependencies[PACKAGE_NAME] = `^${FRAMEWORK_VERSION}`;
     writeJson(packageJsonPath, packageJson);
-    created.push("package.json (devDependency agregada)");
+    created.push(
+      isLinkProtocol
+        ? `package.json (${declaredValue} reemplazado por devDependency versionada)`
+        : "package.json (devDependency agregada)"
+    );
   } else {
     skipped.push("package.json (ya declara sistema-multiagente-sdlc)");
   }
@@ -104,7 +122,10 @@ export function commandAdopt(options = {}) {
       project: { name: projectName, slug: slugFromName(projectName) },
       mode: "legacy",
       surfaces: [],
-      governance: { threatModel: "single-maintainer", maintainers: [] },
+      // Sin maintainers: `maintainers: []` viola el minItems:1 del schema
+      // (el propio validador de este framework lo rechaza) -- el campo es
+      // opcional, se omite hasta que el consumidor declare firmantes reales.
+      governance: { threatModel: "single-maintainer" },
       gitFlow: {
         integrationBranch: detectIntegrationBranch(target),
         stableBranch: "main",
@@ -147,7 +168,7 @@ export function commandAdopt(options = {}) {
     created.push(relativePath);
   }
 
-  const cli = detectCliLinked();
+  const cli = detectCliLinked(target);
 
   return {
     exitCode: EXIT_OK,
