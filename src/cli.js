@@ -749,6 +749,9 @@ function commandAcceptanceVerify(options) {
       status: result.ok ? "ok" : "blocked",
       change: changeSlug,
       files: result.files.map((entry) => entry.file),
+      // Cuantos escenarios se verificaron de verdad: sin este numero, "verifique
+      // 12" y "verifique 0" se veian identicos para quien lee el resultado.
+      scenarioCount: result.scenarioCount ?? 0,
       findings: result.findings
     }
   };

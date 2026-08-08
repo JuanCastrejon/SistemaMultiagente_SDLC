@@ -22,7 +22,7 @@ import { pathExists, readPackageScripts, sha256Text } from "./file-utils.js";
 import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
-import { detectPackageManager, runPackageScript } from "./harness.js";
+import { detectPackageManager, loadPhaseContract, runPackageScript } from "./harness.js";
 import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 import { detectEvidenceMismatch } from "./quality-verify.js";
@@ -218,13 +218,80 @@ export async function commandQualityGate(options = {}) {
   }
   const baseline = baselineState.tampered ? {} : loadBaselineMetrics(target);
 
-  const adjudication = evaluateQualityGates({
-    gates: contract.gates ?? [],
-    metrics,
-    phase,
-    tier,
-    baseline
-  });
+  // Los gates que la FASE declara en phase-contract.yaml pueden pertenecer a
+  // otra fase de ORIGEN (herencia, P7): F14 no mide nada propio y re-verifica
+  // los de F8/F10. `evaluateQualityGates` filtra por `phase`, asi que
+  // pasarle el contrato entero descartaba los heredados y devolvia
+  // `evaluated: []` — y este comando es EXACTAMENTE el que corre el arbitro
+  // en CI, con lo que la pieza entera era decorativa donde mas importa.
+  // `phase-gate` y `status` si los adjudicaban, via adjudicateFromEvidence;
+  // el arbitro no. Se cierra esa asimetria aqui.
+  const phaseContract = loadPhaseContract(target);
+  const phaseEntry = (phaseContract.phases ?? []).find(
+    (entry) => String(entry.id).toUpperCase() === String(phase).toUpperCase()
+  );
+  const declaredGateIds = Array.isArray(phaseEntry?.quality_gates) ? phaseEntry.quality_gates : null;
+  const allGates = contract.gates ?? [];
+  const byDeclaredIds = declaredGateIds ? allGates.filter((gate) => declaredGateIds.includes(gate.id)) : [];
+  // Si el phase-contract declara gates y AL MENOS UNO resuelve en el contrato
+  // de calidad, esa lista manda (es la que habilita la herencia). Si no
+  // resuelve ninguno, los dos contratos no se corresponden — tipico de un
+  // consumidor con quality-contract propio que aun usa el phase-contract del
+  // framework por fallback — y filtrar por ids ajenos dejaria al consumidor
+  // sin adjudicar nada. En ese caso se cae al comportamiento historico:
+  // evaluar todos los gates y dejar que evaluateQualityGates filtre por fase.
+  const declaredGates = byDeclaredIds.length > 0 ? byDeclaredIds : allGates;
+  const effectiveDeclaredIds = byDeclaredIds.length > 0 ? declaredGateIds : null;
+
+  const ownGates = declaredGates.filter((gate) => !gate.phase || gate.phase === phase);
+  const inheritedByOrigin = new Map();
+  for (const gate of declaredGates) {
+    if (!gate.phase || gate.phase === phase) continue;
+    if (!inheritedByOrigin.has(gate.phase)) inheritedByOrigin.set(gate.phase, []);
+    inheritedByOrigin.get(gate.phase).push(gate);
+  }
+
+  const groups = [
+    evaluateQualityGates({ gates: ownGates, metrics, phase, tier, baseline, declaredByContract: effectiveDeclaredIds })
+  ];
+  const inherited = [];
+  for (const [originPhase, originGates] of inheritedByOrigin) {
+    // Un gate heredado se evalua contra la evidencia de la fase que SI lo
+    // midio, nunca contra las metricas frescas de esta fase (que no las tiene).
+    const originRead = readEvidenceFile(evidencePath(target, slice, originPhase));
+    const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
+    groups.push(
+      evaluateQualityGates({
+        gates: originGates,
+        metrics: originMetrics,
+        phase: originPhase,
+        tier,
+        baseline,
+        declaredByContract: effectiveDeclaredIds
+      })
+    );
+    inherited.push({ phase: originPhase, evidenceFound: originRead.ok, gates: originGates.map((gate) => gate.id) });
+    if (!originRead.ok) {
+      surfaceFindings.push({
+        level: "error",
+        code: "inherited-evidence-missing",
+        phase: originPhase,
+        detail: `${phase} hereda gates de ${originPhase} pero su evidencia no es legible (${originRead.code}): no se puede re-verificar antes de fusionar`
+      });
+    }
+  }
+
+  const adjudication = {
+    status: groups.some((g) => g.violations.length > 0)
+      ? "blocked"
+      : groups.some((g) => g.warnings.length > 0)
+        ? "warning"
+        : "ok",
+    evaluated: groups.flatMap((g) => g.evaluated),
+    violations: groups.flatMap((g) => g.violations),
+    warnings: groups.flatMap((g) => g.warnings),
+    vacuous: groups.flatMap((g) => g.vacuous)
+  };
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
   const blocked = adjudication.violations.length > 0 || surfaceErrors.length > 0;
@@ -242,6 +309,9 @@ export async function commandQualityGate(options = {}) {
     // hubo degradacion, para que "esto se midio en CI" sea auditable en vez
     // de creible por afirmacion (ADR 0007, P8).
     sourceResolution,
+    // Que gates se heredaron de otra fase y si su evidencia de origen se pudo
+    // leer. Sin esto, "F14 adjudico" y "F14 no adjudico nada" se veian igual.
+    inherited: inherited.length > 0 ? inherited : undefined,
     phase,
     slice,
     tier,

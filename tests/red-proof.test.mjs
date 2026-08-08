@@ -170,4 +170,45 @@ const gamedPayload = JSON.parse(gamedRun.stdout);
 assert.equal(gamedPayload.status, "blocked");
 assert.ok(gamedPayload.findings.some((f) => f.code === "red-proof-collateral-error"));
 
+// --- 3. NO-VACUIDAD: la ruta mas barata NO era falsear un outcome ---------
+// Era borrar el bloque `scenario_traceability` del F5.yaml (el schema no lo
+// exige) o no marcar ningun escenario como `red`. Con cero sujetos,
+// verifyRedProof devolvia [] y el comando salia ok / exit 0: "no se pudo
+// medir" indistinguible de "todo bien".
+function writeF5Raw(scenarioTraceability) {
+  const dir = path.join(target, ".github", "agent-state", "evidence", "slice-vacuo");
+  fs.mkdirSync(dir, { recursive: true });
+  const doc = {
+    phase: "F5",
+    slice: "slice-vacuo",
+    agent_id: "test",
+    started_at: new Date(0).toISOString(),
+    outputs: [],
+    validators_run: []
+  };
+  if (scenarioTraceability !== undefined) doc.scenario_traceability = scenarioTraceability;
+  fs.writeFileSync(path.join(dir, "F5.yaml"), YAML.stringify(doc), "utf8");
+}
+const argsVacuo = [
+  "red-proof-verify", "--target", target, "--slice", "slice-vacuo",
+  "--report", "reports/red-proof.json", "--format", "vitest-json", "--json"
+];
+
+// (a) sin bloque scenario_traceability
+writeF5Raw(undefined);
+const sinBloque = run(argsVacuo);
+assert.notEqual(sinBloque.status, 0, "una evidencia sin scenario_traceability no puede pasar el gate de rojo");
+assert.equal(JSON.parse(sinBloque.stdout).code, "red-proof-vacuous");
+
+// (b) bloque presente pero vacio
+writeF5Raw([]);
+assert.equal(JSON.parse(run(argsVacuo).stdout).code, "red-proof-vacuous");
+
+// (c) escenarios declarados, pero ninguno en rojo: no hay nada que demostrar
+writeF5Raw([{ sc_id: "SC-abc123abc123", test_ref: "a.test.ts > x", status: "green" }]);
+const ningunRojo = JSON.parse(run(argsVacuo).stdout);
+assert.equal(ningunRojo.code, "red-proof-vacuous");
+assert.equal(ningunRojo.scenariosTotal, 1);
+assert.equal(ningunRojo.scenariosChecked, 0, "el payload tiene que decir cuantos sujetos se evaluaron de verdad");
+
 console.log("red-proof cli e2e: PASS");

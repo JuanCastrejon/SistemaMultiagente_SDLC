@@ -110,4 +110,45 @@ const missingChange = runAllowFailure(["acceptance-verify", "--target", target, 
 assert.notEqual(missingChange.status, 0);
 assert.equal(JSON.parse(missingChange.stdout).code, "acceptance-dir-missing");
 
+// --- 4. NO-VACUIDAD: cuatro caminos que devolvian ok con CERO escenarios ---
+// El payload tampoco reportaba cuantos se habian verificado, asi que aguas
+// abajo "verifique 12" y "verifique 0" se veian identicos.
+const vacuoDir = path.join(target, "openspec", "changes", "cambio-vacuo", "acceptance");
+fs.mkdirSync(vacuoDir, { recursive: true });
+const argsVacuo = ["acceptance-verify", "--target", target, "--change", "cambio-vacuo", "--json"];
+
+// (a) directorio existe pero sin ningun .feature.md
+const dirVacio = runAllowFailure(argsVacuo);
+assert.notEqual(dirVacio.status, 0, "un acceptance/ sin archivos no puede reportar ok");
+assert.equal(JSON.parse(dirVacio.stdout).code ?? JSON.parse(dirVacio.stdout).findings?.[0]?.code, "acceptance-vacuous");
+
+// (b) archivo de 0 bytes
+fs.writeFileSync(path.join(vacuoDir, "vacio.feature.md"), "", "utf8");
+assert.ok(JSON.parse(runAllowFailure(argsVacuo).stdout).findings.some((f) => f.code === "acceptance-vacuous"));
+
+// (c) contenido que no calza ningun encabezado esperado
+fs.writeFileSync(path.join(vacuoDir, "vacio.feature.md"), "# titulo suelto\n\nprosa cualquiera\n", "utf8");
+const sinEncabezados = JSON.parse(runAllowFailure(argsVacuo).stdout);
+assert.ok(sinEncabezados.findings.some((f) => f.code === "acceptance-vacuous"));
+assert.equal(sinEncabezados.scenarioCount, 0);
+
+// (d) extension distinta: el archivo existe pero queda fuera del filtro
+fs.rmSync(path.join(vacuoDir, "vacio.feature.md"));
+fs.writeFileSync(path.join(vacuoDir, "escenarios.md"), wellFormed, "utf8");
+assert.ok(
+  JSON.parse(runAllowFailure(argsVacuo).stdout).findings.some((f) => f.code === "acceptance-vacuous"),
+  "un .md que no es .feature.md no aporta escenarios y no puede dejar el change en verde"
+);
+
+// Y la contracara: con escenarios reales el conteo se reporta y NO hay
+// hallazgo de vacuidad. (`cambio-pagos` quedo con dos archivos por el caso 2,
+// asi que sigue bloqueado por duplicado cross-file — lo que importa aqui es
+// que la causa no sea vacuidad y que el conteo sea real.)
+const conEscenarios = JSON.parse(runAllowFailure(["acceptance-verify", "--target", target, "--change", "cambio-pagos", "--json"]).stdout);
+assert.equal(conEscenarios.scenarioCount, 2, "el payload reporta cuantos escenarios se verificaron");
+assert.ok(
+  !conEscenarios.findings.some((f) => f.code === "acceptance-vacuous"),
+  "con escenarios reales no puede haber hallazgo de vacuidad"
+);
+
 console.log("acceptance cli e2e: PASS");

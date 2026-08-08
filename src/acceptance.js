@@ -217,5 +217,30 @@ export function verifyAcceptanceDir(target, changeSlug) {
     }
   }
 
-  return { ok: !findings.some((finding) => finding.level === "error"), exists: true, files, findings };
+  // NO-VACUIDAD. Verificar CERO escenarios devolvia `ok` por cuatro caminos
+  // distintos —directorio sin archivos, archivo de 0 bytes, encabezados que
+  // no calzan el regex, extension distinta de .feature.md— y el resultado no
+  // decia cuantos escenarios se habian mirado, asi que aguas abajo nadie podia
+  // distinguir "verifique 12" de "verifique 0". Un change que declara tener
+  // criterios de aceptacion y no expone ninguno no esta verificado: esta sin
+  // medir, y eso no es un pass.
+  const scenarioCount = files.reduce((total, entry) => total + entry.scenarios.length, 0);
+  if (scenarioCount === 0) {
+    findings.push({
+      level: "error",
+      code: "acceptance-vacuous",
+      detail:
+        fileNames.length === 0
+          ? `${path.relative(target, dir)} existe pero no contiene ningun .feature.md: no hay criterio de aceptacion que verificar`
+          : `los ${fileNames.length} archivo(s) de acceptance no exponen ni un escenario reconocible (revisar los encabezados '## Capability:', '### Requirement:' y '#### Scenario:')`
+    });
+  }
+
+  return {
+    ok: !findings.some((finding) => finding.level === "error"),
+    exists: true,
+    files,
+    scenarioCount,
+    findings
+  };
 }

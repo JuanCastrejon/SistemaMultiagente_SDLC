@@ -53,12 +53,18 @@ fs.writeFileSync(path.join(target, "feature.txt"), "x\n", "utf8");
 git(["add", "."]);
 git(["commit", "--quiet", "-m", "feature"]);
 
+// Estos casos aislan el chequeo de tareas/merge: sin fases con gate humano
+// declaradas no hay nada que cruzar. El CLI nunca vacia esta lista (default
+// F13/F14), asi que no es una via de escape para un consumidor real.
+const soloTareas = { humanGatePhases: [] };
+
 // 1. El merge NUNCA paso: la tarea se marco [x] de todas formas. Debe
 // bloquear, exactamente el caso real.
 const notMergedYet = verifyChangeClosure({
   target,
   raw: "- [x] T1 — Merge a develop",
-  integrationBranch: "develop"
+  integrationBranch: "develop",
+  ...soloTareas
 });
 assert.equal(notMergedYet.ok, false);
 assert.ok(notMergedYet.findings.some((f) => f.code === "merge-task-not-true"));
@@ -67,19 +73,58 @@ assert.ok(notMergedYet.findings.some((f) => f.code === "merge-task-not-true"));
 git(["checkout", "--quiet", "develop"]);
 git(["merge", "--quiet", "--no-ff", "-m", "merge", "feature/pagos"]);
 git(["checkout", "--quiet", "feature/pagos"]);
-const merged = verifyChangeClosure({ target, raw: "- [x] T1 — Merge a develop", integrationBranch: "develop" });
+const merged = verifyChangeClosure({ target, raw: "- [x] T1 — Merge a develop", integrationBranch: "develop", ...soloTareas });
 assert.equal(merged.ok, true, JSON.stringify(merged.findings));
 
-// 3. Sin rama de integracion resoluble: avisa, no bloquea por si solo (no hay
-// nada contra que comparar, no es lo mismo que una mentira confirmada).
-const noBranch = verifyChangeClosure({ target, raw: "- [x] T1 — Merge a develop" });
-assert.equal(noBranch.ok, true);
-assert.ok(noBranch.findings.some((f) => f.code === "merge-task-unverifiable" && f.level === "warning"));
+// 3. Sin rama de integracion resoluble, una tarea de merge marcada [x] es una
+// afirmacion sin verificar y BLOQUEA. Antes era warning: apuntar
+// gitFlow.integrationBranch —dato que escribe el evaluado— a un nombre
+// inexistente degradaba el error a aviso y devolvia exit 0.
+const noBranch = verifyChangeClosure({ target, raw: "- [x] T1 — Merge a develop", ...soloTareas });
+assert.equal(noBranch.ok, false);
+assert.ok(noBranch.findings.some((f) => f.code === "merge-task-unverifiable" && f.level === "error"));
 
 // 4. Una tarea sin marcar bloquea siempre, sin importar de que se trate.
-const unchecked = verifyChangeClosure({ target, raw: "- [ ] T2 agregar tests" });
+const unchecked = verifyChangeClosure({ target, raw: "- [ ] T2 agregar tests", ...soloTareas });
 assert.equal(unchecked.ok, false);
 assert.equal(unchecked.findings[0].code, "task-unchecked");
+
+// 5. NO-VACUIDAD: un tasks.md sin una sola tarea reconocible no cierra nada.
+// Borrar el archivo se detectaba; VACIARLO no. Cero pendientes sobre cero
+// tareas no es un change terminado.
+for (const vacio of ["", "# Tareas\n\nprosa sin checkboxes\n"]) {
+  const r = verifyChangeClosure({ target, raw: vacio, integrationBranch: "develop", ...soloTareas });
+  assert.equal(r.ok, false, `un tasks.md vacuo no puede cerrar el change: ${JSON.stringify(vacio)}`);
+  assert.ok(r.findings.some((f) => f.code === "tasks-file-vacuous"));
+}
+
+// 6. Marcas que antes eran INVISIBLES. El patron original solo veia `[ ]`/`[x]`
+// con bullet `-`/`*`, asi que `[-]`, `[~]`, `[/]`, listas numeradas y bullets
+// `+` no contaban como tareas — incluida la del caso real que motivo la pieza.
+const marcasRaras = "- [-] T1 en curso\n+ [~] T2 pausada\n1. [/] T3 parcial\n2) [ ] T4 pendiente\n";
+assert.equal(parseTasksFile(marcasRaras).length, 4, "las cuatro formas tienen que verse");
+const conMarcas = verifyChangeClosure({ target, raw: marcasRaras, integrationBranch: "develop", ...soloTareas });
+assert.equal(conMarcas.ok, false);
+assert.equal(conMarcas.findings.filter((f) => f.code === "task-unchecked").length, 4, "ninguna de las cuatro esta hecha");
+
+// 7. `origin/<rama>` es FORJABLE sin red: `git update-ref` la reescribe. El
+// codigo antes la PREFERIA sobre la rama local, asi que la forma mas facil de
+// mentir ganaba. Ahora el merge debe ser cierto contra todas las refs
+// resolubles.
+git(["checkout", "--quiet", "-b", "feature/forjado"]);
+fs.writeFileSync(path.join(target, "otro.txt"), "z\n", "utf8");
+git(["add", "-A"]);
+git(["commit", "--quiet", "-m", "trabajo sin mergear"]);
+git(["update-ref", "refs/remotes/origin/develop", "HEAD"]); // la forja
+const forjado = verifyChangeClosure({ target, raw: "- [x] T1 — Merge a develop", integrationBranch: "develop", ...soloTareas });
+assert.equal(forjado.ok, false, "forjar origin no puede hacer cierto un merge que no ocurrio");
+assert.ok(forjado.findings.some((f) => f.code === "merge-task-not-true"));
+git(["checkout", "--quiet", "feature/pagos"]);
+
+// 8. El cruce del gate humano NO es opt-in: omitir --slice lo saltaba entero.
+const sinSlice = verifyChangeClosure({ target, raw: "- [x] T1 implementar", integrationBranch: "develop" });
+assert.equal(sinSlice.ok, false);
+assert.ok(sinSlice.findings.some((f) => f.code === "human-gate-not-verified"));
 
 console.log("change-closure unit: PASS");
 

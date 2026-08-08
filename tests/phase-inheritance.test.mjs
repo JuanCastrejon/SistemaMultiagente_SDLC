@@ -8,7 +8,7 @@
 // que SI midio, sin fabricar un mecanismo de arrastre.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -147,6 +147,64 @@ assert.equal(skipped.status, "blocked", JSON.stringify(skipped));
 assert.ok(
   skipped.blockers.some((blocker) => blocker.includes("gate-not-measured") && blocker.includes("F10")),
   "fusionar sin que F10 haya corrido nunca no puede pasar en silencio"
+);
+
+// --- 4. EL ARBITRO tambien adjudica los gates heredados -------------------
+// `phase-gate` y `status` los adjudicaban desde el principio (casos 1-3), pero
+// el comando que corre `quality-verify.yml` en F14 es `quality-gate --run`, y
+// ESE filtraba por fase y descartaba los heredados: devolvia `evaluated: []`
+// y `status: ok`. La pieza entera era decorativa justo donde importa — un
+// merge con la evidencia de F10 diciendo 42 violaciones pasaba en verde.
+const AS_CI = { ...process.env, GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "run-arbitro" };
+const sliceArbitro = "slice-arbitro";
+function evidenciaCi(phase, metrics) {
+  return baseEvidence(phase, sliceArbitro, {
+    quality_metrics: {
+      measured_at: new Date(0).toISOString(),
+      source: "ci",
+      ci_provider: "github-actions",
+      ci_run_id: "run-arbitro",
+      tree_hash: "arbol-1",
+      probes: [],
+      metrics
+    }
+  });
+}
+// Baseline sano promovido desde F15: sin el, un gate ratchet sin linea base se
+// comporta como observe puro y no habria regresion que detectar.
+writeEvidence(sliceArbitro, "F15", evidenciaCi("F15", {
+  coverage: { changed_lines_pct: 95, changed_lines_total: 50 },
+  dependencies: { violations: 0, cycles: 0, modules_scanned: 30 }
+}));
+const promovido = JSON.parse(
+  spawnSync("node", [cli, "quality-baseline", "--target", target, "--promote", "--slice", sliceArbitro, "--source", "ci", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: AS_CI
+  }).stdout
+);
+assert.equal(promovido.status, "ok", JSON.stringify(promovido));
+
+// Ahora el slice empeora de verdad: 0% de cobertura, 42 violaciones, 7 ciclos.
+writeEvidence(sliceArbitro, "F8", evidenciaCi("F8", { coverage: { changed_lines_pct: 0, changed_lines_total: 50 } }));
+writeEvidence(sliceArbitro, "F10", evidenciaCi("F10", { dependencies: { violations: 42, cycles: 7, modules_scanned: 30 } }));
+
+const arbitro = JSON.parse(
+  spawnSync(
+    "node",
+    [cli, "quality-gate", "--target", target, "--slice", sliceArbitro, "--phase", "F14", "--run", "--source", "ci", "--exit-code", "--json"],
+    { cwd: repoRoot, encoding: "utf8", env: AS_CI }
+  ).stdout
+);
+assert.ok(arbitro.evaluated.length > 0, "el arbitro NO puede devolver evaluated: [] en una fase que declara gates heredados");
+assert.equal(arbitro.status, "blocked", JSON.stringify(arbitro.evaluated));
+assert.ok(
+  arbitro.evaluated.some((entry) => entry.id === "F10.dependency-violations" && entry.actual === 42),
+  "el gate heredado se evalua contra la evidencia de F10, no contra las metricas de F14"
+);
+assert.ok(
+  arbitro.inherited?.some((entry) => entry.phase === "F10"),
+  "el payload declara de que fases hereda, para que 'adjudico' y 'no adjudico nada' no se vean igual"
 );
 
 console.log("phase-inheritance: PASS");

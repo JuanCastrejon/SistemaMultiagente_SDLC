@@ -137,6 +137,33 @@ export async function commandRedProofVerify(options = {}) {
     return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", code: read.code, errors: read.errors } };
   }
   const scenarios = Array.isArray(read.evidence?.scenario_traceability) ? read.evidence.scenario_traceability : [];
+  const declaredRed = scenarios.filter((scenario) => scenario.status === "red");
+
+  // NO-VACUIDAD. La ruta mas barata para pasar este gate NO era falsear un
+  // outcome: era borrar el bloque `scenario_traceability` del F5.yaml (el
+  // schema no lo exige) o no marcar ningun escenario como `red`. Con cero
+  // sujetos, verifyRedProof devolvia [] y el comando salia `ok` / exit 0 —
+  // "no se pudo medir" indistinguible de "todo bien", que es exactamente lo
+  // que el ADR 0007 declara prohibido. F5 existe para demostrar que los
+  // escenarios fallaban ANTES de implementarlos: una fase que no declara ni
+  // un rojo no ha demostrado nada.
+  if (declaredRed.length === 0) {
+    return {
+      exitCode: EXIT_ACTION_REQUIRED,
+      payload: {
+        status: "blocked",
+        code: "red-proof-vacuous",
+        slice,
+        phase,
+        scenariosTotal: scenarios.length,
+        scenariosChecked: 0,
+        detail:
+          scenarios.length === 0
+            ? `la evidencia de ${phase} no trae scenario_traceability: no hay ni un escenario del que demostrar el rojo`
+            : `la evidencia de ${phase} trae ${scenarios.length} escenario(s) pero ninguno en status:red: no hay nada que demostrar y el gate no puede satisfacerse con el conjunto vacio`
+      }
+    };
+  }
 
   const reportAbsolute = path.join(target, reportRelative);
   if (!pathExists(reportAbsolute)) {
@@ -181,7 +208,10 @@ export async function commandRedProofVerify(options = {}) {
       status: findings.length > 0 ? "blocked" : "ok",
       slice,
       phase,
-      scenariosChecked: scenarios.filter((scenario) => scenario.status === "red").length,
+      scenariosTotal: scenarios.length,
+      // Cuantos sujetos se evaluaron de verdad. Sin este numero en el payload,
+      // "verifique 12 escenarios" y "verifique 0" se ven identicos aguas abajo.
+      scenariosChecked: declaredRed.length,
       findings
     }
   };
