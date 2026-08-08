@@ -26,7 +26,9 @@ function run(args, extraEnv = {}) {
   return spawnSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...extraEnv } });
 }
 const AS_CI = { GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "test-run-1" };
-function writeF15Evidence(evidenceSource, metrics) {
+// `ciTrace` simula lo que SOLO deja una corrida real dentro de un runner.
+// Omitirlo reproduce la evidencia escrita a mano que se autoproclama de CI.
+function writeF15Evidence(evidenceSource, metrics, { ciTrace = true } = {}) {
   const dir = path.join(target, ".github", "agent-state", "evidence", "slice-a");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
@@ -41,6 +43,8 @@ function writeF15Evidence(evidenceSource, metrics) {
       quality_metrics: {
         measured_at: new Date(0).toISOString(),
         source: evidenceSource,
+        ci_provider: evidenceSource === "ci" && ciTrace ? "github-actions" : null,
+        ci_run_id: evidenceSource === "ci" && ciTrace ? "test-run-1" : null,
         tree_hash: "hash-1",
         probes: [],
         metrics
@@ -73,6 +77,17 @@ writeF15Evidence("ci", { coverage: { changed_lines_pct: 100, changed_lines_total
 const consistentLie = run(["quality-baseline", "--target", target, "--promote", "--slice", "slice-a", "--source", "ci", "--json"]);
 assert.notEqual(consistentLie.status, 0, "una cadena ci-ci fabricada en local no puede producir un baseline autoritativo");
 assert.equal(JSON.parse(consistentLie.stdout).code, "baseline-source-ci-unverified");
+assert.ok(!fs.existsSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml")));
+
+// --- 1c. Evidencia que se autoproclama de CI sin rastro de runner ----------
+// El agente edita `source: harness` -> `ci` en su propia evidencia (ruta NO
+// protegida por el guard de frontera) y despues promueve desde un runner real.
+// Sin exigir el rastro, esa palabra bastaba. Una corrida real SIEMPRE deja
+// provider y run id; una evidencia sin ellos se escribio a mano.
+writeF15Evidence("ci", { coverage: { changed_lines_pct: 100, changed_lines_total: 20 } }, { ciTrace: false });
+const sinRastro = run(["quality-baseline", "--target", target, "--promote", "--slice", "slice-a", "--source", "ci", "--json"], AS_CI);
+assert.notEqual(sinRastro.status, 0, "una evidencia que dice ci sin ci_run_id no puede promover el baseline");
+assert.equal(JSON.parse(sinRastro.stdout).code, "baseline-evidence-without-ci-trace");
 assert.ok(!fs.existsSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml")));
 
 // --- 2. --source ci REAL (dentro de un runner) contra evidencia ci: se acepta

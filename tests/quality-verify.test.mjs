@@ -41,14 +41,19 @@ assert.deepEqual(
   []
 );
 
-// CI contra CI no responde la pregunta de si el harness LOCAL mintio.
-assert.deepEqual(
-  detectEvidenceMismatch({
-    prior: { source: "ci", tree_hash: "a", metrics: { coverage: { pct: 10 } } },
-    fresh: { tree_hash: "a", metrics: { coverage: { pct: 99 } } }
-  }),
-  []
-);
+// `prior.source` YA NO puede apagar el detector. Antes, un prior marcado
+// `ci` hacia que la funcion devolviera [] sin comparar nada — y ese campo
+// vive en un YAML que el evaluado escribe, en una ruta que el guard de
+// frontera no protege. Cambiar esa sola palabra convertia una corrida de CI
+// de `blocked` a `ok` (exploit reproducido en la auditoria adversarial).
+// Comparar CI contra CI es menos informativo, pero no cuesta nada y quita el
+// interruptor de las manos del evaluado.
+const ciVsCi = detectEvidenceMismatch({
+  prior: { source: "ci", tree_hash: "a", metrics: { coverage: { pct: 10 } } },
+  fresh: { tree_hash: "a", metrics: { coverage: { pct: 99 } } }
+});
+assert.equal(ciVsCi.length, 1, "un source declarado por el evaluado no puede saltarse la comparacion");
+assert.equal(ciVsCi[0].code, "evidence-mismatch");
 
 // Mismo arbol, harness declaro distinto de lo que CI recomputo: mismatch real.
 const mismatch = detectEvidenceMismatch({
@@ -163,5 +168,30 @@ assert.ok(
   !ciDifferentTree.surfaceFindings.some((f) => f.code === "evidence-mismatch"),
   "un arbol distinto no es evidencia de fraude, es codigo distinto"
 );
+
+// --- 5. EL EXPLOIT DE LECTURA: editar el `source` de la propia evidencia ---
+// Encontrado por auditoria adversarial sobre el fix de P8, que cerraba el lado
+// donde se ESCRIBE el origen (--source) y no el lado donde se LEE. El agente
+// corre en local, y antes de que CI recompute edita UNA palabra en su propio
+// F8.yaml: `source: harness` -> `source: ci`. Esa ruta
+// (.github/agent-state/evidence/) NO esta protegida por el guard de frontera.
+// Antes del fix eso apagaba evidence-mismatch y la corrida de CI pasaba de
+// `blocked` a `ok` — el detector de fraude desactivado por su propia victima.
+const slice = "s-exploit";
+setControl(95);
+runCli(["quality-gate", "--target", target, "--slice", slice, "--phase", "F8", "--run", "--json"]);
+const evidenceFile = path.join(target, ".github", "agent-state", "evidence", slice, "F8.yaml");
+fs.writeFileSync(evidenceFile, fs.readFileSync(evidenceFile, "utf8").replace(/source:\s*harness/, "source: ci"), "utf8");
+assert.match(fs.readFileSync(evidenceFile, "utf8"), /source:\s*ci/, "la evidencia quedo manipulada, como la dejaria el atacante");
+
+setControl(40);
+const afterTamper = JSON.parse(
+  runCli(["quality-gate", "--target", target, "--slice", slice, "--phase", "F8", "--run", "--source", "ci", "--json"], AS_CI).stdout
+);
+assert.ok(
+  afterTamper.surfaceFindings.some((f) => f.code === "evidence-mismatch"),
+  "manipular quality_metrics.source no puede apagar el detector: el campo lo escribe el evaluado"
+);
+assert.equal(afterTamper.status, "blocked");
 
 console.log("quality-verify e2e: PASS");

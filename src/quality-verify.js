@@ -44,10 +44,22 @@ function collectMetricPaths(...objects) {
  */
 export function detectEvidenceMismatch({ prior = null, fresh = null, tolerance = {} } = {}) {
   if (!prior || !fresh) return [];
-  // Comparar CI contra CI no dice nada sobre si el harness LOCAL mintio: la
-  // pregunta que este detector responde es "lo que declaro el agente coincide
-  // con lo que el arbitro mide", no "dos corridas de CI dan lo mismo".
-  if (prior.source === "ci") return [];
+
+  // NO se salta la comparacion cuando `prior.source === "ci"`, aunque comparar
+  // CI contra CI sea menos informativo que CI contra harness.
+  //
+  // Esa optimizacion existio y era un APAGADOR DE CONTROL en manos del
+  // evaluado: `quality_metrics.source` vive en un YAML que el agente escribe y
+  // commitea, y `.github/agent-state/evidence/` NO esta entre las rutas que
+  // protege el guard de frontera. Cambiar una sola palabra —`source: harness`
+  // por `source: ci`— hacia que este detector devolviera [] y que una corrida
+  // de CI pasara de `blocked` a `ok`. Reproducido empiricamente: es el mismo
+  // error que P2, cerrar el lado que ESCRIBE el dato y no el que lo LEE.
+  //
+  // La regla que se deriva, y que vale para todo este gauntlet: un campo que
+  // el evaluado redacta puede ENCENDER un control, nunca apagarlo. Comparar
+  // dos corridas de CI sobre el mismo arbol no cuesta nada y, si difieren,
+  // eso tambien es senal legitima (no determinismo o manipulacion).
   if (!prior.tree_hash || !fresh.tree_hash || prior.tree_hash !== fresh.tree_hash) return [];
 
   const findings = [];

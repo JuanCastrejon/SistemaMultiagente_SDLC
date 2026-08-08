@@ -169,7 +169,8 @@ export async function commandQualityGate(options = {}) {
       probes: probeResults,
       metrics,
       tree,
-      source: effectiveSource.source === "ci" ? "ci" : "harness"
+      source: effectiveSource.source === "ci" ? "ci" : "harness",
+      ci: effectiveSource.ci
     });
     evidenceWritten = written.path;
     advisory = effectiveSource.source !== "ci";

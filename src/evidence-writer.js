@@ -90,6 +90,11 @@ export function appendQualityEvidence({
   tree = null,
   commitSha = null,
   source = "harness",
+  // Rastro del runner cuando el origen es CI verificado. No es infalsificable
+  // —el evaluado puede escribir cualquier cosa en su propio YAML— pero un
+  // `run_id` es cruzable contra los runs reales del repo, mientras que un
+  // `source: ci` a secas no deja nada que auditar.
+  ci = null,
   now = new Date()
 }) {
   const absolute = evidencePath(target, slice, phase);
@@ -134,6 +139,10 @@ export function appendQualityEvidence({
   document.quality_metrics = {
     measured_at: now.toISOString(),
     source,
+    // Solo se escriben cuando el origen es `ci` de verdad: una evidencia que
+    // dice `source: ci` sin estos campos delata que el string se puso a mano.
+    ci_provider: source === "ci" ? ci?.provider ?? null : null,
+    ci_run_id: source === "ci" ? ci?.runId ?? null : null,
     tree_hash: tree?.hash ?? null,
     tree_files: tree?.files ?? null,
     commit_sha: commitSha,

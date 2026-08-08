@@ -8,6 +8,7 @@ import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
+import { detectCiEnvironment } from "./ci-detect.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -580,7 +581,14 @@ export function commandStatus(options) {
       vacuous: adjudication.vacuous ?? [],
       findings: adjudication.findings ?? [],
       evidenceSource: adjudication.evidenceSource ?? null,
-      advisory: adjudication.evidenceSource !== "ci"
+      // `advisory` sale del entorno REAL de este proceso, no de
+      // `quality_metrics.source`. Ese campo lo redacta el evaluado en un YAML
+      // que el guard de frontera no protege, asi que usarlo aqui permitia
+      // presentar una medicion 100% local como autoritativa (`advisory: false`)
+      // cambiando una palabra. Un veredicto solo puede dejar de ser advisory si
+      // quien lo emite puede atestiguarlo: fuera de un runner, nadie puede.
+      advisory: !detectCiEnvironment().isCi || adjudication.evidenceSource !== "ci",
+      evidenceSourceVerified: detectCiEnvironment().isCi && adjudication.evidenceSource === "ci"
     };
   }
 

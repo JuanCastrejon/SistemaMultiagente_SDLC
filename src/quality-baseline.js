@@ -150,6 +150,21 @@ export function promoteBaseline(target, { slice, phase = "F15", commitSha = null
     };
   }
 
+  // `source: ci` a secas es una palabra en un YAML que el evaluado escribe, en
+  // una ruta que el guard de frontera NO protege. Una corrida real dentro de un
+  // runner deja ademas provider y run id; una evidencia que se autoproclama de
+  // CI sin ese rastro se escribio a mano. No es infalsificable (tambien se
+  // pueden inventar), pero un run_id es cruzable contra los runs reales del
+  // repo, y exigirlo convierte "cambiar una palabra" en "fabricar un rastro
+  // coherente y auditable".
+  if (source === "ci" && !read.evidence?.quality_metrics?.ci_run_id) {
+    return {
+      ok: false,
+      code: "baseline-evidence-without-ci-trace",
+      detail: `la evidencia de ${phase} declara source: "ci" pero no trae ci_run_id: ninguna corrida real dentro de un runner produce eso.`
+    };
+  }
+
   // El cruce de arriba cierra el ataque INGENUO (evidencia local + promocion
   // mintiendo). No cierra el CONSISTENTE: correr `quality-gate --run
   // --source ci` y despues `--promote --source ci` en la misma maquina produce
