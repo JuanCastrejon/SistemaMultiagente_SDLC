@@ -92,9 +92,29 @@ export function computeChangedLinesCoverage({ coverageFinal = {}, changedLines =
   };
 }
 
+// Mismas tres decisiones que el guard de frontera (ADR 0007, P2) tuvo que
+// aplicar sobre su propia lectura de `git diff`, nunca portadas aqui:
+//
+// 1. `core.quotePath=false`: por defecto git entrecomilla y escapa en octal
+//    cualquier ruta con byte no-ASCII (`"m\303\263dulo/a\303\261o.js"`).
+//    `parseUnifiedDiffAddedLines` esperaba `+++ b/<ruta>`; la comilla inicial
+//    rompia el `replace(/^b\//, "")` y la ruta resultante jamas volvia a
+//    coincidir con la ruta real calculada en `computeChangedLinesCoverage` --
+//    las lineas cambiadas de CUALQUIER archivo con tilde/ene quedaban
+//    invisibles para F8, en un framework cuyo corpus esta en espanol.
+// 2. `maxBuffer` amplio: el default de Node (1 MiB) revienta con un diff
+//    grande y antes ese fallo se tragaba como "sin cambios".
 function runGit(args, cwd) {
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+  const result = spawnSync("git", ["-c", "core.quotePath=false", ...args], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024
+  });
+  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "", error: result.error ?? null };
+}
+
+function refExists(cwd, ref) {
+  return runGit(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd).ok;
 }
 
 // Resuelve la base de comparacion: el ref explicito si vino, si no el HEAD
@@ -110,16 +130,32 @@ export function resolveBaseRef(cwd, requested) {
   return "HEAD~1";
 }
 
+// 3a decision propia de este modulo, mismo principio que P2#3/#4: un fallo de
+// medicion no puede parecerse a una medicion real. `diff.ok === false` cubre
+// dos casos MUY distintos que antes se trataban igual (degradar en silencio
+// al arbol de trabajo):
+//   - el ref base no existe (repo recien inicializado, ref sin fetchear):
+//     legitimo, transparente, se degrada y se marca `degraded`.
+//   - el ref SI existe pero el comando de diff fallo (maxBuffer, etc.):
+//     no es "sin historial", es un fallo real. Degradar aqui produciria un
+//     diff diminuto y desconectado del cambio real, medido como si fuera
+//     genuino -- el mismo autoinfligible que P2 cerro para el guard de
+//     frontera. Se devuelve `lines: null` para que el llamador bloquee en
+//     vez de fingir que midio.
 export function getGitDiffAddedLines({ cwd, baseRef }) {
   const resolved = resolveBaseRef(cwd, baseRef);
-  const diff = runGit(["diff", "--unified=0", "--no-color", `${resolved}...HEAD`], cwd);
-  if (diff.ok) {
-    return { baseRef: resolved, lines: parseUnifiedDiffAddedLines(diff.stdout), degraded: null };
+  if (!refExists(cwd, resolved)) {
+    const working = runGit(["diff", "--unified=0", "--no-color"], cwd);
+    if (!working.ok) {
+      return { baseRef: resolved, lines: null, degraded: null, error: working.error?.message ?? working.stderr ?? "git diff (working tree) fallo" };
+    }
+    return { baseRef: resolved, lines: parseUnifiedDiffAddedLines(working.stdout), degraded: "working-tree" };
   }
-  // Sin historial suficiente (repo recien inicializado, ref inexistente):
-  // degradar al diff contra el arbol de trabajo en vez de reventar.
-  const working = runGit(["diff", "--unified=0", "--no-color"], cwd);
-  return { baseRef: resolved, lines: parseUnifiedDiffAddedLines(working.stdout), degraded: "working-tree" };
+  const diff = runGit(["diff", "--unified=0", "--no-color", `${resolved}...HEAD`], cwd);
+  if (!diff.ok) {
+    return { baseRef: resolved, lines: null, degraded: null, error: diff.error?.message ?? diff.stderr ?? "git diff fallo" };
+  }
+  return { baseRef: resolved, lines: parseUnifiedDiffAddedLines(diff.stdout), degraded: null };
 }
 
 export function runCoverageDiff({
@@ -138,13 +174,29 @@ export function runCoverageDiff({
   }
   const coverageFinal = JSON.parse(fs.readFileSync(finalAbsolute, "utf8"));
   const diff = getGitDiffAddedLines({ cwd: target, baseRef });
+  if (diff.lines === null) {
+    return {
+      ok: false,
+      code: "coverage-diff-unmeasurable",
+      detail: `no se pudo calcular el diff de lineas cambiadas contra ${diff.baseRef}: ${diff.error}`
+    };
+  }
   const changed = computeChangedLinesCoverage({ coverageFinal, changedLines: diff.lines, repoRoot: target });
 
   const summaryAbsolute = path.join(target, summaryPath);
   const existing = pathExists(summaryAbsolute) ? JSON.parse(fs.readFileSync(summaryAbsolute, "utf8")) : {};
   const merged = {
     ...existing,
-    changed: { pct: changed.changed_lines_pct, total: changed.changed_lines_total, covered: changed.changed_lines_covered }
+    // `degraded` viaja con la metrica, no solo en el stdout del CLI: si se
+    // quedara solo ahi, el adapter que lee coverage-summary.json (lo unico
+    // que el motor de gates consume) jamas se enteraria de que la medicion
+    // no fue contra la base real -- el mismo fail-open silencioso que P2#4.
+    changed: {
+      pct: changed.changed_lines_pct,
+      total: changed.changed_lines_total,
+      covered: changed.changed_lines_covered,
+      degraded: diff.degraded
+    }
   };
   fs.mkdirSync(path.dirname(summaryAbsolute), { recursive: true });
   fs.writeFileSync(summaryAbsolute, JSON.stringify(merged, null, 2), "utf8");

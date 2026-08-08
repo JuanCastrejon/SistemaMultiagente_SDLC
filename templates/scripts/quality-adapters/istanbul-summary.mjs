@@ -21,7 +21,11 @@ export function parse(raw) {
       branches_pct: typeof total.branches?.pct === "number" ? total.branches.pct : null,
       functions_pct: typeof total.functions?.pct === "number" ? total.functions.pct : null,
       changed_lines_pct: typeof changed.pct === "number" ? changed.pct : null,
-      changed_lines_total: typeof changed.total === "number" ? changed.total : null
+      changed_lines_total: typeof changed.total === "number" ? changed.total : null,
+      // `degraded` (p.ej. "working-tree") significa que coverage-diff no
+      // pudo comparar contra la base real: la metrica de arriba es genuina
+      // pero mide contra el arbol de trabajo, no contra el diff del PR.
+      changed_lines_degraded: changed.degraded ?? null
     }
   };
 }
