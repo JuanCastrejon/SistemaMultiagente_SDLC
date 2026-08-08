@@ -133,4 +133,69 @@ const clean = runTrustedGuard();
 assert.equal(clean.status, "ok");
 assert.equal(clean.violations.length, 0);
 
+// --- 7. EL EXPLOIT: allowlist autorreferencial en el mismo PR --------------
+// Encontrado por auditoria adversarial DESPUES de que el checkpoint declarara
+// P2 cerrado, y reproducido empiricamente. El caso 2 ya cubria la mitad del
+// vector (el SCRIPT del guard se trae de la base), pero el script confiable
+// seguia leyendo los DATOS —el allowlist— del checkout atacante-controlado.
+//
+// El ataque cabe en UN commit: reescribir un archivo protegido y, a la vez,
+// agregar al allowlist dos entradas — una que autoriza ese archivo y otra
+// autorreferencial que autoriza el propio allowlist. Antes del fix esto daba
+// `status: ok, violations: []` con ambos archivos en `allowed`: el evaluado
+// firmandose su propio permiso.
+fs.mkdirSync(path.join(target, "openspec", "specs", "algo"), { recursive: true });
+// El caso 3 dejo `git clean -fd .github`: hay que recrear el directorio.
+fs.mkdirSync(path.join(target, ".github", "agent-state"), { recursive: true });
+fs.writeFileSync(path.join(target, "openspec", "specs", "algo", "spec.md"), "spec REESCRITO por el agente\n", "utf8");
+fs.writeFileSync(
+  path.join(target, ".github", "agent-state", "spec-boundary-allowlist.yaml"),
+  [
+    "version: 1",
+    "allowlist:",
+    "  - path: openspec/specs/algo/spec.md",
+    "    approved_by: nadie-real",
+    "    review_id: inventado",
+    "  - path: .github/agent-state/spec-boundary-allowlist.yaml",
+    "    approved_by: nadie-real",
+    "    review_id: inventado",
+    ""
+  ].join("\n"),
+  "utf8"
+);
+const selfApproved = runTrustedGuard();
+assert.equal(selfApproved.status, "blocked", JSON.stringify(selfApproved));
+assert.ok(
+  selfApproved.violations.some((v) => v.path === "openspec/specs/algo/spec.md"),
+  "una entrada de allowlist creada en el MISMO PR no puede autorizar nada: solo cuenta si ya esta mergeada en la base"
+);
+assert.ok(
+  selfApproved.violations.some((v) => v.path === ".github/agent-state/spec-boundary-allowlist.yaml"),
+  "la entrada autorreferencial tampoco se autoriza a si misma"
+);
+assert.equal(selfApproved.allowed.length, 0, "ninguna excepcion puede concederse desde el checkout");
+assert.equal(selfApproved.allowlistEntries, 0, "el allowlist efectivo es el de la BASE, que aqui esta vacio");
+git(["clean", "-fd", "openspec", ".github"]);
+
+// --- 8. la contracara: una excepcion YA mergeada en la base SI vale --------
+// Sin esto el fix seria inutil (bloquear siempre no es un control, es un muro).
+fs.mkdirSync(path.join(target, "openspec", "specs", "algo"), { recursive: true });
+fs.mkdirSync(path.join(target, ".github", "agent-state"), { recursive: true });
+fs.writeFileSync(path.join(target, "openspec", "specs", "algo", "spec.md"), "spec original\n", "utf8");
+fs.writeFileSync(
+  path.join(target, ".github", "agent-state", "spec-boundary-allowlist.yaml"),
+  ["version: 1", "allowlist:", "  - path: openspec/specs/algo/spec.md", "    approved_by: maintainer-real", "    review_id: PR-100", ""].join("\n"),
+  "utf8"
+);
+git(["add", "-A"]);
+git(["commit", "--quiet", "-m", "excepcion aprobada y mergeada en la base"]);
+git(["update-ref", "refs/remotes/origin/main", "HEAD"]); // la base avanza CON la excepcion dentro
+fs.writeFileSync(path.join(target, "openspec", "specs", "algo", "spec.md"), "spec actualizado bajo excepcion vigente\n", "utf8");
+const underValidException = runTrustedGuard();
+assert.equal(underValidException.status, "ok", JSON.stringify(underValidException));
+assert.ok(
+  underValidException.allowed.some((entry) => entry.path === "openspec/specs/algo/spec.md"),
+  "una excepcion que ya paso por review y vive en la base debe seguir concediendo el permiso"
+);
+
 console.log("spec-boundary-guard: PASS");

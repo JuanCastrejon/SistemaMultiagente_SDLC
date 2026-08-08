@@ -26,6 +26,7 @@ import { detectPackageManager, runPackageScript } from "./harness.js";
 import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 import { detectEvidenceMismatch } from "./quality-verify.js";
+import { resolveEffectiveSource } from "./ci-detect.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -104,6 +105,7 @@ export async function commandQualityGate(options = {}) {
   let probeResults = [];
   let evidenceWritten = null;
   let advisory = true;
+  let sourceResolution = null;
 
   if (runProbes) {
     if (!slice || !phase) {
@@ -152,6 +154,13 @@ export async function commandQualityGate(options = {}) {
       });
     }
 
+    // `--source ci` es una AFIRMACION del invocador. Solo cuenta como `ci` si
+    // el proceso corre de verdad en un runner (ADR 0007, P8): si no, se
+    // degrada a `harness` — advisory, que es lo que realmente es — y la
+    // degradacion se reporta en el payload en vez de ocurrir en silencio.
+    const effectiveSource = resolveEffectiveSource(options.source, process.env);
+    sourceResolution = effectiveSource;
+
     const tree = computeTreeHash(target, (contract.surfaces ?? []).map((surface) => surface.path));
     const written = appendQualityEvidence({
       target,
@@ -160,16 +169,16 @@ export async function commandQualityGate(options = {}) {
       probes: probeResults,
       metrics,
       tree,
-      source: options.source === "ci" ? "ci" : "harness"
+      source: effectiveSource.source === "ci" ? "ci" : "harness"
     });
     evidenceWritten = written.path;
-    advisory = options.source !== "ci";
+    advisory = effectiveSource.source !== "ci";
 
     // El arbitro es CI, no el harness local (ADR 0007, D1): esto es lo que
     // hace ese diseño real en vez de una frase. `history` acaba de recibir lo
     // que este mismo write rotó fuera de `quality_metrics` -- es la corrida
     // inmediatamente anterior para esta fase/slice, sin releer nada del disco.
-    if (options.source === "ci") {
+    if (effectiveSource.source === "ci") {
       const priorEntry = written.evidence?.history?.at(-1)?.quality_metrics ?? null;
       surfaceFindings.push(...detectEvidenceMismatch({ prior: priorEntry, fresh: written.evidence.quality_metrics }));
     }
@@ -228,6 +237,10 @@ export async function commandQualityGate(options = {}) {
     status: blocked ? "blocked" : adjudication.status === "warning" ? "warning" : "ok",
     // Un veredicto que no recomputo nada no puede presentarse como autoritativo.
     advisory,
+    // Solo presente en `--run`: dice el origen DECLARADO, el EFECTIVO y si
+    // hubo degradacion, para que "esto se midio en CI" sea auditable en vez
+    // de creible por afirmacion (ADR 0007, P8).
+    sourceResolution,
     phase,
     slice,
     tier,

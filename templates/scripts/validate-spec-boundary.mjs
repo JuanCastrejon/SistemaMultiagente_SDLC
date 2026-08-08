@@ -96,15 +96,52 @@ function loadLockedPatterns(lockedFile) {
   return [...new Set([...ALWAYS_LOCKED, ...DEFAULT_LOCKED, ...custom])];
 }
 
-function loadAllowlist(allowlistFile) {
-  if (!fs.existsSync(allowlistFile)) return [];
-  // Se lee sin dependencia de YAML: solo lineas `- path: <ruta>`.
-  return fs
-    .readFileSync(allowlistFile, "utf8")
+// Lee un archivo desde la rama base REMOTA, nunca del checkout. Si no existe
+// alli (o `git show` falla por cualquier motivo), devuelve null: quien llama
+// debe interpretarlo como "sin contenido", nunca caer al checkout.
+function readFromBase(base, filePath) {
+  try {
+    return execFileSync("git", ["show", `${base}:${filePath}`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return null;
+  }
+}
+
+// Se parsea sin dependencia de YAML: solo lineas `- path: <ruta>`.
+function parseAllowlistEntries(raw) {
+  if (!raw) return [];
+  return raw
     .split(/\r?\n/)
     .map((line) => line.match(/^\s*-?\s*path:\s*(.+?)\s*$/))
     .filter(Boolean)
     .map((match) => match[1].replace(/^["']|["']$/g, ""));
+}
+
+// El allowlist se lee SIEMPRE de la rama base, NUNCA del checkout evaluado.
+//
+// Esta es la asimetria que hace que el guard funcione, y no es simetrica con
+// `loadLockedPatterns` a proposito: `locked-paths.txt` solo puede EXTENDER la
+// proteccion (es union con ALWAYS_LOCKED y DEFAULT_LOCKED), asi que leerlo del
+// checkout es inofensivo -- lo peor que puede hacer un atacante es protegerse
+// mas. El allowlist hace exactamente lo contrario: EXCLUYE de proteccion.
+//
+// Leerlo del checkout permitia este ataque, reproducido empiricamente antes de
+// este fix, en UN SOLO commit:
+//   1. reescribir un archivo protegido (ej. openspec/specs/algo/spec.md);
+//   2. en el mismo commit, agregar al allowlist dos entradas: una que autoriza
+//      ese archivo y otra que autoriza el propio allowlist (autorreferencial).
+// El guard reportaba `status: ok, violations: []` con ambos archivos en
+// `allowed`: el evaluado se estaba firmando su propio permiso. Que CI trajera
+// el SCRIPT del guard desde origin no ayudaba, porque el script confiable
+// seguia leyendo los DATOS del checkout atacante-controlado.
+//
+// Leyendolo de la base, una entrada nueva no tiene efecto en el PR que la
+// introduce: solo cuenta despues de estar mergeada en la rama de integracion,
+// que es precisamente el gate humano que este control existe para forzar. El
+// allowlist sigue ademas en ALWAYS_LOCKED, asi que tocarlo se reporta como
+// violacion y exige la revision humana de la plataforma.
+function loadAllowlist(base, allowlistFile) {
+  return parseAllowlistEntries(readFromBase(base, allowlistFile));
 }
 
 function matchesPattern(filePath, pattern) {
@@ -146,8 +183,11 @@ const changed = [
   .filter((value, index, all) => all.indexOf(value) === index);
 
 const lockedPatterns = loadLockedPatterns(options.lockedFile);
-const allowlist = loadAllowlist(options.allowlist);
+// `base`, no el checkout: ver el comentario largo en loadAllowlist.
+const allowlist = loadAllowlist(base, options.allowlist);
 result.locked = lockedPatterns;
+result.allowlistSource = `${base}:${options.allowlist}`;
+result.allowlistEntries = allowlist.length;
 
 for (const file of changed) {
   const pattern = lockedPatterns.find((candidate) => matchesPattern(file, candidate));

@@ -18,9 +18,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const cli = path.join(repoRoot, "bin", "sdlc.js");
 const adaptersSource = path.join(repoRoot, "templates", "scripts", "quality-adapters");
 
-function runCli(args) {
-  return spawnSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8" });
+// `--source ci` solo cuenta como CI si el proceso corre de verdad en un
+// runner (ADR 0007, P8): un test que ejercita el camino de CI tiene que
+// SIMULAR el runner, no pedir un bypass. Antes esta dependencia era invisible
+// — el test pasaba en local porque el flag se creia a si mismo.
+function runCli(args, extraEnv = {}) {
+  return spawnSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...extraEnv } });
 }
+const AS_CI = { GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "test-run-1" };
 
 // --- unidad: detectEvidenceMismatch -----------------------------------------
 assert.deepEqual(detectEvidenceMismatch({ prior: null, fresh: { tree_hash: "a", metrics: {} } }), []);
@@ -127,7 +132,7 @@ assert.equal(local.advisory, true);
 // 2. CI recomputa sobre el MISMO codigo (src/lib.js no cambio) y obtiene 40%:
 // el harness local mintio, o algo cambio el reporte sin cambiar el arbol.
 setControl(40);
-const ci = JSON.parse(runCli(["quality-gate", "--target", target, "--slice", "s1", "--phase", "F8", "--run", "--source", "ci", "--json"]).stdout);
+const ci = JSON.parse(runCli(["quality-gate", "--target", target, "--slice", "s1", "--phase", "F8", "--run", "--source", "ci", "--json"], AS_CI).stdout);
 assert.equal(ci.status, "blocked", JSON.stringify(ci));
 const mismatchFinding = ci.surfaceFindings.find((f) => f.code === "evidence-mismatch");
 assert.ok(mismatchFinding, "CI debe detectar que el arbol es el mismo y los numeros no");
@@ -140,7 +145,7 @@ assert.equal(mismatchFinding.recomputed, 40);
 setControl(90);
 runCli(["quality-gate", "--target", target, "--slice", "s2", "--phase", "F8", "--run", "--json"]);
 const ciMatching = JSON.parse(
-  runCli(["quality-gate", "--target", target, "--slice", "s2", "--phase", "F8", "--run", "--source", "ci", "--json"]).stdout
+  runCli(["quality-gate", "--target", target, "--slice", "s2", "--phase", "F8", "--run", "--source", "ci", "--json"], AS_CI).stdout
 );
 assert.ok(!ciMatching.surfaceFindings.some((f) => f.code === "evidence-mismatch"));
 
@@ -152,7 +157,7 @@ runCli(["quality-gate", "--target", target, "--slice", "s3", "--phase", "F8", "-
 fs.writeFileSync(path.join(target, "src", "lib.js"), "export const x = 2;\n", "utf8");
 setControl(99);
 const ciDifferentTree = JSON.parse(
-  runCli(["quality-gate", "--target", target, "--slice", "s3", "--phase", "F8", "--run", "--source", "ci", "--json"]).stdout
+  runCli(["quality-gate", "--target", target, "--slice", "s3", "--phase", "F8", "--run", "--source", "ci", "--json"], AS_CI).stdout
 );
 assert.ok(
   !ciDifferentTree.surfaceFindings.some((f) => f.code === "evidence-mismatch"),

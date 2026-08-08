@@ -19,9 +19,13 @@ const cli = path.join(repoRoot, "bin", "sdlc.js");
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-baseline-poison-"));
 const target = path.join(tempRoot, "consumidor");
 
-function run(args) {
-  return spawnSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8" });
+// `--source ci` solo cuenta si el proceso corre de verdad en un runner
+// (ADR 0007, P8): el test que ejercita el camino autoritativo tiene que
+// SIMULAR el runner en vez de confiar en el flag.
+function run(args, extraEnv = {}) {
+  return spawnSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8", env: { ...process.env, ...extraEnv } });
 }
+const AS_CI = { GITHUB_ACTIONS: "true", GITHUB_RUN_ID: "test-run-1" };
 function writeF15Evidence(evidenceSource, metrics) {
   const dir = path.join(target, ".github", "agent-state", "evidence", "slice-a");
   fs.mkdirSync(dir, { recursive: true });
@@ -59,14 +63,30 @@ const poisonedPayload = JSON.parse(poisoned.stdout);
 assert.equal(poisonedPayload.code, "baseline-source-not-ci");
 assert.ok(!fs.existsSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml")), "el baseline no debe escribirse");
 
-// --- 2. --source ci contra evidencia que SI declara source: ci: se acepta --
+// --- 1b. EL ATAQUE CONSISTENTE (gap P8 encontrado por auditoria adversarial)
+// El caso 1 solo cierra al atacante ingenuo: evidencia `harness` + promocion
+// mintiendo. Un atacante consistente escribe la evidencia declarando `ci`
+// (nada se lo impedia) y DESPUES promueve con `--source ci`, produciendo una
+// cadena internamente coherente y del todo falsa, sin pisar un runner jamas.
+// Ahora el entorno tambien tiene que confirmarlo.
+writeF15Evidence("ci", { coverage: { changed_lines_pct: 100, changed_lines_total: 20 } });
+const consistentLie = run(["quality-baseline", "--target", target, "--promote", "--slice", "slice-a", "--source", "ci", "--json"]);
+assert.notEqual(consistentLie.status, 0, "una cadena ci-ci fabricada en local no puede producir un baseline autoritativo");
+assert.equal(JSON.parse(consistentLie.stdout).code, "baseline-source-ci-unverified");
+assert.ok(!fs.existsSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml")));
+
+// --- 2. --source ci REAL (dentro de un runner) contra evidencia ci: se acepta
 writeF15Evidence("ci", { coverage: { changed_lines_pct: 95, changed_lines_total: 20 } });
-const legit = run(["quality-baseline", "--target", target, "--promote", "--slice", "slice-a", "--source", "ci", "--json"]);
+const legit = run(["quality-baseline", "--target", target, "--promote", "--slice", "slice-a", "--source", "ci", "--json"], AS_CI);
 assert.equal(legit.status, 0, legit.stdout);
 const legitPayload = JSON.parse(legit.stdout);
 assert.equal(legitPayload.status, "ok");
 const promotedDoc = YAML.parse(fs.readFileSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml"), "utf8"));
 assert.equal(promotedDoc.promoted_by, "ci");
+// El provider y el run id quedan en el baseline: "esto vino de CI" pasa de
+// afirmacion a dato auditable.
+assert.equal(promotedDoc.ci_provider, "github-actions");
+assert.equal(promotedDoc.ci_run_id, "test-run-1");
 
 // --- 3. --allow-local sigue sin esta exigencia: es advisory, nunca autoritativa
 fs.rmSync(path.join(target, ".github", "agent-state", "quality-baseline.yaml"));

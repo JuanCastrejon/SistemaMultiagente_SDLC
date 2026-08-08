@@ -30,6 +30,7 @@ import YAML from "yaml";
 import { pathExists, readTextIfExists, writeText } from "./file-utils.js";
 import { readEvidenceFile } from "./evidence-validator.js";
 import { evidencePath as evidenceFilePath } from "./evidence-writer.js";
+import { resolveEffectiveSource } from "./ci-detect.js";
 
 export function baselinePath(target) {
   return path.join(target, ".github", "agent-state", "quality-baseline.yaml");
@@ -113,7 +114,7 @@ export function loadBaselineMetrics(target) {
  * promocion local (advisory, para probar el flujo sin esperar a merge). Sin
  * `--allow-local`, una promocion sin `source: "ci"` se rechaza.
  */
-export function promoteBaseline(target, { slice, phase = "F15", commitSha = null, source = "local", allowLocal = false, now = new Date() }) {
+export function promoteBaseline(target, { slice, phase = "F15", commitSha = null, source = "local", allowLocal = false, now = new Date(), env = process.env }) {
   if (source !== "ci" && !allowLocal) {
     return {
       ok: false,
@@ -149,6 +150,21 @@ export function promoteBaseline(target, { slice, phase = "F15", commitSha = null
     };
   }
 
+  // El cruce de arriba cierra el ataque INGENUO (evidencia local + promocion
+  // mintiendo). No cierra el CONSISTENTE: correr `quality-gate --run
+  // --source ci` y despues `--promote --source ci` en la misma maquina produce
+  // una cadena internamente coherente y falsa. Por eso el origen tambien se
+  // verifica contra el entorno (ADR 0007, P8): si no hay runner, `--source ci`
+  // no puede producir un baseline marcado autoritativo.
+  const effective = resolveEffectiveSource(source, env);
+  if (source === "ci" && effective.downgraded) {
+    return {
+      ok: false,
+      code: "baseline-source-ci-unverified",
+      detail: `${effective.reason}. Una promocion autoritativa solo puede originarse en el job post-merge; en local, usar --allow-local.`
+    };
+  }
+
   const document = {
     version: 1,
     promoted_at: now.toISOString(),
@@ -156,6 +172,8 @@ export function promoteBaseline(target, { slice, phase = "F15", commitSha = null
     commit_sha: commitSha,
     slice,
     source,
+    ci_provider: source === "ci" ? effective.ci.provider : null,
+    ci_run_id: source === "ci" ? effective.ci.runId : null,
     metrics
   };
   document.integrity_sha256 = computeIntegrity(document);

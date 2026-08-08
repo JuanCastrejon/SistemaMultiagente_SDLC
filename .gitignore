@@ -1,6 +1,8 @@
 node_modules/
 .sdlc/backups/
 .sdlc/tmp/
+.sdlc/vault/
+.sdlc/session.json
 coverage/
 dist/
 *.log

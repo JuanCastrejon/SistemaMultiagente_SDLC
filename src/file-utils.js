@@ -69,7 +69,14 @@ export function copyFilePreservingPath(sourceRoot, targetRoot, relativePath) {
 }
 
 export function listFiles(root, options = {}) {
-  const ignored = options.ignored ?? new Set([".git", "node_modules", ".turbo", "dist", "coverage"]);
+  // `.sdlc` es estado local de runtime (backups, vault de continuidad,
+  // session.json, patch-plan) que el propio CLI escribe al correr
+  // `sdlc install/save/resume` contra el framework mismo. No es codigo fuente
+  // ni contenido gestionado: ningun validador de scripts/*.mjs tiene motivo
+  // para inspeccionarlo, y hacerlo produce falsos positivos (ej.
+  // validate-no-personal-paths) puramente por desarrollo local, invisibles en
+  // CI porque un checkout fresco nunca tiene `.sdlc/`.
+  const ignored = options.ignored ?? new Set([".git", "node_modules", ".turbo", "dist", "coverage", ".sdlc"]);
   const results = [];
 
   function walk(current) {
