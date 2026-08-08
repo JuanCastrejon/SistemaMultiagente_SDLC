@@ -318,9 +318,18 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         gates: declaredGates,
         evaluated: adjudication.evaluated,
         vacuous: adjudication.vacuous,
+        // `findings` trae los hallazgos que no son de gate: superficie
+        // fantasma, baseline manipulado y el drift del ancla del probe. Se
+        // calculaban y se DESCARTABAN aqui, asi que nunca llegaban a quien lee
+        // `phase-gate` para decidir si la fase avanza.
+        findings: adjudication.findings ?? [],
         evidenceSource: adjudication.evidenceSource,
         treeHash: adjudication.treeHash
       };
+      for (const finding of adjudication.findings ?? []) {
+        if (finding.level === "error") evidenceBlockers.push(`quality-${finding.code}${finding.id ? `:${finding.id}` : ""}`);
+        else if (finding.level === "warning") evidenceWarnings.push(`quality-${finding.code}`);
+      }
       for (const violation of adjudication.violations) {
         evidenceBlockers.push(`quality-${violation.code}:${violation.id ?? violation.metric ?? ""}`);
       }

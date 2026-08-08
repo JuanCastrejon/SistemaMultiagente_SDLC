@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { checkProbeAnchors } from "../src/quality-adjudicate.js";
+import { checkProbeAnchors, resolveProbeChain } from "../src/quality-adjudicate.js";
 import { sha256Text } from "../src/file-utils.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,7 +26,12 @@ function runCli(args) {
 const unitDir = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-probe-anchor-unit-"));
 const scriptText = "node scripts/run-tests.mjs";
 fs.writeFileSync(path.join(unitDir, "package.json"), JSON.stringify({ scripts: { "validate:coverage": scriptText } }), "utf8");
-const hash = sha256Text(scriptText);
+// El ancla cubre la CADENA que el package manager ejecuta (pre/cmd/post) mas
+// los archivos locales que esos scripts referencian, no solo el texto del
+// script nombrado: anclar el texto suelto dejaba dos bypasses abiertos.
+const chainDigest = (dir, command) =>
+  resolveProbeChain(dir, JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).scripts ?? {}, command).digest;
+const hash = chainDigest(unitDir, "validate:coverage");
 
 const unpinned = checkProbeAnchors(unitDir, { probes: [{ id: "coverage", command: "validate:coverage" }] });
 assert.equal(unpinned.length, 1);
@@ -88,10 +93,10 @@ function writeContract(commandSha256) {
 }
 
 const goodScript = "node scripts/probe.mjs";
-const pinnedHash = sha256Text(goodScript);
+writePackageJson(goodScript);
+const pinnedHash = chainDigest(target, "validate:probe");
 
 // 1. Anclado y sin cambios: corre limpio, sin hallazgos de anclaje.
-writePackageJson(goodScript);
 writeContract(pinnedHash);
 const ok = JSON.parse(runCli(["quality-gate", "--target", target, "--slice", "s1", "--phase", "F8", "--run", "--json"]).stdout);
 assert.equal(ok.status, "ok", JSON.stringify(ok));
@@ -122,5 +127,49 @@ const unpinnedFinding = doctorOut.findings.find((f) => f.code === "probe-command
 assert.ok(unpinnedFinding, "doctor debe avisar de probes sin anclar sin necesitar una corrida completa");
 assert.equal(unpinnedFinding.level, "warning");
 assert.equal(unpinnedFinding.actual, pinnedHash);
+
+// --- 5. ENVOLVER el probe con un script pre<cmd> ---------------------------
+// npm/pnpm/yarn invocan `pre<cmd>` automaticamente. Agregar
+// `prevalidate:probe` que sobrescribe el reporte envuelve la medicion SIN
+// tocar una letra del texto anclado: el hash del texto suelto seguia calzando
+// y el bypass era invisible.
+writePackageJson(goodScript);
+writeContract(pinnedHash);
+const pkg = JSON.parse(fs.readFileSync(path.join(target, "package.json"), "utf8"));
+pkg.scripts["prevalidate:probe"] = "node -e \"require('fs').mkdirSync('reports',{recursive:true});require('fs').writeFileSync('reports/probe.json','{}')\"";
+fs.writeFileSync(path.join(target, "package.json"), JSON.stringify(pkg, null, 2), "utf8");
+const wrapped = JSON.parse(runCli(["quality-gate", "--target", target, "--slice", "s5", "--phase", "F8", "--run", "--json"]).stdout);
+assert.equal(wrapped.status, "blocked", "envolver el probe con un pre<cmd> tiene que romper el ancla");
+assert.ok(wrapped.surfaceFindings.some((f) => f.code === "probe-script-drift"));
+
+// --- 6. CAMBIAR el archivo al que apunta el texto anclado -----------------
+// `node scripts/probe.mjs` no cambia nunca; lo que cambia es probe.mjs. El
+// ancla solo cubria el primer salto de la cadena.
+delete pkg.scripts["prevalidate:probe"];
+fs.writeFileSync(path.join(target, "package.json"), JSON.stringify(pkg, null, 2), "utf8");
+fs.writeFileSync(path.join(target, "scripts", "probe.mjs"), "// ahora miente\nimport fs from 'node:fs';\nfs.mkdirSync('reports',{recursive:true});\nfs.writeFileSync('reports/probe.json','{\"total\":{\"lines\":{\"pct\":100}}}');\n", "utf8");
+const swapped = JSON.parse(runCli(["quality-gate", "--target", target, "--slice", "s6", "--phase", "F8", "--run", "--json"]).stdout);
+assert.equal(swapped.status, "blocked", "cambiar el archivo que el comando ejecuta tiene que romper el ancla");
+assert.ok(swapped.surfaceFindings.some((f) => f.code === "probe-script-drift"));
+
+// --- 7. El ancla se re-verifica tambien al ADJUDICAR desde evidencia -------
+// Antes solo la miraba `--run`, asi que `phase-gate` y `status` daban verde
+// sobre un probe cuyo script ya no era el anclado.
+const fromEvidence = JSON.parse(
+  runCli(["quality-gate", "--target", target, "--slice", "s6", "--phase", "F8", "--from-evidence", "--json"]).stdout
+);
+assert.ok(
+  [...(fromEvidence.surfaceFindings ?? []), ...(fromEvidence.findings ?? [])].some((f) => f.code === "probe-script-drift"),
+  "adjudicar desde evidencia no puede ignorar que el script ya no es el anclado"
+);
+
+// Y el mismo cruce llega a `phase-gate`, que es lo que un humano lee para
+// decidir si la fase avanza: antes solo lo miraba `--run`.
+const phaseGateOut = JSON.parse(runCli(["phase-gate", "--target", target, "--phase", "F8", "--slice", "s6", "--json"]).stdout);
+const phaseGateFindings = JSON.stringify(phaseGateOut.quality ?? {});
+assert.ok(
+  phaseGateFindings.includes("probe-script-drift") || JSON.stringify(phaseGateOut).includes("probe-script-drift"),
+  "phase-gate tampoco puede dar verde sobre un probe cuyo script ya no es el anclado"
+);
 
 console.log("probe-anchor e2e: PASS");

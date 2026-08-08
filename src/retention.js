@@ -14,6 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { loadQualityContract } from "./quality-adjudicate.js";
 
 const PERMANENT_PATHS = [".github/agent-state/evidence", ".github/agent-state/quality-baseline.yaml"];
@@ -44,6 +45,11 @@ function gitignorePatternToRegex(pattern) {
   return { regex: new RegExp(source), negated };
 }
 
+// Fallback textual, SOLO para cuando git no esta disponible. Reimplementar
+// gitignore a mano es inevitablemente incorrecto —la auditoria adversarial
+// encontro cinco formas de evadir esta funcion— asi que la autoridad real es
+// `git check-ignore` (ver askGitIfIgnored). Esto queda como red de seguridad
+// degradada, no como el camino principal.
 export function isPathIgnored(gitignoreContent, relativePath) {
   const normalized = relativePath.replace(/\\/g, "/");
   let ignored = false;
@@ -55,18 +61,98 @@ export function isPathIgnored(gitignoreContent, relativePath) {
   return ignored;
 }
 
+// `git check-ignore` es la unica fuente correcta: entiende los .gitignore
+// ANIDADOS, `.git/info/exclude`, el global del usuario, la precedencia real de
+// las reglas de negacion (git NO puede re-incluir un archivo bajo un
+// directorio excluido, cosa que la version textual creia poder) y los
+// patrones que ningun regex casero replica bien.
+//
+// Devuelve null si git no esta disponible o el target no es un repo: quien
+// llama decide (aqui se cae al fallback textual y se marca la degradacion).
+function askGitIfIgnored(target, relativePaths) {
+  if (relativePaths.length === 0) return new Set();
+  const result = spawnSync("git", ["check-ignore", "--stdin"], {
+    cwd: target,
+    input: relativePaths.join("\n"),
+    encoding: "utf8"
+  });
+  // 0 = alguna ruta ignorada, 1 = ninguna. Cualquier otro codigo (128 = no es
+  // un repo, o git ausente) significa que no se pudo preguntar.
+  if (result.status !== 0 && result.status !== 1) return null;
+  return new Set(
+    (result.stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/\\/g, "/"))
+      .filter(Boolean)
+  );
+}
+
+// Los archivos REALES bajo una ruta permanente. El chequeo anterior probaba
+// solo la ruta del DIRECTORIO contra los patrones, asi que una regla que
+// excluye su contenido (`*.yaml`, `evidence/**`, un .gitignore anidado) dejaba
+// toda la evidencia fuera del commit con cero hallazgos.
+function listFilesUnder(target, relativeRoot) {
+  const absoluteRoot = path.join(target, relativeRoot);
+  if (!fs.existsSync(absoluteRoot)) return [];
+  const stat = fs.statSync(absoluteRoot);
+  if (stat.isFile()) return [relativeRoot];
+  const out = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const absolute = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(absolute);
+      else out.push(path.relative(target, absolute).replace(/\\/g, "/"));
+    }
+  };
+  walk(absoluteRoot);
+  return out;
+}
+
 export function checkRetentionPolicy(target) {
   const findings = [];
   const gitignorePath = path.join(target, ".gitignore");
   const gitignoreContent = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
 
   for (const permanentPath of PERMANENT_PATHS) {
-    if (isPathIgnored(gitignoreContent, permanentPath)) {
+    // Se pregunta por la ruta Y por cada archivo real debajo: excluir el
+    // contenido sin excluir el directorio era el camino mas barato para
+    // borrar la evidencia sin que este control dijera nada.
+    const candidates = [permanentPath, ...listFilesUnder(target, permanentPath)];
+    const ignoredByGit = askGitIfIgnored(target, candidates);
+
+    if (ignoredByGit === null) {
+      // Sin git no se puede responder con autoridad. Se usa el fallback y se
+      // dice que la respuesta es degradada, en vez de afirmar que todo esta
+      // bien porque no se pudo comprobar.
+      const ignored = candidates.filter((candidate) => isPathIgnored(gitignoreContent, candidate));
+      if (ignored.length > 0) {
+        findings.push({
+          level: "error",
+          code: "retention-permanent-path-ignored",
+          path: permanentPath,
+          samples: ignored.slice(0, 5),
+          detail: `${permanentPath} es evidencia permanente (decision 7, ADR 0007) pero .gitignore la excluye: el rastro de auditoria desaparece en el proximo commit`
+        });
+      } else if (candidates.length > 1) {
+        findings.push({
+          level: "warning",
+          code: "retention-check-degraded",
+          path: permanentPath,
+          detail:
+            "no se pudo consultar `git check-ignore` (¿git ausente o target fuera de un repo?): la comprobacion cayo al parser textual, que no ve .gitignore anidados ni .git/info/exclude"
+        });
+      }
+      continue;
+    }
+
+    if (ignoredByGit.size > 0) {
       findings.push({
         level: "error",
         code: "retention-permanent-path-ignored",
         path: permanentPath,
-        detail: `${permanentPath} es evidencia permanente (decision 7, ADR 0007) pero .gitignore la excluye: el rastro de auditoria desaparece en el proximo commit`
+        ignoredCount: ignoredByGit.size,
+        samples: [...ignoredByGit].slice(0, 5),
+        detail: `${ignoredByGit.size} ruta(s) de evidencia permanente estan excluidas por git (decision 7, ADR 0007): el rastro de auditoria desaparece en el proximo commit. Confirmado con \`git check-ignore\`, que ve tambien los .gitignore anidados y .git/info/exclude`
       });
     }
   }

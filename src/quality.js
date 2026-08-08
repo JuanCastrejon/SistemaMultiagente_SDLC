@@ -23,7 +23,7 @@ import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { detectPackageManager, loadPhaseContract, runPackageScript } from "./harness.js";
-import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveTier } from "./quality-adjudicate.js";
+import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveProbeChain, resolveTier } from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 import { detectEvidenceMismatch } from "./quality-verify.js";
 import { resolveEffectiveSource } from "./ci-detect.js";
@@ -117,8 +117,13 @@ export async function commandQualityGate(options = {}) {
     const packageManager = detectPackageManager(target);
     const declaredScripts = readPackageScripts(target) ?? {};
     for (const probe of contract.probes ?? []) {
-      const scriptText = declaredScripts[probe.command];
-      const commandSha256Actual = typeof scriptText === "string" ? sha256Text(scriptText) : null;
+      // El valor que se reporta para copiar al contrato tiene que ser el
+      // MISMO que checkProbeAnchors valida: el de la cadena completa
+      // (pre/cmd/post + archivos referenciados), no el del texto suelto.
+      // Reportar uno y validar otro dejaba al usuario anclando un hash que
+      // nunca iba a calzar.
+      const probeChain = resolveProbeChain(target, declaredScripts, probe.command);
+      const commandSha256Actual = probeChain.declared ? probeChain.digest : null;
       const started = Date.now();
       const execution = runPackageScript(target, packageManager, probe.command, probe.timeout_ms ?? 120_000);
       const durationMs = Date.now() - started;

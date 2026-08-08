@@ -54,12 +54,61 @@ export function checkSurfaces(target, contract) {
 // Un probe sin `command_sha256` no bloquea (escalera de adopcion, igual que
 // los gates): solo avisa y sugiere el valor a anclar, para no romper contratos
 // existentes el dia que esto se agrega.
+// El ancla cubre la CADENA COMPLETA que el package manager ejecuta, no solo
+// el script nombrado. Dos huecos reproducidos por la auditoria adversarial:
+//
+// 1. npm/pnpm/yarn invocan `pre<cmd>` y `post<cmd>` automaticamente. Agregar
+//    un `prevalidate:coverage` que sobrescribe el reporte envuelve al probe
+//    SIN tocar una sola letra del texto anclado: el hash seguia calzando.
+// 2. El texto anclado suele ser `node scripts/probe.mjs`. Ese texto no cambia
+//    nunca; lo que cambia es el ARCHIVO al que apunta, que no estaba cubierto
+//    por nada. El ancla solo cerraba el primer salto de la cadena.
+//
+// Por eso el hash efectivo se calcula sobre: los tres scripts de la cadena
+// (los ausentes se marcan como ausentes, para que agregar un `pre` despues
+// rompa el ancla) mas el contenido de los archivos locales que esos scripts
+// referencian. Un ancla que solo cubre parte de lo que se ejecuta no es un
+// ancla, es un adorno.
+const SCRIPT_FILE_TOKEN = /(?:^|[\s"'=])((?:\.{0,2}\/)?[\w.@/-]+\.(?:mjs|cjs|js|ts|sh|ps1|py))(?=[\s"']|$)/g;
+
+function collectReferencedFiles(target, text) {
+  const files = [];
+  for (const match of String(text ?? "").matchAll(SCRIPT_FILE_TOKEN)) {
+    const relative = match[1];
+    if (relative.startsWith("/") || /^[A-Za-z]:/.test(relative)) continue; // rutas absolutas: fuera del repo
+    const absolute = path.join(target, relative);
+    if (!pathExists(absolute)) continue;
+    files.push({ relative, content: readTextIfExists(absolute) ?? "" });
+  }
+  return files;
+}
+
+export function resolveProbeChain(target, declaredScripts, command) {
+  const parts = [];
+  const referenced = [];
+  for (const name of [`pre${command}`, command, `post${command}`]) {
+    const text = declaredScripts[name];
+    if (typeof text !== "string") {
+      // El hueco se registra explicitamente: si manana aparece un `pre`, el
+      // hash cambia y el ancla rompe, que es justo lo que debe pasar.
+      parts.push(`${name}\u0000<ausente>`);
+      continue;
+    }
+    parts.push(`${name}\u0000${text}`);
+    for (const file of collectReferencedFiles(target, text)) {
+      referenced.push(file.relative);
+      parts.push(`file:${file.relative}\u0000${file.content}`);
+    }
+  }
+  return { digest: sha256Text(parts.join("\u0000\u0000")), referenced, declared: typeof declaredScripts[command] === "string" };
+}
+
 export function checkProbeAnchors(target, contract) {
   const findings = [];
   const declaredScripts = readPackageScripts(target) ?? {};
   for (const probe of contract?.probes ?? []) {
-    const scriptText = declaredScripts[probe.command];
-    const actual = typeof scriptText === "string" ? sha256Text(scriptText) : null;
+    const chain = resolveProbeChain(target, declaredScripts, probe.command);
+    const actual = chain.declared ? chain.digest : null;
 
     if (!probe.command_sha256) {
       if (actual) {
@@ -150,6 +199,12 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
 
   const smells = detectEvidenceSmells(read.evidence).map((smell) => ({ level: "warning", ...smell }));
   const surfaceFindings = checkSurfaces(target, contract);
+  // El ancla se re-verifica tambien al adjudicar desde evidencia. Antes solo
+  // la miraba `quality-gate --run`, asi que `phase-gate` y `status` daban
+  // verde sobre un probe cuyo script ya no era el anclado — el veredicto que
+  // un humano lee para decidir si avanzar de fase no puede ignorar que la
+  // medicion la produjo codigo distinto del revisado.
+  surfaceFindings.push(...checkProbeAnchors(target, contract));
 
   // Un baseline manipulado no puede alimentar un ratchet: si el hash de
   // integridad no cuadra, se adjudica como si no hubiera baseline (todo gate

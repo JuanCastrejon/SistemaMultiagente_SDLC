@@ -63,4 +63,52 @@ const doctorRun = spawnSync("node", [cli, "doctor", "--target", target, "--json"
 const doctorOut = JSON.parse(doctorRun.stdout);
 assert.ok(doctorOut.findings.some((f) => f.code === "retention-permanent-path-ignored"));
 
+// --- 4. Los caminos que EVADIAN el control ---------------------------------
+// El chequeo comparaba la RUTA DEL DIRECTORIO contra un parser textual de
+// .gitignore escrito a mano. La auditoria adversarial encontro cinco formas de
+// borrar toda la evidencia con cero hallazgos. La autoridad ahora es
+// `git check-ignore`, que entiende .gitignore anidados, .git/info/exclude y la
+// precedencia real de las negaciones.
+const gitTarget = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-retention-git-")), "repo");
+const evidenceDir = path.join(gitTarget, ".github", "agent-state", "evidence", "slice-a");
+fs.mkdirSync(evidenceDir, { recursive: true });
+fs.writeFileSync(path.join(evidenceDir, "F8.yaml"), "phase: F8\n", "utf8");
+execFileSync("git", ["init", "--quiet"], { cwd: gitTarget });
+
+const EVIDENCIA_REL = ".github/agent-state/evidence/slice-a/F8.yaml";
+function gitLaIgnora() {
+  try {
+    execFileSync("git", ["check-ignore", "-q", EVIDENCIA_REL], { cwd: gitTarget });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function escenario(nombre, raiz, { anidado = null, exclude = null } = {}) {
+  fs.writeFileSync(path.join(gitTarget, ".gitignore"), raiz, "utf8");
+  const anidadoPath = path.join(gitTarget, ".github", "agent-state", "evidence", ".gitignore");
+  if (anidado) fs.writeFileSync(anidadoPath, anidado, "utf8");
+  else if (fs.existsSync(anidadoPath)) fs.rmSync(anidadoPath);
+  const excludePath = path.join(gitTarget, ".git", "info", "exclude");
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  fs.writeFileSync(excludePath, exclude ?? "", "utf8");
+
+  const detectado = checkRetentionPolicy(gitTarget).some((f) => f.level === "error");
+  // El control tiene que coincidir con lo que git REALMENTE hace, ni mas ni menos.
+  assert.equal(detectado, gitLaIgnora(), `${nombre}: la deteccion debe coincidir con git check-ignore`);
+}
+
+escenario("sano", "node_modules/\n");
+escenario("directorio de evidencia excluido", "node_modules/\n.github/agent-state/evidence/\n");
+escenario("glob de contenido (*.yaml)", "node_modules/\n*.yaml\n");
+escenario(".github entero", "node_modules/\n.github/\n");
+escenario(".gitignore ANIDADO", "node_modules/\n", { anidado: "*\n" });
+escenario(".git/info/exclude", "node_modules/\n", { exclude: ".github/agent-state/evidence/\n" });
+// git NO puede re-incluir un archivo bajo un directorio excluido: el parser
+// textual creia que si, y esas dos lineas apagaban el unico ataque cubierto.
+escenario(
+  "negacion que git no puede honrar",
+  "node_modules/\n.github/agent-state/evidence/\n!.github/agent-state/evidence/slice-a/F8.yaml\n"
+);
+
 console.log("retention cli e2e: PASS");
