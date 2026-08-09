@@ -12,7 +12,7 @@
       "required": ["name", "slug"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]*$" },
-        "slug": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]*$" },
+        "slug": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*$" },
         "organization": { "type": "string", "pattern": "^[^\\r\\n]*$" }
       }
     },
@@ -57,10 +57,11 @@
     "gitFlow": {
       "type": "object",
       "required": ["integrationBranch", "stableBranch"],
+      "description": "Estos campos NO son texto libre: se interpolan sin escapar dentro de un asignacion de shell en quality-verify.yml (`BASE=\"origin/{{gitFlow.integrationBranch}}\"`) y en el `on.push.branches` del workflow. Prohibir solo CR/LF filtraba una carga util, no la causa: una comilla basta para salir de la asignacion. Se restringen al juego de caracteres real de un nombre de rama git, que ademas excluye todo metacaracter de shell.",
       "properties": {
-        "integrationBranch": { "type": "string", "pattern": "^[^\\r\\n]*$" },
-        "stableBranch": { "type": "string", "pattern": "^[^\\r\\n]*$" },
-        "branchPrefixes": { "type": "array", "items": { "type": "string", "pattern": "^[^\\r\\n]*$" } }
+        "integrationBranch": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._/-]+$" },
+        "stableBranch": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._/-]+$" },
+        "branchPrefixes": { "type": "array", "items": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._/-]+$" } }
       }
     },
     "governance": {

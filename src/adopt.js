@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathExists, readJson, writeJson, writeText } from "./file-utils.js";
 import { buildQualityContractSurfaces, interpolate, templatesRoot } from "./template-loader.js";
-import { FRAMEWORK_VERSION } from "./render.js";
+import { FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -191,6 +191,26 @@ export function commandAdopt(options = {}) {
       },
       openspec: { profile: "minimal" }
     };
+
+    // Se valida ANTES de escribir y, sobre todo, antes de interpolar. `adopt`
+    // era la puerta de al lado del mismo agujero que se cerro en `upgrade`:
+    // `--project-name` (o `package.json.name`) llega crudo hasta
+    // `interpolate()`, que sustituye texto sin escapar, y de ahi a
+    // quality-contract.yaml -- un archivo que el guard de frontera SI protege,
+    // alcanzado desde una entrada que nadie valida. Reproducido: un nombre con
+    // un salto de linea inyectaba `enforcement: block` como clave real.
+    const configErrors = validateConfigShape(config);
+    if (configErrors.length > 0) {
+      return {
+        exitCode: EXIT_ERROR,
+        payload: {
+          status: "error",
+          code: "adopt-config-invalid",
+          errors: configErrors,
+          detail: "el config derivado no pasa el schema; adopt no escribe ni genera contratos a partir de el"
+        }
+      };
+    }
     writeJson(configPath, config);
     created.push(".sdlc/config.json");
   } else {

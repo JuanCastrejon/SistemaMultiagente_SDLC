@@ -142,8 +142,10 @@ Desde `1.8.0`, el framework implementa el ADR 0007: en vez de revisar línea por
 
 Dos reglas gobiernan todo lo de abajo:
 
-- **Ningún control nace en `block`.** Todo entra en `observe`, pasa a `ratchet` contra una línea base y solo después bloquea. Un gate que bloquea el día uno no se adopta, se desactiva.
+- **Ningún *umbral* nace en `block`.** Los umbrales entran en `observe`, pasan a `ratchet` contra una línea base y solo después bloquean. Dos excepciones deliberadas, porque no son umbrales sino ausencias: un gate que la fase **declara** y no se mide es violación en cualquier modo (prometer una medición y no hacerla no es un aviso), y el guard de frontera bloquea si no puede resolver la base contra la que comparar.
 - **El evaluado no firma su propio veredicto.** El harness local calcula lo mismo que CI, pero se autodeclara `advisory`; el árbitro es el workflow, que vuelve a medir en una máquina que el agente no controla.
+
+  Ese arbitraje **no es automático por instalar el workflow**: exige dos controles de plataforma que el framework no puede imponer — marcar el check como *required* en la rama protegida, y restringir vía CODEOWNERS quién edita `.github/workflows/`. Sin ambos, el árbitro es editable por el evaluado y no arbitra nada. El propio workflow lo documenta en su cabecera.
 
 ### Contrato de calidad
 
@@ -169,7 +171,9 @@ El `min_denominator` es lo que separa un gate que juzga de uno vacuo: «0 violac
 
 `scripts/validate-spec-boundary.mjs` bloquea cuando el diff toca specs, contratos, workflows o configuración de herramientas sin excepción aprobada. Sin este candado, la ruta más barata para pasar cualquier gate es reescribir el criterio.
 
-En CI se ejecuta la copia del guard que vive en la rama de integración, **nunca la del checkout del PR**, y su allowlist se lee de la base vía `git show`: una excepción creada en el mismo PR no autoriza nada hasta estar mergeada.
+En CI se ejecuta la copia del guard que vive en la rama de integración —no la del checkout del PR— y su allowlist se lee de la base vía `git show`: una excepción creada en el mismo PR no autoriza nada hasta estar mergeada.
+
+Una salvedad honesta: si la rama base todavía no tiene el script (bootstrap, primera adopción), el workflow avisa y cae a la copia del checkout. Mientras dure esa ventana el guard sí es editable por el PR, y se cierra sola en cuanto el guard existe en la base.
 
 ### Firma humana verificable y cierre
 
@@ -194,17 +198,19 @@ sdlc quality-docs --out docs/quality-gates.md   # regenera desde los contratos
 sdlc quality-docs --check                       # CI: exit 2 si la doc comiteada divergió
 ```
 
-Mentir en esa doc exigiría editar el propio contrato que los gates evalúan. `--check` no escribe: compara y falla, para que una doc desactualizada no pase inadvertida.
+Mentir en esa doc exigiría editar el propio contrato que los gates evalúan. `--check` no escribe: compara y falla, para que una doc desactualizada no pase inadvertida. Es **opt-in**: el workflow que entrega el framework no lo invoca, así que cablearlo a CI es decisión del consumidor (regla de adopción).
 
 ### Adopción de un consumidor maduro
 
 `sdlc install` asume un scaffold completo. Un repo con historia propia no quiere que eso le reescriba nada encima:
 
 ```powershell
-sdlc adopt --target .    # ADITIVO PURO: nunca sobreescribe lo que ya existe
+sdlc adopt --target .    # aditivo: no pisa archivos existentes
 ```
 
-Agrega la devDependency versionada (**nunca `npm link`**, ni `file:`/`link:`), un `.sdlc/config.json` mínimo **sin inventar superficies**, y el contrato de fases con su schema — solo los que falten. Correrlo dos veces es seguro. Cuando la rama de integración es ambigua (típico en gitflow: `origin/HEAD` apunta a `main` mientras se integra en `develop`), el payload lo dice en vez de elegir en silencio.
+Agrega la devDependency versionada (**nunca `npm link`**), un `.sdlc/config.json` mínimo **sin inventar superficies**, y el contrato de fases con su schema — solo los que falten. Correrlo dos veces es seguro.
+
+Con una excepción explícita, que es el punto de la pieza: si la dependencia ya está declarada como `file:` o `link:`, **sí** edita `package.json` para reemplazarla por una versión real. Un árbitro que apunta a un working tree local no arbitra nada, así que ese estado no se conserva. Cuando la rama de integración es ambigua (típico en gitflow: `origin/HEAD` apunta a `main` mientras se integra en `develop`), el payload lo dice en vez de elegir en silencio.
 
 ### Prueba de rojo — advisory, y lo declara
 
