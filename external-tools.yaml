@@ -41,6 +41,7 @@ tools:
 
   - id: openspec
     name: OpenSpec
+    repo: https://github.com/Fission-AI/OpenSpec
     purpose: Motor SDD — capacidades canonizadas, proposals, specs, design y tasks.
     required: true
     profile: LEAN minimo, ANALYSIS completo
@@ -52,6 +53,7 @@ tools:
 
   - id: gh
     name: GitHub CLI
+    repo: https://github.com/cli/cli
     purpose: Issues, PRs y releases. Necesaria para publicar y para el gate humano por PR.
     required: para publish
     profile: LEAN
@@ -61,6 +63,7 @@ tools:
 
   - id: codegraph
     name: CodeGraph
+    repo: https://github.com/colbymchenry/codegraph
     purpose: Grafo estructural de codigo — simbolos, callers/callees, impacto. Responde "donde esta X" sin grep.
     required: false
     profile: LEAN
@@ -70,6 +73,7 @@ tools:
 
   - id: graphify
     name: Graphify
+    repo: https://github.com/safishamsi/graphify
     purpose: Grafo semantico de documentacion — prior-art y arquitectura cross-doc.
     required: false
     profile: ANALYSIS / ORCHESTRATION
@@ -81,6 +85,7 @@ tools:
 
   - id: headroom
     name: headroom
+    repo: https://github.com/chopratejas/headroom
     purpose: Proxy con cache y compresion de trafico entre el agente y la API.
     required: false
     profile: cualquiera
@@ -106,6 +111,7 @@ tools:
 
   - id: autoskills
     name: autoskills / skills externas
+    repo: https://github.com/midudev/autoskills
     purpose: Discovery y mirroring de skills a .claude/, .agents/ y .windsurf/.
     required: false
     profile: segun tarea
@@ -116,6 +122,7 @@ tools:
 
   - id: caveman
     name: caveman
+    repo: https://github.com/JuliusBrussee/caveman
     purpose: Comprime el output conversacional del agente. No toca razonamiento ni payloads.
     required: false
     profile: cualquiera, solo conversacion

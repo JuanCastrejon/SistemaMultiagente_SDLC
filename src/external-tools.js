@@ -117,6 +117,9 @@ export function describeTools(target = process.cwd()) {
       profile: tool.profile ?? null,
       install: tool.install?.argv ? tool.install.argv.join(" ") : null,
       manual: tool.manual ?? null,
+      // El repo de la herramienta es la fuente para instalarla: cuando no hay
+      // comando automatizable, ahi es donde el usuario encuentra el suyo.
+      repo: tool.repo ?? null,
       docs: tool.docs ?? null,
       notUsedFor: tool.notUsedFor ?? null
     });
@@ -155,7 +158,8 @@ export function buildInstallPlan(target, { detected = new Map(), only = null } =
         purpose: tool.purpose ?? null,
         argv: tool.install.argv,
         command: tool.install.argv.join(" "),
-        manual: tool.manual ?? null
+        manual: tool.manual ?? null,
+        repo: tool.repo ?? null
       });
     } else {
       manualOnly.push({
@@ -164,6 +168,9 @@ export function buildInstallPlan(target, { detected = new Map(), only = null } =
         required: tool.required ?? false,
         purpose: tool.purpose ?? null,
         manual: tool.manual ?? "sin instrucciones declaradas",
+        // Sin comando automatizable, el repo ES la instruccion: es donde vive
+        // el instalador real de esa herramienta.
+        repo: tool.repo ?? null,
         docs: tool.docs ?? null
       });
     }
