@@ -49,6 +49,58 @@ assert.equal(findings.length, 4);
 
 console.log("red-proof unit: PASS");
 
+// --- unidad: un test_ref no puede acreditar varios escenarios ---------------
+// Sin esto, N escenarios apuntando al mismo test cobraban credito de UNA sola
+// asercion: se demuestra un rojo y se acreditan N. Misma vacuidad por
+// denominador que el resto del gauntlet rechaza, con otra forma.
+{
+  const colision = verifyRedProof({
+    scenarios: [
+      { sc_id: "SC-A", test_ref: "a.test.ts > uno", status: "red" },
+      { sc_id: "SC-B", test_ref: "a.test.ts > uno", status: "red" }
+    ],
+    report: { results: [{ test_ref: "a.test.ts > uno", outcome: "assertion-failed" }] }
+  });
+  assert.equal(colision.length, 2, "los dos escenarios en colision tienen que reportarse, no solo uno");
+  assert.ok(colision.every((f) => f.code === "red-proof-test-ref-collision"));
+  assert.deepEqual(colision.find((f) => f.sc_id === "SC-A").sharedWith, ["SC-B"], "el hallazgo debe nombrar con quien colisiona");
+
+  // Contracara: un test_ref por escenario sigue dando credito limpio.
+  const sinColision = verifyRedProof({
+    scenarios: [
+      { sc_id: "SC-A", test_ref: "a.test.ts > uno", status: "red" },
+      { sc_id: "SC-B", test_ref: "a.test.ts > dos", status: "red" }
+    ],
+    report: {
+      results: [
+        { test_ref: "a.test.ts > uno", outcome: "assertion-failed" },
+        { test_ref: "a.test.ts > dos", outcome: "assertion-failed" }
+      ]
+    }
+  });
+  assert.deepEqual(sinColision, [], "un test por escenario es el caso legitimo y debe pasar");
+}
+
+// --- unidad: resultado duplicado en el reporte es indecidible ---------------
+// `new Map(lista)` se queda con la ULTIMA entrada en silencio: un test que
+// falla por asercion podia quedar tapado por otro homonimo que pasa, o al
+// reves, segun el orden de aparicion.
+{
+  const ambiguo = verifyRedProof({
+    scenarios: [{ sc_id: "SC-A", test_ref: "a.test.ts > uno", status: "red" }],
+    report: {
+      results: [
+        { test_ref: "a.test.ts > uno", outcome: "passed" },
+        { test_ref: "a.test.ts > uno", outcome: "assertion-failed" }
+      ]
+    }
+  });
+  assert.equal(ambiguo.length, 1);
+  assert.equal(ambiguo[0].code, "red-proof-ambiguous-result", "elegir uno de los dos seria inventar la respuesta");
+}
+
+console.log("red-proof colisiones: PASS");
+
 // --- unidad: adapter vitest-json ---------------------------------------------
 const { parse } = await import(pathToFileURL(adapterSource).href);
 
@@ -86,6 +138,54 @@ assert.equal(byRef["tests/payment.test.ts > cobro > rechaza sin fondos"], "colla
 assert.equal(byRef["tests/payment.test.ts > cobro > ya implementado"], "passed");
 
 console.log("red-proof adapter unit: PASS");
+
+// --- unidad: hasta donde llega la heuristica del adapter --------------------
+// Las formas de abajo son las MEDIDAS con node:assert, no supuestas. La
+// fabricacion perezosa (`new AssertionError({})`) deja la huella degenerada
+// `undefined undefined undefined` y se puede cerrar; una asercion legitima con
+// mensaje propio y un `throw new AssertionError('texto plausible')` son
+// IDENTICAS por texto y no se pueden separar sin un wrapper que ejecute la
+// comparacion. Eso ultimo esta declarado en `limitations`, no disimulado.
+{
+  function classify(message) {
+    const report = {
+      testResults: [
+        {
+          name: "t.test.ts",
+          assertionResults: [{ ancestorTitles: [], title: "caso", status: "failed", failureMessages: [message] }]
+        }
+      ]
+    };
+    return parse(JSON.stringify(report)).results[0].outcome;
+  }
+
+  // Se cierra: AssertionError construido sin argumentos.
+  assert.equal(
+    classify("AssertionError [ERR_ASSERTION]: undefined undefined undefined\n    at ..."),
+    "collateral-error",
+    "un AssertionError sin argumentos no describe comparacion alguna: no es prueba de nada"
+  );
+  assert.equal(classify("AssertionError [ERR_ASSERTION]:\n    at ..."), "collateral-error", "nombre de clase sin mensaje tampoco");
+
+  // Sigue dando credito: aserciones reales, con y sin diff estructurado.
+  assert.equal(classify("AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\n1 !== 2\n"), "assertion-failed");
+  assert.equal(
+    classify("AssertionError [ERR_ASSERTION]: el pago debe rechazarse sin fondos\n    at ..."),
+    "assertion-failed",
+    "una asercion legitima con mensaje propio no puede quedar fuera: seria un falso negativo que empuja a no adoptar la pieza"
+  );
+
+  // LIMITE DECLARADO, verificado a proposito: esta forma es fabricable y pasa.
+  // El test lo fija para que nadie crea que la heuristica cubre mas de lo que
+  // cubre; cerrarlo exige procedencia de CI o un wrapper de asercion.
+  assert.equal(
+    classify("AssertionError [ERR_ASSERTION]: expected 1 to be 2\n    at ..."),
+    "assertion-failed",
+    "limite conocido: un mensaje fabricado que imita una asercion es indistinguible por texto"
+  );
+}
+
+console.log("red-proof limites del adapter: PASS");
 
 // --- E2E: sdlc red-proof-verify sobre evidencia F5 real ---------------------
 const target = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-red-proof-")), "consumidor");
@@ -212,3 +312,44 @@ assert.equal(ningunRojo.scenariosTotal, 1);
 assert.equal(ningunRojo.scenariosChecked, 0, "el payload tiene que decir cuantos sujetos se evaluaron de verdad");
 
 console.log("red-proof cli e2e: PASS");
+
+// --- el veredicto viaja SIEMPRE con su propio limite ------------------------
+// Esta pieza no es prueba autoritativa segun el ADR: no consume
+// `red_proof_run_id` ni `red_proof_sha` (que el schema de evidencia ya
+// reserva), asi que adjudica un reporte que el propio evaluado produce, en la
+// maquina que el evaluado controla. Entregarla sin decirlo seria exactamente
+// el fraude que P10 existe para detectar: un control con apariencia de
+// control. Por eso `ok` significa "no se detecto trampa", nunca "el rojo quedo
+// demostrado" -- y eso tiene que estar en el payload, no solo en un comentario.
+{
+  writeF5([{ sc_id: "SC-3f9a2b1c9d4e", test_ref: "tests/payment.test.ts > cobro > autoriza el cobro", status: "red" }]);
+  writeReport([
+    {
+      name: "tests/payment.test.ts",
+      assertionResults: [
+        {
+          ancestorTitles: ["cobro"],
+          title: "autoriza el cobro",
+          status: "failed",
+          failureMessages: ["AssertionError: expected 200 to be 402"]
+        }
+      ]
+    }
+  ]);
+  const limpio = run([
+    "red-proof-verify", "--target", target, "--slice", "slice-red",
+    "--report", "reports/red-proof.json", "--format", "vitest-json", "--json"
+  ]);
+  const payload = JSON.parse(limpio.stdout);
+  assert.equal(payload.status, "ok");
+  assert.equal(payload.authoritative, false, "no puede presentarse como prueba autoritativa mientras no ancle procedencia");
+  assert.equal(payload.advisory, true);
+  assert.equal(payload.proofStrength, "heuristic");
+  assert.ok(Array.isArray(payload.limitations) && payload.limitations.length >= 3);
+  assert.ok(
+    payload.limitations.some((line) => line.includes("red_proof_run_id") && line.includes("red_proof_sha")),
+    "la limitacion principal debe nombrar los campos concretos que faltan por consumir"
+  );
+}
+
+console.log("red-proof limite declarado en el payload: PASS");

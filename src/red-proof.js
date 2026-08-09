@@ -35,7 +35,31 @@ const EXIT_ACTION_REQUIRED = 2;
  */
 export function verifyRedProof({ scenarios = [], report = {} } = {}) {
   const findings = [];
-  const resultsByRef = new Map((report?.results ?? []).map((result) => [result.test_ref, result]));
+
+  // El `new Map(...)` de una lista se queda con la ULTIMA entrada de cada
+  // clave, en silencio. Si el reporte trae dos tests con el mismo test_ref
+  // (mismo titulo en el mismo archivo, o un adapter que colapsa dos casos),
+  // el credito lo decidia el orden de aparicion: un test que falla por
+  // asercion podia quedar tapado por otro homonimo que pasa, o al reves.
+  // Cual de los dos es "la prueba" es indecidible, asi que se rechaza en vez
+  // de elegir uno.
+  const resultsByRef = new Map();
+  const duplicatedInReport = new Set();
+  for (const result of report?.results ?? []) {
+    if (resultsByRef.has(result.test_ref)) duplicatedInReport.add(result.test_ref);
+    else resultsByRef.set(result.test_ref, result);
+  }
+
+  // Un test_ref solo puede respaldar UN escenario. Sin esto, N escenarios
+  // distintos apuntando al mismo test cobraban credito de una sola asercion:
+  // se demuestra un rojo y se acreditan N. Es la misma vacuidad por
+  // denominador que el resto del gauntlet rechaza, con otra forma.
+  const scIdsByRef = new Map();
+  for (const scenario of scenarios) {
+    if (scenario.status !== "red" || !scenario.test_ref) continue;
+    if (!scIdsByRef.has(scenario.test_ref)) scIdsByRef.set(scenario.test_ref, new Set());
+    scIdsByRef.get(scenario.test_ref).add(scenario.sc_id);
+  }
 
   for (const scenario of scenarios) {
     // Solo se verifica lo que el propio slice DECLARA rojo. Un escenario ya
@@ -48,6 +72,30 @@ export function verifyRedProof({ scenarios = [], report = {} } = {}) {
         code: "red-proof-missing-test-ref",
         sc_id: scenario.sc_id,
         detail: `el escenario ${scenario.sc_id} declara status:red sin test_ref: no hay nada que verificar`
+      });
+      continue;
+    }
+
+    const sharedWith = scIdsByRef.get(scenario.test_ref);
+    if (sharedWith && sharedWith.size > 1) {
+      findings.push({
+        level: "error",
+        code: "red-proof-test-ref-collision",
+        sc_id: scenario.sc_id,
+        test_ref: scenario.test_ref,
+        sharedWith: [...sharedWith].filter((id) => id !== scenario.sc_id),
+        detail: `el test_ref '${scenario.test_ref}' respalda ${sharedWith.size} escenarios (${[...sharedWith].join(", ")}): una sola asercion no puede acreditar varios escenarios, cada uno necesita su propio test`
+      });
+      continue;
+    }
+
+    if (duplicatedInReport.has(scenario.test_ref)) {
+      findings.push({
+        level: "error",
+        code: "red-proof-ambiguous-result",
+        sc_id: scenario.sc_id,
+        test_ref: scenario.test_ref,
+        detail: `el reporte trae mas de un resultado para el test_ref '${scenario.test_ref}': cual de ellos es la prueba del rojo es indecidible`
       });
       continue;
     }
@@ -212,6 +260,27 @@ export async function commandRedProofVerify(options = {}) {
       // Cuantos sujetos se evaluaron de verdad. Sin este numero en el payload,
       // "verifique 12 escenarios" y "verifique 0" se ven identicos aguas abajo.
       scenariosChecked: declaredRed.length,
+      // Esta pieza NO es prueba autoritativa segun el ADR, y decirlo es el
+      // punto. El ADR 0007 exige que el rojo se demuestre con procedencia de
+      // CI y anclaje al codigo juzgado; `schemas/phase-evidence.schema.json`
+      // ya reserva `red_proof_run_id` y `red_proof_sha` para eso, y este
+      // comando no lee ninguno de los dos: adjudica un reporte que el
+      // evaluado produce y entrega, en la maquina que el evaluado controla.
+      // Ademas la distincion asercion-real / error-colateral es una
+      // heuristica de texto (ver el adapter), no una garantia.
+      //
+      // Entregar esto sin decirlo seria exactamente el fraude que P10 existe
+      // para detectar: un control con apariencia de control. Por eso el
+      // veredicto viaja siempre acompanado de su propio limite, y `ok`
+      // significa "no encontre trampa", nunca "esto quedo demostrado".
+      authoritative: false,
+      advisory: true,
+      proofStrength: "heuristic",
+      limitations: [
+        "no consume red_proof_run_id ni red_proof_sha: no hay procedencia de CI ni anclaje al codigo juzgado",
+        "la distincion asercion-real / error-colateral es heuristica de texto sobre el mensaje del runner",
+        "el reporte lo produce el propio evaluado: `ok` significa 'no se detecto trampa', no 'el rojo quedo demostrado'"
+      ],
       findings
     }
   };
