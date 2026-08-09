@@ -16,6 +16,7 @@ Los tres defectos de esta versión salieron de **usar** `sdlc save` en un repo r
 
   El CLI no tiene modelo y no puede inventar el criterio de una decisión; lo honesto es exigirlo, no simularlo.
 
+- **El vault queda fuera del control de versiones en el consumidor.** El fallback del vault es `.sdlc/vault/` DENTRO del repo, y no estaba ignorado: el checkpoint aparecia como untracked y un `git add -A` lo commiteaba. El checkpoint es memoria de trabajo de ESA maquina —lo durable se promueve a un ADR, a `openspec/` o a `docs/`—, asi que versionarlo mezcla contexto personal de sesion con la fuente de verdad del repo, y arrastra al historial lo que un checkpoint recoge sin filtrar (rutas locales, estado de runtime, menciones a secretos). Se entrega un `.gitignore` ANIDADO en `.sdlc/`, para no editar el `.gitignore` raiz que el repo destino ya gestiona a su manera.
 - `migrations/1.8.2/` en el registro, para que `sdlc upgrade --to-version 1.8.2` no la rechace.
 
 ### Notas de implementación

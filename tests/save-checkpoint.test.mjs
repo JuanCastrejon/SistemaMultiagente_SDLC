@@ -123,3 +123,33 @@ console.log("save checkpoint enriquecido: PASS");
 }
 
 console.log("save commits desde el anterior: PASS");
+
+// --- 4. el checkpoint NO se versiona ----------------------------------------
+// Decision del proyecto: el checkpoint es memoria de trabajo de ESTA maquina,
+// no documentacion del repo. Lo durable se promueve a un ADR, a openspec/ o a
+// docs/ — esos si se versionan.
+//
+// Pero el fallback del vault es `.sdlc/vault/` DENTRO del repo, y sin ignorarlo
+// el checkpoint aparecia como untracked y un `git add -A` lo commiteaba: la
+// decision se incumplia sola, en silencio. Peor con lo que un checkpoint
+// recoge sin filtrar (rutas locales, estado de runtime, menciones a secretos).
+{
+  const target = newRepo("gitignore");
+  const result = save(target);
+  assert.ok(fs.existsSync(result.checkpoint));
+
+  const ignored = execFileSync("git", ["check-ignore", "-v", ".sdlc/vault"], { cwd: target, encoding: "utf8" });
+  assert.match(ignored, /vault\//, "el vault tiene que estar ignorado por el .gitignore que entrega el framework");
+
+  const status = execFileSync("git", ["status", "--porcelain"], { cwd: target, encoding: "utf8" });
+  assert.ok(
+    !status.split("\n").some((line) => line.includes("vault")),
+    `git no puede ver el vault: ${status.split("\n").filter((l) => l.includes("vault")).join(" | ")}`
+  );
+
+  // Anidado dentro de .sdlc/, no en el .gitignore raiz: el framework no edita
+  // un archivo que el repo destino ya gestiona a su manera.
+  assert.ok(fs.existsSync(path.join(target, ".sdlc", ".gitignore")));
+}
+
+console.log("save checkpoint fuera de git: PASS");
