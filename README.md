@@ -10,6 +10,8 @@ Este proyecto instala un SDLC multi-agente gobernado en repos greenfield o legac
 
 El modelo operativo es SDD waterfall por slice y ágil por release: cada slice tiene gates explícitos de requisitos, readiness, diseño, implementación, verificación y archivo, mientras los releases permanecen iterativos.
 
+Desde `1.8.0`, esos gates dejan de ser declarativos y pasan a **medirse**: contrato de calidad con umbrales por superficie, cobertura de las líneas que cambiaron, frontera de especificación que el propio PR no puede desactivar, firma humana verificable por commit firmado y un árbitro en CI que vuelve a medir lo que el harness local calculó. Ver [Gauntlet de calidad verificable](#gauntlet-de-calidad-verificable-180).
+
 ## Inicio rápido
 
 Flujo con paquete publicado (>=1.2.1):
@@ -134,6 +136,86 @@ sdlc status --markdown --write → status.md
 Adjuntar status.md al bloque [validation] del Issue → gate humano F4/F13 firma contra el número
 ```
 
+## Gauntlet de calidad verificable (1.8.0)
+
+Desde `1.8.0`, el framework implementa el ADR 0007: en vez de revisar línea por línea el código que genera un agente, se le rodea de restricciones automáticas **verificables**. La tesis viene de Robert C. Martin, con una corrección importante: Martin no elimina la revisión humana, la **reubica** — se deja de revisar implementación y tests, y se sigue revisando y firmando la especificación *antes* de que se genere código.
+
+Dos reglas gobiernan todo lo de abajo:
+
+- **Ningún control nace en `block`.** Todo entra en `observe`, pasa a `ratchet` contra una línea base y solo después bloquea. Un gate que bloquea el día uno no se adopta, se desactiva.
+- **El evaluado no firma su propio veredicto.** El harness local calcula lo mismo que CI, pero se autodeclara `advisory`; el árbitro es el workflow, que vuelve a medir en una máquina que el agente no controla.
+
+### Contrato de calidad
+
+`quality-contract.yaml` declara tiers, superficies, probes, umbrales por tier y **denominador mínimo** de cada gate. El motor solo adjudica: no sabe que existe Vitest ni Stryker. Los adapters de formato viven en el consumidor.
+
+```powershell
+# Ejecuta los probes declarados, anexa la evidencia medida y adjudica
+sdlc quality-gate --slice <id> --phase <F> --run --exit-code --json
+
+# Solo adjudica lo ya escrito (se marca advisory)
+sdlc quality-gate --slice <id> --phase <F> --from-evidence
+
+# Mueve la línea base de los gates ratchet a evidencia YA escrita, nunca a un número a mano
+sdlc quality-baseline --promote --slice <id> --source ci
+
+# Cobertura de las LÍNEAS CAMBIADAS, no del repo entero (se encadena tras el test runner)
+sdlc coverage-diff --base-ref origin/develop
+```
+
+El `min_denominator` es lo que separa un gate que juzga de uno vacuo: «0 violaciones permitidas» y «0 violaciones permitidas, y solo cuenta si se escanearon ≥10 módulos» son controles distintos.
+
+### Frontera de especificación
+
+`scripts/validate-spec-boundary.mjs` bloquea cuando el diff toca specs, contratos, workflows o configuración de herramientas sin excepción aprobada. Sin este candado, la ruta más barata para pasar cualquier gate es reescribir el criterio.
+
+En CI se ejecuta la copia del guard que vive en la rama de integración, **nunca la del checkout del PR**, y su allowlist se lee de la base vía `git show`: una excepción creada en el mismo PR no autoriza nada hasta estar mergeada.
+
+### Firma humana verificable y cierre
+
+```powershell
+# El sujeto (slice + fase + tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado
+sdlc signoff --slice <id> --phase <F> --create
+sdlc signoff --slice <id> --phase <F> --verify --commit <sha>
+
+# Cada escenario Gherkin trae un sc_id cuyo hash debe coincidir con (capability, requirement, título)
+sdlc acceptance-verify --change <slug>
+
+# Ninguna tarea sin marcar; una tarea de merge marcada exige que HEAD sea antepasado real
+sdlc change-close --change <slug> --integration-branch develop
+```
+
+Con un solo maintainer, GitHub prohíbe auto-aprobar un PR propio: `platform-review` es insatisfacible, así que la firma se verifica por **commit firmado** en vez de por review de plataforma (`governance.threatModel: single-maintainer`).
+
+### Documentación generada, no escrita
+
+```powershell
+sdlc quality-docs --out docs/quality-gates.md   # regenera desde los contratos
+sdlc quality-docs --check                       # CI: exit 2 si la doc comiteada divergió
+```
+
+Mentir en esa doc exigiría editar el propio contrato que los gates evalúan. `--check` no escribe: compara y falla, para que una doc desactualizada no pase inadvertida.
+
+### Adopción de un consumidor maduro
+
+`sdlc install` asume un scaffold completo. Un repo con historia propia no quiere que eso le reescriba nada encima:
+
+```powershell
+sdlc adopt --target .    # ADITIVO PURO: nunca sobreescribe lo que ya existe
+```
+
+Agrega la devDependency versionada (**nunca `npm link`**, ni `file:`/`link:`), un `.sdlc/config.json` mínimo **sin inventar superficies**, y el contrato de fases con su schema — solo los que falten. Correrlo dos veces es seguro. Cuando la rama de integración es ambigua (típico en gitflow: `origin/HEAD` apunta a `main` mientras se integra en `develop`), el payload lo dice en vez de elegir en silencio.
+
+### Prueba de rojo — advisory, y lo declara
+
+```powershell
+sdlc red-proof-verify --slice <id> --report reports/red-proof.json --format vitest-json
+```
+
+Todo escenario en `status: red` exige que el reporte declare `outcome: assertion-failed`: un error colateral (import roto, `throw` arbitrario) no da crédito, porque demuestra que algo se rompió, no que el escenario esté bien especificado.
+
+Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`, `proofStrength: "heuristic"`, `limitations`). No consume aún procedencia de CI, así que adjudica un reporte que produce el propio evaluado: `ok` significa «no se detectó trampa», nunca «el rojo quedó demostrado». Ningún workflow lo invoca por defecto.
+
 ## Modos
 
 | Modo | Cuándo usar | Qué agrega |
@@ -181,6 +263,7 @@ flowchart LR
 
 - schema de config
 - sin rutas personales
+- sin bytes de control crudos
 - sanitización de plantillas
 - sin contenido gestionado inline
 - integridad del manifiesto
@@ -323,7 +406,7 @@ sdlc tools-doctor --target . --profile full --json
 
 Comparativa lado a lado de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
 
-| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.7.0 |
+| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.8.0 |
 | --- | --- | --- |
 | Licencia | MIT | MIT |
 | Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |
@@ -339,7 +422,10 @@ Comparativa lado a lado de los dos frameworks. La intención no es competir sino
 | Constructor de agentes/flujos personalizados | BMad Builder v1 | personas `.agent.md` + validadores (`validate-agent-persona-schema`) |
 | Automatización del loop de desarrollo | en roadmap V6 | `phase-graph.yaml` + rework label-driven + lock TTL |
 | Brownfield-first | no | sí (modo legacy con research obligatorio antes de proposal) |
-| Validadores de governance | no es core | 14 validadores (config, personal-paths, template-sanitization, manifest-integrity, governance-precedence, …) |
+| Validadores de governance | no es core | 15 validadores (config, personal-paths, no-control-bytes, template-sanitization, manifest-integrity, governance-precedence, …) |
+| Gates de calidad medidos | no es core | contrato declarativo con tiers, umbrales por superficie y denominador mínimo; árbitro en CI que vuelve a medir (ADR 0007) |
+| Cobertura de lo que cambió | n/d | `sdlc coverage-diff` cruza el diff de git contra el detalle de statements, no el porcentaje global |
+| Frontera de especificación | no es core | guard que bloquea editar specs/contratos sin excepción ya mergeada; en CI corre la copia de la rama base, no la del PR |
 | OpenSpec / SDD | no es core | integrado (capacidades canónicas en `openspec/specs/`) |
 | Readiness L1/L2/L3 + matriz NFR | no es core | integrado (spec `business-production-readiness`) |
 | Sistema de migración + rollback | no es core | backup automático + `sdlc upgrade --to-version` + `sdlc rollback --to <id>` |
@@ -349,7 +435,7 @@ Comparativa lado a lado de los dos frameworks. La intención no es competir sino
 | Comunidad | Discord abierto, YouTube, X | GitHub Issues + Discussions (Discord no necesario) |
 | Marca registrada | BMad / BMAD-METHOD trademarks of BMad Code, LLC | sin restricción explícita más allá de MIT |
 
-Lectura corta: BMAD lidera en amplitud ágil y comunidad (12+ personas, 34+ flujos, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validadores (14) + sistema de migración + readiness L1/L2/L3 + sanitización. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
+Lectura corta: BMAD lidera en amplitud ágil y comunidad (12+ personas, 34+ flujos, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validadores (15) + gates de calidad medidos con árbitro en CI + sistema de migración + readiness L1/L2/L3 + sanitización. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
 
 ## Roadmap
 
