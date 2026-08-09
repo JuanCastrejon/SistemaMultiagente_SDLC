@@ -460,12 +460,25 @@ export function commandVerdict(options) {
   const notConfigured = [];
   const steps = [];
   const packageManager = detectPackageManager(target);
-  // null = no hay package.json legible: no se puede prechequear y se ejecuta
-  // todo como antes, para no romper consumidores que no son Node.
+  // `null` = no hay package.json legible.
+  //
+  // Antes eso significaba "no puedo prechequear, ejecuto todo como antes para
+  // no romper consumidores que no son Node". La intencion era buena y el efecto
+  // el contrario: sin package.json, `pnpm run <script>` falla SIEMPRE, asi que
+  // todos los pasos BLOCKING salian `fail` y el veredicto acusaba al validador
+  // equivocado. Reproducido instalando la 1.8.0 en un repo brownfield real sin
+  // package.json: `verdict` decia `control-plane: fail (exit 1)` mientras
+  // `node scripts/validators/validate-control-plane.mjs` salia 0 con "OK: 10
+  // referencias resuelven". Quien lo viera iria a depurar un archivo sano.
+  //
+  // Sin package.json no hay NINGUN script declarado, que es exactamente el caso
+  // que `not-configured` ya modela: ni pass (no se puede fingir que corrio) ni
+  // fail (no hay nada roto). Se reutiliza esa semantica en vez de inventar otra.
   const declaredScripts = readPackageScripts(target);
+  const hasManifest = declaredScripts !== null;
 
   for (const step of VERDICT_STEPS) {
-    if (declaredScripts && !Object.prototype.hasOwnProperty.call(declaredScripts, step.script)) {
+    if (!hasManifest || !Object.prototype.hasOwnProperty.call(declaredScripts, step.script)) {
       notConfigured.push(step.key);
       steps.push({
         key: step.key,
@@ -473,7 +486,9 @@ export function commandVerdict(options) {
         level: step.level,
         status: "not-configured",
         exitCode: null,
-        detail: `El consumidor no declara el script ${step.script} en package.json.`
+        detail: hasManifest
+          ? `El consumidor no declara el script ${step.script} en package.json.`
+          : "El consumidor no tiene package.json: el harness no puede ejecutar validators. Si es un repo Node, crear package.json y declarar los scripts validate:*."
       });
       continue;
     }
@@ -499,11 +514,29 @@ export function commandVerdict(options) {
     }
   }
 
-  const ready = blockers.length === 0;
+  // VACUIDAD. Si NINGUN paso llego a ejecutarse, no hay nada verificado, y
+  // "no se pudo medir" no puede parecerse a "todo bien" — es la regla que el
+  // resto del gauntlet aplica (`gate: vacuous`, `red-proof-vacuous`).
+  //
+  // Sin esto, arreglar el bug de package.json cambiaba un falso rojo por un
+  // falso VERDE: los 8 pasos salian `not-configured`, `blockers` quedaba vacio
+  // y el veredicto era READY sobre un repo donde no corrio un solo validator.
+  // El falso verde es peor que el falso rojo: nadie lo va a investigar.
+  const executed = steps.filter((entry) => entry.status === "pass" || entry.status === "fail");
+  const vacuous = executed.length === 0 && steps.length > 0;
+  const ready = blockers.length === 0 && !vacuous;
+
   const payload = {
-    status: ready ? "ready" : "not-ready",
-    verdict: ready ? "READY" : "NOT-READY",
+    status: vacuous ? "not-configured" : ready ? "ready" : "not-ready",
+    verdict: vacuous ? "NOT-VERIFIABLE" : ready ? "READY" : "NOT-READY",
     packageManager: { name: packageManager.name, source: packageManager.source },
+    ...(vacuous
+      ? {
+          vacuousReason: hasManifest
+            ? "ningun paso del veredicto esta declarado en package.json: no se verifico nada"
+            : "el repo no tiene package.json, asi que ningun validator pudo ejecutarse: no se verifico nada"
+        }
+      : {}),
     blockers,
     warnings,
     notConfigured,
@@ -804,6 +837,30 @@ export function commandToolsDoctor(options) {
     checkTool("package-manager", () => {
       const [command, args] = packageManager.versionCommand;
       const result = runCommand(command, args, target, 10_000);
+      // Que el binario responda no dice nada si el repo no tiene proyecto Node:
+      // se reportaba `ok` en un repo SIN package.json, porque se cae al default
+      // `pnpm` y `pnpm --version` funciona en la maquina. "El gestor anda" y
+      // "hay algo que gestionar" son dos cosas distintas, y el harness necesita
+      // la segunda para poder correr un solo validator.
+      // Se reporta como `ok` a proposito: el gestor SI esta disponible, que es
+      // lo que este check mide. Escalarlo a warning lo convertia en error —
+      // `package-manager` es required— y dejaba en rojo el doctor de cualquier
+      // consumidor que no sea Node, que es un estado legitimo.
+      //
+      // La consecuencia real (ningun validator puede correr) la reporta
+      // `sdlc verdict` como NOT-VERIFIABLE, que es donde importa. Aqui basta
+      // con no dejar el `ok` desnudo, porque "el gestor anda" y "hay algo que
+      // gestionar" son cosas distintas.
+      const hasManifest = readPackageScripts(target) !== null;
+      if (result.ok && !hasManifest) {
+        return {
+          status: "ok",
+          manager: packageManager.name,
+          detectedFrom: packageManager.source,
+          version: firstLine(result.stdout || result.stderr),
+          detail: `${packageManager.name} responde, pero el repo no tiene package.json: ningun script validate:* puede ejecutarse (ver \`sdlc verdict\`).`
+        };
+      }
       return {
         status: result.ok ? "ok" : "missing",
         manager: packageManager.name,
