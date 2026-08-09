@@ -51,6 +51,7 @@ import { verifyChangeClosure } from "./change-closure.js";
 import { commandAdopt, detectCliLinked } from "./adopt.js";
 import { commandQualityDocs } from "./quality-docs.js";
 import { buildInstallPlan, runInstallPlan } from "./external-tools.js";
+import { recordLesson, listLessons, promoteLesson, rejectLesson, DEFAULT_PROMOTION_THRESHOLD } from "./skill-lessons.js";
 import { checkRetentionPolicy } from "./retention.js";
 
 const EXIT_OK = 0;
@@ -1067,6 +1068,64 @@ function commandToolsInstall(options) {
   };
 }
 
+// `sdlc skill-lesson` (ADR 025 del consumidor: skills vivas)
+//
+// Captura el disparador que faltaba: un error, un bloqueo o una tarea que ya
+// se hizo tres veces. Ese conocimiento hoy se pierde en el chat y el siguiente
+// agente tropieza con la misma piedra.
+//
+// Una leccion es EVIDENCIA de que hace falta una skill, no la skill. Promover
+// escribe una propuesta bajo `openspec/changes/` y nunca toca `.github/skills/`
+// (restriccion 1 del ADR 025); aprobar sigue siendo humano.
+function commandSkillLesson(options) {
+  const target = requireTarget(options);
+  const threshold = Number(options.threshold ?? DEFAULT_PROMOTION_THRESHOLD);
+
+  if (options.promote) {
+    const result = promoteLesson(target, String(options.promote), {
+      change: options.change ?? null,
+      threshold,
+      force: Boolean(options.force)
+    });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ERROR, payload: { status: result.ok ? "ok" : "error", ...result } };
+  }
+
+  if (options.reject) {
+    const result = rejectLesson(target, String(options.reject), { reason: options.reason ?? null });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ERROR, payload: { status: result.ok ? "ok" : "error", ...result } };
+  }
+
+  if (options.record) {
+    const result = recordLesson(target, {
+      type: options.type ?? null,
+      title: options.title ?? (typeof options.record === "string" ? options.record : null),
+      detail: options.detail ?? null,
+      correction: options.correction ?? null,
+      skill: options.skill ?? null
+    });
+    return {
+      exitCode: result.ok ? EXIT_OK : EXIT_ERROR,
+      payload: {
+        status: result.ok ? "ok" : "error",
+        ...result,
+        ...(result.ok && result.repeated
+          ? { hint: `ya habia pasado: van ${result.lesson.occurrences} veces. Con ${threshold} se puede promover a propuesta de skill.` }
+          : {})
+      }
+    };
+  }
+
+  const listed = listLessons(target, { threshold });
+  return {
+    exitCode: listed.ok ? EXIT_OK : EXIT_ERROR,
+    payload: {
+      status: listed.ok ? "ok" : "error",
+      ...listed,
+      hint: "sdlc skill-lesson --record --type <error|blocker|repetition> --title <t> --correction <que hacer la proxima vez> [--skill <id>]"
+    }
+  };
+}
+
 function commandMigrateConfig(options) {
   const target = requireTarget(options);
   const dryRun = Boolean(options["dry-run"]);
@@ -1178,6 +1237,8 @@ export function run(argv) {
       return commandToolsDoctor(parsed.options);
     case "tools-install":
       return commandToolsInstall(parsed.options);
+    case "skill-lesson":
+      return commandSkillLesson(parsed.options);
     case "pr-body-check":
       return commandPrBodyCheck(parsed.options);
     case "verdict":
