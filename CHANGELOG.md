@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`external-tools.yaml` + `sdlc tools-install`: el diagnóstico ahora dice qué hacer.** `tools-doctor` sabía detectar nueve herramientas y reportarlas como `missing`/`warning` con una ruta; lo que no sabía era decir **qué es** cada una, si el consumidor la necesita, o **cómo** conseguirla. Ese conocimiento existía —en el README y en la matriz de docs— pero no donde el comando lo reporta, así que el usuario que instala se quedaba con una lista de "opcionales" sin forma de decidir cuáles le hacían falta. Nuevo inventario declarativo como fuente única (propósito, requerida u opcional, perfil elegible, comando de instalación, cuándo **no** usarla), leído por `tools-doctor` —que ahora enriquece cada hallazgo con propósito, `install` o `manual`, docs y un `hint` accionable— y por el nuevo `sdlc tools-install`, que cruza inventario y detección y arma un plan separado en tres grupos: `installable`, `manualOnly` (el paso lo hace una persona) y `satisfied`. Mezclar esos tres era justo lo que impedía saber qué falta de verdad.
+
+  **Acotamiento de la ejecución**, porque un inventario que declara comandos es una superficie de ejecución: los comandos son listas de argumentos y nunca cadenas de shell (un token con `;` es un argumento literal, no un separador — la lección de la inyección por `gitFlow.integrationBranch` aplicada de antemano); el ejecutable debe estar en una allowlist corta y una entrada fuera de ella se rechaza **al cargar** el inventario, no al ejecutarlo; `tools-install` es **dry-run por defecto** y exige `--apply` explícito; y nada de esto corre durante `sdlc install`, porque instalar software de terceros no puede ser un efecto secundario del scaffold. Cuando una herramienta no tiene instalador automatizable (CodeGraph, caveman, `gh`), el inventario lo declara y entrega la instrucción manual en vez de inventar un comando.
+
+  La detección **no** se reimplementó: `tools-install` reutiliza la de `tools-doctor`. Dos criterios distintos para "está instalada" acabarían contestando cosas distintas sobre el mismo repo, que es exactamente lo que costó caro en `detectCliLinked`.
+
 ## [1.8.0] — 2026-08-06
 
 Brechas detectadas al instalar el framework en `PasarelaDePago`, un consumidor con `npm workspaces`, más el plan completo P1→P14 de cierre del ADR 0007 (gauntlet de calidad verificable): de cero herramientas reales a un arbitro que mide, hereda, firma, ancla y documenta desde el propio contrato.

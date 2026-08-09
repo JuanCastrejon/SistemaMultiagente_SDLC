@@ -50,6 +50,7 @@ import { commandRedProofVerify } from "./red-proof.js";
 import { verifyChangeClosure } from "./change-closure.js";
 import { commandAdopt, detectCliLinked } from "./adopt.js";
 import { commandQualityDocs } from "./quality-docs.js";
+import { buildInstallPlan, runInstallPlan } from "./external-tools.js";
 import { checkRetentionPolicy } from "./retention.js";
 
 const EXIT_OK = 0;
@@ -961,6 +962,62 @@ function commandUpgrade(options) {
   };
 }
 
+// `sdlc tools-install` (ADR 0007)
+//
+// Cierra el hueco que dejaba `tools-doctor`: decia que faltaba algo, no como
+// conseguirlo. Aqui se reune el inventario con lo que el doctor ya detecta y
+// se produce un plan.
+//
+// DRY-RUN POR DEFECTO, y no es un detalle de ergonomia: instalar software de
+// terceros no puede ser un efecto secundario de pedir un diagnostico. Sin
+// `--apply` se imprime exactamente que se correria y no se ejecuta nada.
+function commandToolsInstall(options) {
+  const target = requireTarget(options);
+  const apply = Boolean(options.apply);
+  const only = options.tool ?? null;
+
+  // Se reutiliza la deteccion de `tools-doctor` en vez de reimplementarla: dos
+  // criterios distintos para "esta instalada" acabarian contestando cosas
+  // distintas sobre el mismo repo, que es exactamente lo que costo caro en
+  // `detectCliLinked`.
+  const doctor = commandToolsDoctor({ ...options, target });
+  const detected = new Map((doctor.payload.tools ?? []).map((tool) => [tool.name, tool.status]));
+
+  const plan = buildInstallPlan(target, { detected, only });
+  if (!plan.ok) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", ...plan } };
+  }
+
+  const execution = runInstallPlan(target, plan, { apply });
+  const failed = execution.results.filter((result) => result.status === "failed");
+  const pendingRequired = [...plan.installable, ...plan.manualOnly].filter((entry) => entry.required === true);
+
+  return {
+    exitCode: failed.length > 0 ? EXIT_ERROR : EXIT_OK,
+    payload: {
+      status: failed.length > 0 ? "error" : "ok",
+      applied: execution.applied,
+      inventory: plan.path,
+      // Los tres grupos separados: mezclarlos es lo que hacia imposible saber
+      // cuales faltan de verdad y cuales exigen a una persona.
+      installable: plan.installable.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        required: entry.required,
+        purpose: entry.purpose,
+        command: entry.command
+      })),
+      manualOnly: plan.manualOnly,
+      satisfied: plan.satisfied.map((entry) => entry.id),
+      results: execution.results,
+      ...(pendingRequired.length > 0 ? { pendingRequired: pendingRequired.map((entry) => entry.id) } : {}),
+      hint: execution.applied
+        ? "los pasos marcados como manuales siguen pendientes: los hace una persona, no este comando"
+        : "dry-run: nada se ejecuto. Repetir con --apply para instalar lo automatizable."
+    }
+  };
+}
+
 function commandMigrateConfig(options) {
   const target = requireTarget(options);
   const dryRun = Boolean(options["dry-run"]);
@@ -1024,7 +1081,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
     }
   };
 }
@@ -1070,6 +1127,8 @@ export function run(argv) {
       return commandGovernanceCheck(parsed.options);
     case "tools-doctor":
       return commandToolsDoctor(parsed.options);
+    case "tools-install":
+      return commandToolsInstall(parsed.options);
     case "pr-body-check":
       return commandPrBodyCheck(parsed.options);
     case "verdict":

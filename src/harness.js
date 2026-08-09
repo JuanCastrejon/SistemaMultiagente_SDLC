@@ -9,6 +9,7 @@ import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.j
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
 import { detectCiEnvironment } from "./ci-detect.js";
+import { describeTools } from "./external-tools.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -871,13 +872,38 @@ export function commandToolsDoctor(options) {
     profile === "full"
       ? new Set(["package-manager", "openspec", "autoskills", "party-mode"])
       : new Set(["package-manager"]);
+  // La deteccion no cambia; lo que cambia es que el hallazgo ahora dice QUE
+  // ES la herramienta y COMO conseguirla. Antes `tool-graphify: warning` con
+  // una ruta era todo lo que el usuario recibia: sin forma de saber si esa
+  // "opcional" le hacia falta ni donde buscarla. El inventario
+  // (external-tools.yaml) es la fuente unica de esa informacion.
+  const described = describeTools(target);
   const findings = tools
     .filter((tool) => tool.status !== "ok")
-    .map((tool) => ({
-      level: required.has(tool.name) ? "error" : "warning",
-      code: `tool-${tool.name}`,
-      message: `${tool.name}: ${tool.status}`
-    }));
+    .map((tool) => {
+      const meta = described.ok ? described.byId.get(tool.name) : null;
+      return {
+        level: required.has(tool.name) ? "error" : "warning",
+        code: `tool-${tool.name}`,
+        message: `${tool.name}: ${tool.status}`,
+        ...(meta
+          ? {
+              purpose: meta.purpose,
+              required: meta.required,
+              profile: meta.profile,
+              // `install` cuando se puede automatizar; `manual` cuando el paso
+              // es de una persona. Distinguirlos importa: prometer un comando
+              // que no existe es peor que decir "esto lo haces tu".
+              ...(meta.install ? { install: meta.install } : {}),
+              ...(meta.manual ? { manual: meta.manual } : {}),
+              ...(meta.docs ? { docs: meta.docs } : {}),
+              hint: meta.install
+                ? `sdlc tools-install --tool ${tool.name} --apply`
+                : "requiere un paso manual (ver 'manual')"
+            }
+          : {})
+      };
+    });
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {

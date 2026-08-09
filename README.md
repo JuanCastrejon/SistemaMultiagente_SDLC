@@ -283,7 +283,39 @@ flowchart LR
 - existencia de referencias Mustache
 - schema de modelos
 
-## Herramientas Externas — Guía de Instalación para el Agente
+## Herramientas Externas — inventario, diagnóstico e instalación
+
+Las herramientas externas son opt-in, y ese era el problema: `tools-doctor` decía `tool-graphify: warning` con una ruta, y el usuario que instala no tenía forma de saber **cuál** de las opcionales le hacía falta ni **cómo** conseguirla sin ir a leer otro documento.
+
+`external-tools.yaml` es ahora la fuente única: propósito, si es requerida, perfil operativo elegible, comando de instalación (cuando existe) y cuándo **no** usarla. `tools-doctor` y `tools-install` leen de ahí.
+
+```powershell
+sdlc tools-doctor --target . --json     # que falta, QUE ES y como conseguirlo
+sdlc tools-install --target .           # plan: dry-run, no ejecuta nada
+sdlc tools-install --target . --apply   # instala solo lo automatizable
+sdlc tools-install --tool graphify --apply
+```
+
+El plan separa tres grupos, porque mezclarlos era lo que impedía saber qué falta de verdad:
+
+| Grupo | Qué es |
+| --- | --- |
+| `installable` | hay comando declarado y la herramienta no está |
+| `manualOnly` | **no** hay instalación automatizable; el paso lo hace una persona (con la instrucción concreta) |
+| `satisfied` | ya está presente |
+
+### Cómo está acotada la ejecución
+
+Un inventario que declara comandos es una superficie de ejecución, así que:
+
+- Los comandos son **listas de argumentos**, nunca cadenas de shell. No hay shell que interprete `;`, `|` o backticks: un token raro es un argumento literal, no un comando.
+- El ejecutable debe estar en una **allowlist corta** (`npm`, `npx`, `pnpm`, `yarn`, `node`, `pip`, `pip3`, `pwsh`, `gh`, `corepack`). Una entrada con otro binario se rechaza **al cargar el inventario**, no al ejecutarlo. Si una herramienta necesita otra cosa, se declara como paso manual.
+- **Dry-run por defecto**: instalar software de terceros no puede ser un efecto secundario de pedir un diagnóstico.
+- Nada de esto corre durante `sdlc install`.
+
+Cuando una herramienta no tiene instalador automatizable, el inventario lo dice y entrega la instrucción manual. Inventar un comando que no existe sería peor que no tener ninguno.
+
+## Guía de instalación por herramienta
 
 Las herramientas externas son opt-in. El framework funciona sin ellas; al activarlas reducen reconstrucción de contexto, mejoran trazabilidad y ahorran tokens de forma significativa. Esta sección está dirigida al **agente que trabaja en el repo consumidor** para que pueda guiar al desarrollador correctamente.
 
