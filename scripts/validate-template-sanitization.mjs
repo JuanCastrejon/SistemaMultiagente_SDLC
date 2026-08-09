@@ -3,9 +3,13 @@ import path from "node:path";
 import { listFiles } from "../src/file-utils.js";
 
 const root = process.cwd();
+// La regla protege lo que se INSTALA en un consumidor. La documentacion interna
+// que razona sobre consumidores reales (extraccion, ADRs e investigacion) puede
+// nombrarlos: no se instala en ningun repo destino.
 const allowed = [
   /^docs\/extraction\//,
   /^docs\/adr\//,
+  /^docs\/research\//,
   /^CHANGELOG\.md$/
 ];
 const forbidden = [

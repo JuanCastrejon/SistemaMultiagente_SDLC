@@ -7,6 +7,7 @@ import { up as up_1_5_0 } from "../migrations/1.5.0/up.mjs";
 import { up as up_1_6_0 } from "../migrations/1.6.0/up.mjs";
 import { up as up_1_7_0 } from "../migrations/1.7.0/up.mjs";
 import { up as up_1_7_1 } from "../migrations/1.7.1/up.mjs";
+import { up as up_1_8_0 } from "../migrations/1.8.0/up.mjs";
 
 const REGISTRY = [
   { version: "1.0.1", up: up_1_0_1 },
@@ -17,7 +18,8 @@ const REGISTRY = [
   { version: "1.5.0", up: up_1_5_0 },
   { version: "1.6.0", up: up_1_6_0 },
   { version: "1.7.0", up: up_1_7_0 },
-  { version: "1.7.1", up: up_1_7_1 }
+  { version: "1.7.1", up: up_1_7_1 },
+  { version: "1.8.0", up: up_1_8_0 }
 ];
 
 function semverTuple(v) {
@@ -45,10 +47,31 @@ export function migrationsToRun(fromVersion, toVersion) {
 }
 
 // Run each migration's up() and merge returned files into the base set.
-export function applyMigrations(files, migrations) {
+//
+// `up(files)` solo veia los archivos recien renderizados desde templates/, es
+// decir el estado que el framework VA a escribir, nunca el estado real del
+// consumidor. Una migracion que necesitara leer un archivo personalizado, mover
+// contenido existente o decidir segun lo que hay en disco era imposible.
+//
+// El segundo argumento es aditivo: las migraciones que solo usan `files` siguen
+// funcionando sin cambios.
+//
+// context = {
+//   target: string,                        // raiz del repo consumidor
+//   config: object|null,                   // config resuelta para esta version
+//   readDisk(relativePath): string|null,   // contenido real, normalizado a LF
+//   existsOnDisk(relativePath): boolean
+// }
+export function applyMigrations(files, migrations, context = {}) {
   const result = { ...files };
+  const safeContext = {
+    target: context.target ?? null,
+    config: context.config ?? null,
+    readDisk: typeof context.readDisk === "function" ? context.readDisk : () => null,
+    existsOnDisk: typeof context.existsOnDisk === "function" ? context.existsOnDisk : () => false
+  };
   for (const migration of migrations) {
-    const extra = migration.up(result);
+    const extra = migration.up(result, safeContext);
     Object.assign(result, extra);
   }
   return result;

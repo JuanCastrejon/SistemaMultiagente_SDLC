@@ -113,13 +113,45 @@ function validateManifest(manifest) {
 }
 
 export function interpolate(content, context) {
-  return content.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, expr) => {
+  // `${{ ... }}` es sintaxis de GitHub Actions, no un placeholder del
+  // framework. Sin esta excepcion, instalar cualquier workflow con expresiones
+  // (github.sha, steps.x.outputs.y, matrix.z) las vaciaba silenciosamente y el
+  // workflow entregado quedaba roto.
+  const actionsExpressions = [];
+  const guarded = content.replace(/\$\{\{[\s\S]*?\}\}/g, (match) => {
+    actionsExpressions.push(match);
+    return `\u0000ACTIONS_EXPR_${actionsExpressions.length - 1}\u0000`;
+  });
+
+  const rendered = guarded.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (match, expr) => {
     const value = expr
       .split(".")
       .reduce((obj, key) => (obj == null ? undefined : obj[key]), context);
     if (value == null) return "";
     return String(value);
   });
+
+  return rendered.replace(/\u0000ACTIONS_EXPR_(\d+)\u0000/g, (match, index) => actionsExpressions[Number(index)]);
+}
+
+// El contrato de calidad se genera desde config.surfaces, no desde una lista
+// inventada en el template (ADR 0007, P6): un repo cuyo layout no coincide
+// con el ejemplo (apps/api, apps/web) medía gates sobre paths que no existen,
+// y checkSurfaces los bloqueaba SIEMPRE por "surface-path-unresolved".
+//
+// Flow-style YAML (`{ id: "x", ... }`) a proposito: una sola linea por
+// superficie evita el modo de fallo mas comun de generar YAML por texto,
+// que es una indentacion de bloque mal alineada que produce un documento
+// invalido sin que nada lo detecte hasta que alguien lo parsea.
+export function buildQualityContractSurfaces(surfaces) {
+  if (surfaces.length === 0) return "[]";
+  const entries = surfaces.map((surface) => {
+    const tier = surface.tier ?? "standard";
+    const moneyPath = Boolean(surface.moneyPath);
+    const hasUi = Boolean(surface.hasUi);
+    return `{ id: ${JSON.stringify(surface.id)}, path: ${JSON.stringify(surface.path)}, tier: ${JSON.stringify(tier)}, money_path: ${moneyPath}, has_ui: ${hasUi} }`;
+  });
+  return `[${entries.join(", ")}]`;
 }
 
 function buildContext(config) {
@@ -129,7 +161,8 @@ function buildContext(config) {
     surfacesTable: surfaces
       .map((surface) => `| \`${surface.id}\` | \`${surface.path}\` | \`${surface.owner}\` |`)
       .join("\n"),
-    surfacesList: surfaces.map((surface) => `- \`${surface.path}\``).join("\n")
+    surfacesList: surfaces.map((surface) => `- \`${surface.path}\``).join("\n"),
+    qualityContractSurfaces: buildQualityContractSurfaces(surfaces)
   };
 }
 

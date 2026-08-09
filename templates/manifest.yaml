@@ -13,10 +13,14 @@ templates:
     target: AGENTS.md
   - source: indice-operativo.md
     target: indice-operativo.md
+  - source: quality-contract.yaml
+    target: quality-contract.yaml
   - source: .sdlc/README.md
     target: .sdlc/README.md
-  - source: .sdlc/session.json
-    target: .sdlc/session.json
+  # .sdlc/session.json NO se gestiona: es estado local de maquina que `sdlc
+  # session-start` reescribe en cada sesion con rutas absolutas y salud del
+  # entorno. Gestionarlo generaba drift permanente en doctor y conflictos de
+  # upgrade por un archivo que nunca debe versionarse.
   - source: .github/AGENTS.md
     target: .github/AGENTS.md
   - source: .github/agents/ownership-matrix.md
@@ -103,6 +107,36 @@ templates:
     target: scripts/validate-enhanced-research.mjs
   - source: scripts/validate-local-gate.ps1
     target: scripts/validate-local-gate.ps1
+  - source: scripts/validate-spec-boundary.mjs
+    target: scripts/validate-spec-boundary.mjs
+  - source: scripts/validators/_shared.mjs
+    target: scripts/validators/_shared.mjs
+  - source: scripts/validators/validate-drift.mjs
+    target: scripts/validators/validate-drift.mjs
+  - source: scripts/validators/validate-openspec.mjs
+    target: scripts/validators/validate-openspec.mjs
+  - source: scripts/validators/validate-surface-traceability.mjs
+    target: scripts/validators/validate-surface-traceability.mjs
+  - source: scripts/validators/validate-control-plane.mjs
+    target: scripts/validators/validate-control-plane.mjs
+  - source: scripts/validators/validate-semantic-guardrails.mjs
+    target: scripts/validators/validate-semantic-guardrails.mjs
+  - source: scripts/validators/validate-adr-integrity.mjs
+    target: scripts/validators/validate-adr-integrity.mjs
+  - source: scripts/validators/validate-active-slices.mjs
+    target: scripts/validators/validate-active-slices.mjs
+  - source: scripts/validators/validate-slice-traceability.mjs
+    target: scripts/validators/validate-slice-traceability.mjs
+  - source: .github/workflows/quality-verify.yml
+    target: .github/workflows/quality-verify.yml
+  - source: .github/agent-state/spec-boundary-allowlist.yaml
+    target: .github/agent-state/spec-boundary-allowlist.yaml
+  # .github/agent-state/quality-baseline.yaml NO se gestiona: `promoteBaseline`
+  # lo reescribe en cada promocion, igual que .sdlc/session.json con
+  # session-start. Gestionarlo producia el mismo problema: managed-file-drift
+  # permanente contra una promocion legitima. Sin archivo instalado,
+  # loadBaseline() devuelve un baseline vacio en memoria hasta la primera
+  # promocion, que crea el archivo.
   - source: scripts/validate-local-gate.mjs
     target: scripts/validate-local-gate.mjs
   - source: scripts/agent-skills.manifest.json
@@ -115,6 +149,10 @@ templates:
     target: scripts/register-claude-sync-task.ps1
   - source: scripts/bootstrap-obsidian-vault.ps1
     target: scripts/bootstrap-obsidian-vault.ps1
+  - source: scripts/headroom-start.ps1
+    target: scripts/headroom-start.ps1
+  - source: scripts/register-headroom-task.ps1
+    target: scripts/register-headroom-task.ps1
   - source: scripts/obsidian-memory.config.example.json
     target: scripts/obsidian-memory.config.example.json
   - source: scripts/models.yaml
@@ -296,6 +334,9 @@ templates:
     modes: [greenfield]
   - source: openspec/schemas/greenfield-sdd/templates/tasks.md
     target: openspec/schemas/greenfield-sdd/templates/tasks.md
+    modes: [greenfield]
+  - source: openspec/schemas/greenfield-sdd/templates/acceptance.md
+    target: openspec/schemas/greenfield-sdd/templates/acceptance.md
     modes: [greenfield]
   - source: openspec/specs/.gitkeep
     target: openspec/specs/.gitkeep

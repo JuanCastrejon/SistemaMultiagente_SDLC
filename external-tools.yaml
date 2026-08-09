@@ -1,0 +1,168 @@
+# Inventario de herramientas externas (ADR 0007)
+#
+# Fuente UNICA de lo que el framework sabe sobre cada herramienta externa:
+# para que sirve, si hace falta o no, en que perfil es elegible, como se
+# detecta y como se instala. `sdlc tools-doctor` y `sdlc tools-install` leen
+# este archivo, y la matriz de docs se genera desde aqui.
+#
+# Por que un inventario y no prosa: el README y la matriz ya explicaban las
+# herramientas, pero `tools-doctor` solo sabia decir "missing" con una ruta.
+# El usuario que instala no tiene forma de saber CUALES de las opcionales
+# necesita ni como conseguirlas sin ir a leer otro documento. Ese conocimiento
+# tiene que estar donde el comando lo reporta.
+#
+# CONTRATO DE SEGURIDAD DE `install`:
+#   - `argv` es una LISTA, nunca una cadena de shell. No hay interpolacion ni
+#     shell que interprete metacaracteres: se ejecuta el binario con esos
+#     argumentos y ya. (Leccion de este mismo slice: escapar es contextual, y
+#     lo que no pasa por un shell no necesita escaparse.)
+#   - `argv[0]` debe estar en la allowlist de `src/external-tools.js`. Una
+#     entrada con un ejecutable fuera de esa lista se rechaza al cargar, no al
+#     ejecutar.
+#   - `sdlc tools-install` es dry-run por defecto. Sin `--apply` no corre nada.
+#   - Nada de esto se ejecuta durante `sdlc install`. Instalar herramientas de
+#     terceros es un acto del usuario, no un efecto secundario del scaffold.
+#
+# `install: null` + `manual:` significa que NO hay instalacion automatizable y
+# el paso lo hace una persona. Inventar un comando ahi seria peor que no tener
+# ninguno.
+
+version: 1
+
+tools:
+  - id: package-manager
+    name: Gestor de paquetes (pnpm/npm/yarn/bun)
+    purpose: Ejecuta los validators y scripts del consumidor; el harness lo detecta por lockfile.
+    required: true
+    profile: cualquiera
+    install: null
+    manual: Viene con Node.js. Para pnpm, `corepack enable` y `corepack prepare pnpm@<version> --activate`.
+    docs: https://nodejs.org
+
+  - id: openspec
+    name: OpenSpec
+    repo: https://github.com/Fission-AI/OpenSpec
+    purpose: Motor SDD — capacidades canonizadas, proposals, specs, design y tasks.
+    required: true
+    profile: LEAN minimo, ANALYSIS completo
+    detectPath: openspec/config.yaml
+    install:
+      argv: [npx, "--yes", "@fission-ai/openspec@1.3.1", init]
+    docs: https://github.com/Fission-AI/OpenSpec
+    notUsedFor: Reemplazar la lectura directa de un path exacto, o inflar tareas CRUD triviales.
+
+  - id: gh
+    name: GitHub CLI
+    repo: https://github.com/cli/cli
+    purpose: Issues, PRs y releases. Necesaria para publicar y para el gate humano por PR.
+    required: para publish
+    profile: LEAN
+    install: null
+    manual: "Instalar desde https://cli.github.com y autenticar con `gh auth login` (el login es un acto del usuario: pide credenciales)."
+    docs: https://cli.github.com
+
+  - id: codegraph
+    name: CodeGraph
+    repo: https://github.com/colbymchenry/codegraph
+    purpose: Grafo estructural de codigo — simbolos, callers/callees, impacto. Responde "donde esta X" sin grep.
+    required: false
+    profile: LEAN
+    install: null
+    manual: "No hay instalador publico declarado en este repo. Instalar segun su README y luego `codegraph init -i` para construir el indice."
+    notUsedFor: Semantica documental, ADRs, specs o memoria.
+
+  - id: skillopt
+    name: SkillOpt
+    repo: https://github.com/microsoft/SkillOpt
+    purpose: >-
+      Optimizador de skills en espacio de texto: trata el documento de skill como estado
+      entrenable de un modelo congelado y lo mejora con rollouts puntuados, ediciones acotadas
+      add/delete/replace y un gate que acepta solo si mejora ESTRICTAMENTE una validacion held-out.
+      Es quien hace la optimizacion de verdad; este framework aporta la gobernanza alrededor
+      (propuestas bajo openspec/changes, gate humano en serie, ledger de rechazos — ADR 025).
+    required: false
+    profile: ANALYSIS, disparo manual (el loop de rollouts cuesta tokens de un modelo optimizador)
+    install:
+      argv: [pip, install, "--user", skillopt]
+    manual: >-
+      Exige Python 3.10+. Tras instalar, la doc versionada vive en docs/ del repo
+      (index.md, guide/new-benchmark.md para el formato de tareas, sleep/README.md).
+      `skillopt-sleep` revisa sesiones de agente y PREPARA actualizaciones de skill para
+      adopcion humana, que es exactamente el gate en serie que exige el ADR 025.
+    notUsedFor: >-
+      Editar directamente `.github/skills/` ni sus mirrors. Sus ediciones entran como propuesta
+      bajo openspec/changes/ y las aprueba una persona: SkillOpt acepta por metrica automatica y
+      la regla 4 del proyecto dice que los gates humanos no se automatizan.
+
+  - id: graphify
+    name: Graphify
+    repo: https://github.com/safishamsi/graphify
+    purpose: Grafo semantico de documentacion — prior-art y arquitectura cross-doc.
+    required: false
+    profile: ANALYSIS / ORCHESTRATION
+    detectPath: graphify-out/graph.json
+    install:
+      argv: [pip, install, "--user", graphifyy]
+    docs: https://pypi.org/project/graphifyy/
+    notUsedFor: El loop normal de implementacion LEAN, o estructura de codigo (eso es CodeGraph).
+
+  - id: headroom
+    name: headroom
+    repo: https://github.com/chopratejas/headroom
+    purpose: Proxy con cache y compresion de trafico entre el agente y la API.
+    required: false
+    profile: cualquiera
+    install:
+      argv: [npm, install, "-g", headroom]
+    manual: >-
+      Tras instalar, apuntar el cliente al proxy (`ANTHROPIC_BASE_URL` en ~/.claude/settings.json)
+      y arrancarlo con `pwsh -NonInteractive -File scripts/headroom-start.ps1`.
+      Si el proxy falla NO limpiar ANTHROPIC_BASE_URL: silenciar el bypass es peor que un fallo visible.
+    notUsedFor: Sustituir perfiles operativos o disimular fallos del proxy.
+
+  - id: obsidian-memory
+    name: Obsidian + memoria persistente
+    purpose: Vault local para checkpoints, chats importados y continuidad multiagente.
+    required: false
+    profile: ANALYSIS con /resume; cierre con /save
+    detectPath: scripts/obsidian-memory.config.local.json
+    install: null
+    manual: >-
+      Copiar scripts/obsidian-memory.config.example.json a .local.json, editar vaultRoot y projectSlug,
+      revisar el plan con `pwsh -File scripts/bootstrap-obsidian-vault.ps1 -Json` y aplicarlo con -Apply.
+    notUsedFor: Retrieval continuo o como fuente de verdad normativa.
+
+  - id: autoskills
+    name: autoskills / skills externas
+    repo: https://github.com/midudev/autoskills
+    purpose: Discovery y mirroring de skills a .claude/, .agents/ y .windsurf/.
+    required: false
+    profile: segun tarea
+    detectPath: scripts/agent-skills.manifest.json
+    install: null
+    manual: >-
+      Correr `pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1`.
+      NO se automatiza a proposito: permitir un interprete (pwsh, node) en la allowlist
+      la convierte en permiso para ejecutar cualquier archivo del repo, que es lo contrario
+      de lo que una allowlist hace.
+    notUsedFor: Reemplazar las skills internas protegidas (commit, enrich-us, openspec-*, contexto-proyecto).
+
+  - id: caveman
+    name: caveman
+    repo: https://github.com/JuliusBrussee/caveman
+    purpose: Comprime el output conversacional del agente. No toca razonamiento ni payloads.
+    required: false
+    profile: cualquiera, solo conversacion
+    install: null
+    manual: "Plugin de Claude Code: se activa por hook en ~/.claude/settings.json. No hay instalacion desde este repo."
+    notUsedFor: Docs, commits, PRs, o como solucion a contexto alto.
+
+  - id: party-mode
+    name: party-mode
+    purpose: Deliberacion multiagente en decisiones de diseno con trade-offs reales.
+    required: false
+    profile: solo F2, F3 y F4
+    detectPath: .github/skills/party-mode/SKILL.md
+    install: null
+    manual: "Se entrega como skill del framework. Si falta, revisar el bootstrap de skills (autoskills)."
+    notUsedFor: Fases fuera de F2-F4 — el costo multiagente (3x-8x tokens) no se justifica.

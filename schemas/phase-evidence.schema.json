@@ -67,6 +67,96 @@
     },
     "next_phase": {
       "type": ["string", "null"]
+    },
+    "quality_metrics": {
+      "type": "object",
+      "description": "Metricas medidas por el harness. NO las escribe el agente: las anexa evidence-writer tras ejecutar el probe. Un bloque sin `source: harness` es sospechoso por definicion.",
+      "properties": {
+        "measured_at": { "type": "string", "format": "date-time" },
+        "source": { "type": "string", "enum": ["harness", "ci"] },
+        "tree_hash": {
+          "type": "string",
+          "description": "Hash del arbol de fuentes evaluadas. La frescura se decide por contenido, no por timestamp declarado."
+        },
+        "commit_sha": { "type": ["string", "null"] },
+        "tree_files": { "type": ["integer", "null"] },
+        "probes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "command", "exit_code", "report_sha256"],
+            "properties": {
+              "id": { "type": "string" },
+              "command": { "type": "string" },
+              "exit_code": { "type": ["integer", "null"] },
+              "report_path": { "type": ["string", "null"] },
+              "report_sha256": { "type": ["string", "null"] },
+              "duration_ms": { "type": ["integer", "null"] },
+              "detail": { "type": ["string", "null"] },
+              "status": { "type": "string", "enum": ["ok", "failed", "skipped", "not-applicable", "not-configured"] }
+            },
+            "additionalProperties": true
+          }
+        },
+        "metrics": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "scenario_traceability": {
+      "type": "array",
+      "description": "Escenario firmado -> test que lo cubre, con la prueba de que fallaba antes de existir la implementacion.",
+      "items": {
+        "type": "object",
+        "required": ["sc_id", "test_ref"],
+        "properties": {
+          "sc_id": {
+            "type": "string",
+            "description": "Secuencial (SC-001) para escenarios legacy-unversioned exentos permanentemente; hash de (capability, requirement, titulo) via computeScenarioId para escenarios nuevos o modificados (ADR 0007, P9).",
+            "pattern": "^SC-([0-9]{3,}|[0-9a-f]{8,})$"
+          },
+          "test_ref": { "type": ["string", "null"] },
+          "red_proof_run_id": { "type": ["string", "null"] },
+          "red_proof_sha": { "type": ["string", "null"] },
+          "status": { "type": "string", "enum": ["red", "green", "unknown"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "verification": {
+      "type": "object",
+      "description": "Re-ejecucion autoritativa en CI. La discrepancia entre lo declarado y lo recomputado es el detector de fraude.",
+      "properties": {
+        "recomputed_by": { "type": "string" },
+        "recomputed_at": { "type": "string", "format": "date-time" },
+        "mismatches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["metric", "declared", "recomputed"],
+            "properties": {
+              "metric": { "type": "string" },
+              "declared": {},
+              "recomputed": {}
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "waivers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate_id", "reason", "approved_by", "expires_at"],
+        "properties": {
+          "gate_id": { "type": "string" },
+          "reason": { "type": "string" },
+          "approved_by": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      }
     }
   },
   "additionalProperties": true

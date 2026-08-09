@@ -1,6 +1,10 @@
-version: 1
+version: 2
 name: sdlc-f0-f17
 description: Contrato ejecutable de fases para SistemaMultiagente_SDLC.
+# v2: cada fase puede declarar `quality_gates`, que referencian por id los gates
+# de quality-contract.yaml. El phase-contract dice QUE se exige y en que fase;
+# el quality-contract dice CUANTO por tier y COMO se mide. Un contrato v1 sigue
+# siendo valido: sin quality_gates, la fase no adjudica calidad.
 phases:
   - id: F0
     name: bootstrap
@@ -99,6 +103,7 @@ phases:
     participants: [web-agent, mobile-sync, arquitecto]
     inputs_required: [openspec/changes/<slice>/tasks.md]
     outputs_required: [.github/agent-state/evidence/<slice>/F8.yaml]
+    quality_gates: [F8.changed-lines-coverage]
     evidence_required: true
     human_gate: false
     next_phase: F9
@@ -109,6 +114,7 @@ phases:
     participants: []
     inputs_required: [.github/agent-state/evidence/<slice>/F8.yaml]
     outputs_required: [.github/agent-state/evidence/<slice>/F9.yaml]
+    quality_gates: [F9.mutation-survivors, F9.no-coverage-mutants]
     evidence_required: true
     human_gate: false
     next_phase: F10
@@ -119,6 +125,7 @@ phases:
     participants: []
     inputs_required: [.github/agent-state/evidence/<slice>/F9.yaml]
     outputs_required: [.github/agent-state/evidence/<slice>/F10.yaml]
+    quality_gates: [F10.dependency-violations, F10.dependency-cycles]
     evidence_required: true
     human_gate: false
     next_phase: F11
@@ -161,6 +168,13 @@ phases:
     outputs_required: [.github/agent-state/evidence/<slice>/F14.yaml]
     evidence_required: true
     human_gate: true
+    # F14 no mide nada propio: son gates HEREDADOS de F8/F9/F10, re-verificados
+    # leyendo la evidencia de la fase que si los midio (src/quality-adjudicate.js
+    # detecta la herencia por `gate.phase` != "F14"). Guard anti-regresion antes
+    # de fusionar (ADR 0007, gap documentado en 1.11.0, cerrado en P7): si el
+    # slice empeoro el baseline en cobertura o dependencias, F14 bloquea aunque
+    # F13 ya haya aprobado.
+    quality_gates: [F8.changed-lines-coverage, F10.dependency-violations, F10.dependency-cycles]
     next_phase: F15
   - id: F15
     name: post-merge

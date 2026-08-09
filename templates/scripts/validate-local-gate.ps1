@@ -7,6 +7,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$PackageManager = $null  # resuelto tras definir Resolve-PackageManager
+$NotConfiguredScripts = @()
 
 function Invoke-GateStep {
   param(
@@ -50,6 +52,49 @@ function Read-PackageScripts {
   return $scripts
 }
 
+function Resolve-PackageManager {
+  # El gate no asume pnpm. Orden de resolucion:
+  #   1. campo packageManager de package.json (estandar corepack)
+  #   2. lockfile presente en el repo
+  #   3. pnpm como default historico
+  $definitions = @{
+    pnpm = @{ Name = "pnpm"; Exe = "corepack"; Run = @("pnpm", "run"); Exec = @("pnpm", "exec"); Install = @("pnpm", "install", "--frozen-lockfile"); Version = @("pnpm", "--version") }
+    npm  = @{ Name = "npm";  Exe = "npm";      Run = @("run");         Exec = @("exec", "--");   Install = @("ci");                            Version = @("--version") }
+    yarn = @{ Name = "yarn"; Exe = "corepack"; Run = @("yarn", "run"); Exec = @("yarn", "exec"); Install = @("yarn", "install", "--immutable"); Version = @("yarn", "--version") }
+    bun  = @{ Name = "bun";  Exe = "bun";      Run = @("run");         Exec = @("x");            Install = @("install", "--frozen-lockfile");   Version = @("--version") }
+  }
+
+  $packagePath = Join-Path $RepoRoot "package.json"
+  if (Test-Path $packagePath) {
+    $packageJson = Get-Content -Raw $packagePath | ConvertFrom-Json
+    if ($null -ne $packageJson.packageManager) {
+      $declared = ([string] $packageJson.packageManager).Split("@")[0].Trim().ToLowerInvariant()
+      if ($definitions.ContainsKey($declared)) {
+        $resolved = $definitions[$declared]
+        $resolved.Source = "packageManager"
+        return $resolved
+      }
+    }
+  }
+
+  foreach ($pair in @(
+      @{ Lockfile = "pnpm-lock.yaml";     Manager = "pnpm" },
+      @{ Lockfile = "yarn.lock";          Manager = "yarn" },
+      @{ Lockfile = "bun.lockb";          Manager = "bun"  },
+      @{ Lockfile = "package-lock.json";  Manager = "npm"  }
+    )) {
+    if (Test-Path (Join-Path $RepoRoot $pair.Lockfile)) {
+      $resolved = $definitions[$pair.Manager]
+      $resolved.Source = $pair.Lockfile
+      return $resolved
+    }
+  }
+
+  $fallback = $definitions["pnpm"]
+  $fallback.Source = "default"
+  return $fallback
+}
+
 function Read-PackageDependencyNames {
   $packagePath = Join-Path $RepoRoot "package.json"
   if (-not (Test-Path $packagePath)) {
@@ -69,7 +114,7 @@ function Read-PackageDependencyNames {
   return $names
 }
 
-function Invoke-OptionalPnpmScript {
+function Invoke-OptionalPackageScript {
   param(
     [Parameter(Mandatory = $true)][hashtable] $Scripts,
     [Parameter(Mandatory = $true)][string] $ScriptName,
@@ -78,25 +123,25 @@ function Invoke-OptionalPnpmScript {
   )
 
   if ($Scripts.ContainsKey($ScriptName)) {
-    $suffix = if ($Arguments.Count -gt 0) { " $($Arguments -join ' ')" } else { "" }
+    $exe = $PackageManager.Exe
+    $runArgs = @($PackageManager.Run) + @($ScriptName)
     if ($Arguments.Count -gt 0) {
-      Invoke-GateStep $ScriptName "corepack pnpm run $ScriptName$suffix" {
-        corepack pnpm run $ScriptName @Arguments
-      } $AllowedExitCodes
+      # npm y pnpm requieren el separador -- para pasar argumentos al script.
+      $runArgs = $runArgs + @("--") + $Arguments
     }
-    else {
-      Invoke-GateStep $ScriptName "corepack pnpm run $ScriptName" {
-        corepack pnpm run $ScriptName
-      } $AllowedExitCodes
-    }
+    $commandText = "$exe $($runArgs -join ' ')"
+    Invoke-GateStep $ScriptName $commandText {
+      & $exe @runArgs
+    } $AllowedExitCodes
     return
   }
 
-  $message = "Script npm ausente: $ScriptName"
-  if ($Strict) {
-    throw "$message. En modo -Strict debe existir en package.json."
-  }
-  Write-Warning "$message. Omitido en modo portable."
+  # Ningun `validate:*` lo entrega el framework: son scripts del consumidor. Un
+  # -Strict que lanza por su ausencia hace inusable el gate obligatorio en
+  # cualquier repo que no los tenga todos. Se registran como NOT_CONFIGURED,
+  # igual que hace `sdlc verdict`, y se resumen al final.
+  $script:NotConfiguredScripts += $ScriptName
+  Write-Warning "Script no configurado: $ScriptName. El consumidor no lo declara en package.json."
 }
 
 function Invoke-OptionalFileStep {
@@ -120,21 +165,28 @@ function Invoke-OptionalFileStep {
   Write-Warning "$message. Omitido en modo portable."
 }
 
+$PackageManager = Resolve-PackageManager
+
 Push-Location $RepoRoot
 try {
   $scripts = Read-PackageScripts
   $dependencyNames = Read-PackageDependencyNames
   $bootstrapScript = Join-Path $RepoRoot "scripts/bootstrap-agent-skills.ps1"
 
-  Invoke-GateStep "pnpm version" "corepack pnpm --version" { corepack pnpm --version }
+  $pmExe = $PackageManager.Exe
+  $pmVersionArgs = @($PackageManager.Version)
+  Invoke-GateStep "$($PackageManager.Name) version (detectado por $($PackageManager.Source))" "$pmExe $($pmVersionArgs -join ' ')" {
+    & $pmExe @pmVersionArgs
+  }
 
   if (-not $SkipInstall) {
-    Invoke-GateStep "pnpm install --frozen-lockfile" "corepack pnpm install --frozen-lockfile" {
-      corepack pnpm install --frozen-lockfile
+    $pmInstallArgs = @($PackageManager.Install)
+    Invoke-GateStep "$($PackageManager.Name) install" "$pmExe $($pmInstallArgs -join ' ')" {
+      & $pmExe @pmInstallArgs
     } -Suggestion "Usar -SkipInstall solo para iteracion local; antes de merge ejecutar sin ese flag si cambio el lockfile."
   }
 
-  Invoke-OptionalPnpmScript $scripts "validate"
+  Invoke-OptionalPackageScript $scripts "validate"
   foreach ($scriptName in @(
     "validate:control-plane",
     "validate:drift",
@@ -145,7 +197,7 @@ try {
     "validate:adr-integrity",
     "validate:openspec"
   )) {
-    Invoke-OptionalPnpmScript $scripts $scriptName
+    Invoke-OptionalPackageScript $scripts $scriptName
   }
 
   if ($ChangeName.Trim().Length -gt 0) {
@@ -156,7 +208,7 @@ try {
       Select-Object -First 1
 
     if ($scripts.ContainsKey("validate:enhanced-research")) {
-      Invoke-OptionalPnpmScript $scripts "validate:enhanced-research" @($ChangeName)
+      Invoke-OptionalPackageScript $scripts "validate:enhanced-research" @($ChangeName)
     }
     elseif ($enhancedResearchScript) {
       Invoke-GateStep "validate-enhanced-research $ChangeName" "node $enhancedResearchScript $ChangeName" {
@@ -183,12 +235,14 @@ try {
   }
 
   if ($dependencyNames -contains "sistema-multiagente-sdlc") {
-    Invoke-GateStep "sdlc governance-check" "corepack pnpm exec sdlc governance-check --target . --json" {
-      corepack pnpm exec sdlc governance-check --target . --json
+    $govArgs = @($PackageManager.Exec) + @("sdlc", "governance-check", "--target", ".", "--json")
+    Invoke-GateStep "sdlc governance-check" "$pmExe $($govArgs -join " ")" {
+      & $pmExe @govArgs
     }
 
-    Invoke-GateStep "sdlc tools-doctor full" "corepack pnpm exec sdlc tools-doctor --target . --profile full --json" {
-      corepack pnpm exec sdlc tools-doctor --target . --profile full --json
+    $toolsArgs = @($PackageManager.Exec) + @("sdlc", "tools-doctor", "--target", ".", "--profile", "full", "--json")
+    Invoke-GateStep "sdlc tools-doctor full" "$pmExe $($toolsArgs -join " ")" {
+      & $pmExe @toolsArgs
     } @(0, 2)
   }
   elseif ($Strict) {
@@ -199,7 +253,11 @@ try {
   }
 
   Write-Host ""
-  Write-Host "Local gate OK. En modo portable, los checks ausentes se omiten con warning; usar -Strict para repos maduros."
+  if ($NotConfiguredScripts.Count -gt 0) {
+    Write-Host "Scripts no configurados en este consumidor ($($NotConfiguredScripts.Count)): $($NotConfiguredScripts -join ', ')"
+    Write-Host "No bloquean el gate: el framework no los entrega, son contrato del consumidor."
+  }
+  Write-Host "Local gate OK. -Strict exige los artefactos que instala el framework; los validate:* del consumidor se reportan como no configurados."
 }
 finally {
   Pop-Location

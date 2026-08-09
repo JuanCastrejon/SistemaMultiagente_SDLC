@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ensureDir, pathExists, readJson, readTextIfExists, writeJson, writeText } from "./file-utils.js";
-import { evaluatePhaseReadiness } from "./harness.js";
+import { assertShellSafeToken, evaluatePhaseReadiness } from "./harness.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -36,11 +36,20 @@ function getProjectSlug(target, config = getConfig(target)) {
   return config.project?.slug || path.basename(path.resolve(target)).toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
+// Misma politica que en src/harness.js: en Windows el shell es obligatorio para
+// ejecutar `.cmd`, asi que los tokens con metacaracteres se rechazan en vez de
+// escaparse. Ver assertShellSafeToken.
 function runCommand(command, args = [], cwd = process.cwd(), timeout = 8000) {
   const windowsShell = process.platform === "win32";
+  if (windowsShell) {
+    assertShellSafeToken(command, "comando");
+    for (const arg of args) {
+      assertShellSafeToken(arg, "argumento");
+    }
+  }
   const quoteWindowsArg = (value) => {
     const text = String(value);
-    return /[\s"&|<>^]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+    return /\s/.test(text) ? `"${text}"` : text;
   };
   const result = windowsShell
     ? spawnSync([command, ...args].map(quoteWindowsArg).join(" "), {
@@ -113,7 +122,13 @@ function resolveMemoryConfig(target) {
   const config = configPath ? safeReadJson(configPath) : null;
   const projectSlug = config?.projectSlug || getProjectSlug(target);
   const rawVault = config?.vaultRoot || config?.obsidian?.vaultPath;
-  const vaultRoot = rawVault && !String(rawVault).includes("{{") ? path.resolve(expandEnv(String(rawVault))) : path.join(target, ".sdlc", "vault");
+  // Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd
+  // del proceso: al invocar el CLI desde otro directorio, path.resolve() a secas
+  // producia rutas inexistentes y un warning vault-missing enganoso.
+  const expandedVault = rawVault && !String(rawVault).includes("{{") ? expandEnv(String(rawVault)) : null;
+  const vaultRoot = expandedVault
+    ? (path.isAbsolute(expandedVault) ? expandedVault : path.resolve(target, expandedVault))
+    : path.join(target, ".sdlc", "vault");
   return {
     configPath,
     config,
