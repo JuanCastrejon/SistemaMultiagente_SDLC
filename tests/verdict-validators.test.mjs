@@ -103,3 +103,68 @@ assert.notEqual(openspecMissing.status, 0);
 assert.match(openspecMissing.stdout + openspecMissing.stderr, /no resuelve/);
 
 console.log("verdict-validators: PASS");
+
+// --- CONSUMIDOR SIN package.json -------------------------------------------
+// Encontrado instalando la 1.8.0 publicada en un repo brownfield real (una
+// extension Chrome, sin package.json). `verdict` devolvia NOT-READY con
+// bloqueante `control-plane`, mientras el validador corria solo con exit 0 y
+// "OK: 10 referencias resuelven". El precheck de `not-configured` exigia
+// `declaredScripts` truthy; sin package.json eso es null, el paso se ejecutaba
+// igual, `pnpm run` fallaba, y el veredicto acusaba a un archivo sano.
+{
+  const sinPkg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-verdict-nopkg-")), "consumidor");
+  fs.mkdirSync(sinPkg, { recursive: true });
+  execFileSync("git", ["init", "--quiet"], { cwd: sinPkg });
+  execFileSync("node", [cli, "install", "--target", sinPkg, "--mode", "legacy", "--project-name", "Sin Package", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+
+  const run = spawnSync("node", [cli, "verdict", "--target", sinPkg, "--json"], { cwd: repoRoot, encoding: "utf8" });
+  const payload = JSON.parse(run.stdout);
+
+  assert.deepEqual(payload.blockers, [], "no puede acusar a un validador que nunca llego a ejecutarse");
+  assert.equal(payload.notConfigured.length, payload.steps.length, "sin package.json NINGUN paso esta configurado");
+  assert.ok(
+    payload.steps.every((step) => step.status === "not-configured"),
+    "ni pass ni fail: no se pudo ejecutar"
+  );
+  assert.match(payload.steps[0].detail, /package\.json/, "el detalle tiene que nombrar la causa real");
+
+  // Y NO puede ser READY: arreglar el falso rojo sin esto lo convertia en un
+  // falso VERDE — 8 pasos sin correr y veredicto aprobado. El falso verde es
+  // peor, porque nadie lo investiga.
+  assert.equal(payload.verdict, "NOT-VERIFIABLE", "no se verifico nada: no es READY ni NOT-READY");
+  assert.equal(payload.status, "not-configured");
+  assert.match(payload.vacuousReason, /package\.json/);
+  assert.notEqual(run.status, 0, "un veredicto no verificable no puede salir con exito");
+}
+
+// --- CONTRACARA: con scripts declarados, el veredicto vuelve a decidir ------
+// Sin este caso el guard de vacuidad podria estar bloqueando siempre, y el
+// test no notaria la diferencia entre un control y un muro.
+{
+  const conPkg = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-verdict-conpkg-")), "consumidor");
+  fs.mkdirSync(conPkg, { recursive: true });
+  execFileSync("git", ["init", "--quiet"], { cwd: conPkg });
+  execFileSync("node", [cli, "install", "--target", conPkg, "--mode", "legacy", "--project-name", "Con Package", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  // Script en ARCHIVO, no `node -e`: el runner anexa `--if-present` y `node -e`
+  // lo toma como opcion propia ("bad option"), que es un fallo del fixture y no
+  // del producto.
+  fs.writeFileSync(path.join(conPkg, "ok.mjs"), "console.log('ok');\n", "utf8");
+  fs.writeFileSync(
+    path.join(conPkg, "package.json"),
+    JSON.stringify({ name: "con-pkg", scripts: { "validate:control-plane": "node ok.mjs", "validate:drift": "node ok.mjs" } }, null, 2),
+    "utf8"
+  );
+
+  const payload = JSON.parse(spawnSync("node", [cli, "verdict", "--target", conPkg, "--json"], { cwd: repoRoot, encoding: "utf8" }).stdout);
+  assert.equal(payload.verdict, "READY", "con pasos declarados y en verde, el veredicto vuelve a aprobar");
+  assert.equal(payload.steps.filter((step) => step.status === "pass").length, 2);
+  assert.ok(payload.notConfigured.length > 0, "los no declarados siguen siendo not-configured, no fail");
+}
+
+console.log("verdict sin package.json: PASS");
