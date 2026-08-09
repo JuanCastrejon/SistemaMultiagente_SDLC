@@ -14,7 +14,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { listIgnoredPaths } from "./file-utils.js";
 import { loadQualityContract } from "./quality-adjudicate.js";
 
 const PERMANENT_PATHS = [".github/agent-state/evidence", ".github/agent-state/quality-baseline.yaml"];
@@ -61,30 +61,16 @@ export function isPathIgnored(gitignoreContent, relativePath) {
   return ignored;
 }
 
-// `git check-ignore` es la unica fuente correcta: entiende los .gitignore
-// ANIDADOS, `.git/info/exclude`, el global del usuario, la precedencia real de
-// las reglas de negacion (git NO puede re-incluir un archivo bajo un
-// directorio excluido, cosa que la version textual creia poder) y los
-// patrones que ningun regex casero replica bien.
-//
 // Devuelve null si git no esta disponible o el target no es un repo: quien
 // llama decide (aqui se cae al fallback textual y se marca la degradacion).
+//
+// Delega en el helper compartido de file-utils porque el ancla de arbol
+// (`computeTreeHash`) necesita exactamente el mismo criterio, y dos copias del
+// mismo chequeo divergen sin que nadie se entere -- la leccion que dejo
+// `detectCliLinked` en este mismo slice, donde la copia y el original acabaron
+// contestando cosas distintas sobre el mismo repo.
 function askGitIfIgnored(target, relativePaths) {
-  if (relativePaths.length === 0) return new Set();
-  const result = spawnSync("git", ["check-ignore", "--stdin"], {
-    cwd: target,
-    input: relativePaths.join("\n"),
-    encoding: "utf8"
-  });
-  // 0 = alguna ruta ignorada, 1 = ninguna. Cualquier otro codigo (128 = no es
-  // un repo, o git ausente) significa que no se pudo preguntar.
-  if (result.status !== 0 && result.status !== 1) return null;
-  return new Set(
-    (result.stdout ?? "")
-      .split(/\r?\n/)
-      .map((line) => line.trim().replace(/\\/g, "/"))
-      .filter(Boolean)
-  );
+  return listIgnoredPaths(target, relativePaths);
 }
 
 // Los archivos REALES bajo una ruta permanente. El chequeo anterior probaba

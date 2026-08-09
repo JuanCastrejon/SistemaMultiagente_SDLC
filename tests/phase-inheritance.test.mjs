@@ -284,3 +284,56 @@ assert.ok(
 
 console.log("phase-inheritance: PASS");
 console.log("phase-inheritance herencia obsoleta: PASS");
+
+// --- 6. EL ANCLA TIENE QUE VER TODO EL ARBOL --------------------------------
+// `computeTreeHash` es lo que ancla la frescura de la evidencia heredada (caso
+// 5) y tambien el sujeto de la firma humana. Excluia cualquier entrada que
+// empezara por punto, y eso lo hacia CIEGO a `.env`, `.eslintrc` o un
+// `.config/` entero dentro de una superficie declarada: se podia cambiar
+// configuracion versionada sin invalidar ni el veredicto ni la firma.
+//
+// El criterio viejo fallaba en las dos direcciones: excluia dotfiles
+// versionados e INCLUIA `dist/`, que no empieza por punto. Ahora se pregunta a
+// git que esta ignorado, que es la pregunta correcta.
+{
+  const anchorTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-tree-anchor-"));
+  execFileSync("git", ["init", "--quiet"], { cwd: anchorTarget });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: anchorTarget });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: anchorTarget });
+  fs.writeFileSync(path.join(anchorTarget, ".gitignore"), "node_modules/\n.turbo/\ndist/\n", "utf8");
+  fs.mkdirSync(path.join(anchorTarget, "apps", "api"), { recursive: true });
+  fs.writeFileSync(path.join(anchorTarget, "apps", "api", "index.ts"), "export const api = 1;\n", "utf8");
+  execFileSync("git", ["add", "-A"], { cwd: anchorTarget });
+  execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: anchorTarget });
+
+  const soloFuente = computeTreeHash(anchorTarget, ["apps/api"]);
+
+  // Un dotfile versionado DEBE mover el ancla.
+  fs.writeFileSync(path.join(anchorTarget, "apps", "api", ".env"), "SECRET=cambiado\n", "utf8");
+  const conDotfile = computeTreeHash(anchorTarget, ["apps/api"]);
+  assert.notEqual(
+    conDotfile.hash,
+    soloFuente.hash,
+    "un .env dentro de una superficie es parte del arbol: si no mueve el hash, se puede cambiar sin invalidar la firma"
+  );
+  assert.equal(conDotfile.files, soloFuente.files + 1);
+
+  // Lo que git ignora NO puede moverla: un cache de build cambia en cada
+  // corrida y haria ver la evidencia obsoleta sin que nadie tocara el codigo.
+  fs.mkdirSync(path.join(anchorTarget, "apps", "api", ".turbo"), { recursive: true });
+  fs.writeFileSync(path.join(anchorTarget, "apps", "api", ".turbo", "cache.bin"), "basura", "utf8");
+  fs.mkdirSync(path.join(anchorTarget, "apps", "api", "dist"), { recursive: true });
+  fs.writeFileSync(path.join(anchorTarget, "apps", "api", "dist", "out.js"), "build", "utf8");
+  const conBasura = computeTreeHash(anchorTarget, ["apps/api"]);
+  assert.equal(
+    conBasura.hash,
+    conDotfile.hash,
+    "cachés y build output estan ignorados por git: incluirlos produciria un falso 'obsoleto' en cada corrida"
+  );
+
+  // `dist/` es el caso que prueba que el criterio no es "empieza por punto":
+  // no lleva punto y aun asi queda fuera, porque git lo ignora.
+  assert.equal(conBasura.files, conDotfile.files);
+}
+
+console.log("phase-inheritance ancla de arbol: PASS");

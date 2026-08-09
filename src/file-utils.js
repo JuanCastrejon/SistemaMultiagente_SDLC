@@ -1,6 +1,42 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+
+/**
+ * Pregunta a git cuales de estas rutas estan ignoradas. Es la unica fuente
+ * correcta: entiende los .gitignore ANIDADOS, `.git/info/exclude`, el global
+ * del usuario y la precedencia real de las reglas de negacion. Reimplementarlo
+ * con regex es inevitablemente incorrecto (la auditoria adversarial encontro
+ * cinco formas de evadir la version textual).
+ *
+ * Vive aqui, y no en el modulo que lo necesito primero, porque ya lo usan dos
+ * piezas con propositos distintos (retencion y ancla de arbol). La leccion de
+ * `detectCliLinked` en este mismo slice: dos copias del mismo criterio divergen,
+ * y cuando divergen nadie se entera.
+ *
+ * Devuelve `null` si no se pudo preguntar (git ausente o target que no es un
+ * repo): quien llama decide que hacer con esa incertidumbre, nunca se finge un
+ * conjunto vacio.
+ */
+export function listIgnoredPaths(target, relativePaths) {
+  if (relativePaths.length === 0) return new Set();
+  const result = spawnSync("git", ["check-ignore", "--stdin"], {
+    cwd: target,
+    input: relativePaths.join("\n"),
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024
+  });
+  // 0 = alguna ruta ignorada, 1 = ninguna. Cualquier otro codigo (128 = no es
+  // un repo, o git ausente) significa que no se pudo preguntar.
+  if (result.status !== 0 && result.status !== 1) return null;
+  return new Set(
+    (result.stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/\\/g, "/"))
+      .filter(Boolean)
+  );
+}
 
 export function toPosixPath(value) {
   return value.replace(/\\/g, "/");

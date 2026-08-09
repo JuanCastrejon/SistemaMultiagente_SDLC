@@ -15,7 +15,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { ensureDir, pathExists, readTextIfExists, writeText } from "./file-utils.js";
+import { ensureDir, listIgnoredPaths, pathExists, readTextIfExists, writeText } from "./file-utils.js";
 
 function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
@@ -30,6 +30,19 @@ function sha256FileIfExists(absolutePath) {
   }
 }
 
+// `node_modules` y `.git` se excluyen SIEMPRE: no son la superficie, y `.git`
+// cambia por el solo hecho de trabajar. Todo lo demas entra en la lista y se
+// filtra despues por lo que git ignora (ver computeTreeHash).
+//
+// Antes se excluia cualquier entrada que empezara por punto, y eso dejaba el
+// ancla CIEGA a `.env`, `.eslintrc`, `.dockerignore` o un directorio `.config/`
+// entero dentro de una superficie declarada: reproducido, agregar un `.env` y
+// un `.config/rules.json` no movia el hash ni un bit. Como ese hash es lo que
+// ancla la frescura de la evidencia heredada (P7) y el sujeto de la firma
+// humana, un archivo invisible ahi es un archivo que se puede cambiar sin
+// invalidar ni el veredicto ni la firma.
+const ALWAYS_SKIPPED = new Set(["node_modules", ".git"]);
+
 function listFilesRecursive(root, accumulator = []) {
   if (!pathExists(root)) return accumulator;
   const stat = fs.statSync(root);
@@ -38,7 +51,7 @@ function listFilesRecursive(root, accumulator = []) {
     return accumulator;
   }
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".git" || entry.name.startsWith(".")) continue;
+    if (ALWAYS_SKIPPED.has(entry.name)) continue;
     listFilesRecursive(path.join(root, entry.name), accumulator);
   }
   return accumulator;
@@ -49,14 +62,31 @@ function listFilesRecursive(root, accumulator = []) {
  * mismos bytes dan el mismo hash sin importar cuando se midieron.
  */
 export function computeTreeHash(target, surfacePaths = []) {
-  const parts = [];
+  const candidates = [];
   for (const surfacePath of [...surfacePaths].sort()) {
     const absolute = path.join(target, surfacePath);
     for (const file of listFilesRecursive(absolute).sort()) {
-      const relative = path.relative(target, file).split(path.sep).join("/");
-      const digest = sha256FileIfExists(file);
-      if (digest) parts.push(`${relative}:${digest}`);
+      candidates.push(path.relative(target, file).split(path.sep).join("/"));
     }
+  }
+
+  // Lo que git ignora no forma parte del arbol que se fusiona: cachés de build
+  // (`.turbo`, `.next`, `dist`) cambian en cada corrida y harian que la
+  // evidencia se viera obsoleta sin que nadie tocara el codigo. Preguntarle a
+  // git es lo unico correcto; el criterio "empieza por punto" excluia
+  // configuracion versionada real y NO excluia una `dist/` sin punto.
+  //
+  // Si no se puede preguntar (git ausente, target que no es repo) se incluye
+  // TODO: ante la duda, mas archivos anclados, no menos. Un ancla de mas
+  // produce un falso "obsoleto", visible y corregible; una de menos produce un
+  // veredicto que pasa sobre un arbol que ya no es el medido.
+  const ignored = listIgnoredPaths(target, candidates) ?? new Set();
+
+  const parts = [];
+  for (const relative of candidates) {
+    if (ignored.has(relative)) continue;
+    const digest = sha256FileIfExists(path.join(target, relative));
+    if (digest) parts.push(`${relative}:${digest}`);
   }
   return { hash: sha256Text(parts.join("\n")), files: parts.length };
 }
