@@ -75,9 +75,18 @@ console.log("save vault sin resolver: PASS");
 
   // Huecos EXPLICITOS: el CLI no tiene modelo y no puede escribir el porque.
   // Omitir la seccion haria que el checkpoint pareciera completo sin serlo.
-  assert.match(body, /## Que se hizo y por que/);
-  assert.match(body, /## Pendiente, con la pista de donde mirar/);
-  assert.match(body, /AGENTE: reemplazar/, "el hueco tiene que decir quien lo llena y por que importa");
+  // Estructura tomada de los checkpoints enriquecidos ya en uso en los repos
+  // consumidores (.github/agent-state/checkpoint-context.md).
+  for (const heading of [/## Alcance y gobernanza/, /## Skills y fuentes usadas/, /## Decisiones y trabajo realizado/, /## Verificacion/, /## Pendientes y siguiente accion/]) {
+    assert.match(body, heading, `falta la seccion ${heading}`);
+  }
+  assert.match(body, /QUE NO SE HIZO/, "lo que no se hizo es contexto tan importante como lo que si");
+  assert.match(body, /DESCARTO/, "sin lo descartado, quien retome vuelve a proponerlo");
+  assert.ok(
+    (body.match(/<!-- AGENTE:/g) ?? []).length >= 5,
+    "cada seccion narrativa tiene que decir quien la llena y que poner: un heading vacio se rellena con cualquier cosa"
+  );
+  assert.match(body, /NO necesite la conversacion/, "el criterio de exito del checkpoint tiene que estar escrito en el propio checkpoint");
 
   // Y lo factual sí lo pone el CLI.
   assert.match(body, /## Estado verificable/);
