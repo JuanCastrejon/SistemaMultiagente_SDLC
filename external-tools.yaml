@@ -147,50 +147,6 @@ tools:
       de lo que una allowlist hace.
     notUsedFor: Reemplazar las skills internas protegidas (commit, enrich-us, openspec-*, contexto-proyecto).
 
-  - id: mattpocock-skills
-    name: mattpocock/skills
-    repo: https://github.com/mattpocock/skills
-    purpose: >-
-      Set de skills de invocacion explicita para diagnostico y reflexion puntual
-      (/grill-with-docs, /diagnose, /tdd, /to-prd, /zoom-out, /triage).
-    required: false
-    profile: ANALYSIS, opt-in
-    install: null
-    manual: >-
-      NO se automatiza, por tres razones concretas. (1) El comando del README es
-      `npx skills@latest add mattpocock/skills`, y `@latest` se resuelve en cada corrida:
-      nuestro propio `tools-doctor` marca eso como no reproducible, asi que enviarlo aqui
-      seria contradecir la politica del framework. (2) La instalacion no termina en ese
-      comando: hay que correr `/setup-matt-pocock-skills` UNA VEZ por repo desde dentro del
-      agente, y eso no es un binario que este comando pueda invocar. (3) Antes de usar
-      /grill-with-docs o /to-prd hay que decidir su convivencia con OpenSpec.
-      Automatizar solo el paso 1 daria una falsa sensacion de "instalado".
-    notUsedFor: >-
-      Sustituir el flujo SDD. `/grill-with-docs` y `/to-prd` se solapan con `openspec-explore`
-      y `openspec-propose`: hay que decidir cual prevalece por tipo de tarea antes de
-      invocarlas, o compiten produciendo specs por dos caminos.
-
-  - id: lidr-ai-specs
-    name: LIDR-academy/ai-specs
-    repo: https://github.com/LIDR-academy/ai-specs
-    purpose: >-
-      Origen de las skills `enrich-us` (refinar una historia vaga con business fit, KPI,
-      readiness y NFR) y `commit`. Este framework YA las entrega adaptadas, asi que la
-      herramienta se documenta sobre todo para saber de donde vienen y que NO importar.
-    required: false
-    profile: ANALYSIS
-    install: null
-    manual: >-
-      Adopcion por CHERRY-PICK, nunca el `cp -rn` que sugiere su README: ese copiado
-      masivo pisa una estructura `docs/` ya madura y crea drift con los equivalentes
-      propios (architecture/, adr/, api/, domain/). Si hace falta algo mas de ese repo,
-      se trae archivo por archivo y se adapta al contrato del proyecto.
-    notUsedFor: >-
-      Importar sus `docs/*-standards.md`, plantillas de agentes o skills de desarrollo:
-      este framework ya trae equivalentes, y duplicarlos crea dos fuentes de verdad.
-      `enrich-us` tampoco escribe en `openspec/specs/` — su salida ALIMENTA a
-      `openspec-propose`, no lo reemplaza.
-
   - id: caveman
     name: caveman
     repo: https://github.com/JuliusBrussee/caveman
