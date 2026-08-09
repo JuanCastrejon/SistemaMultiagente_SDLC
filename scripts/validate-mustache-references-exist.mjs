@@ -12,6 +12,7 @@ const context = defaultConfig({
 });
 context.surfacesTable = "| `backend` | `apps/api` | `api-agent` |";
 context.surfacesList = "- `apps/api`";
+context.qualityContractSurfaces = '[{ id: "backend", path: "apps/api", tier: "core", money_path: false, has_ui: false }]';
 context.sdlcSharedRulesBlock = "<!-- SDLC_SHARED_RULES_START sha256:example -->\nshared rules\n<!-- SDLC_SHARED_RULES_END -->";
 
 const files = listFiles(path.join(root, "templates")).filter((file) => {
@@ -22,7 +23,9 @@ const files = listFiles(path.join(root, "templates")).filter((file) => {
 const errors = [];
 for (const file of files) {
   const absolute = path.join(root, "templates", file);
-  const content = fs.readFileSync(absolute, "utf8");
+  // Las expresiones `${{ ... }}` son de GitHub Actions y el interpolador las
+  // preserva intactas; no son placeholders del framework y no deben exigirse.
+  const content = fs.readFileSync(absolute, "utf8").replace(/\$\{\{[\s\S]*?\}\}/g, " ");
   for (const match of content.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
     const expr = match[1];
     const value = expr.split(".").reduce((obj, key) => {

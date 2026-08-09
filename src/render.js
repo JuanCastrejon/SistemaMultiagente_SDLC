@@ -71,12 +71,15 @@ export function defaultConfig({ target, mode = "greenfield", projectName, projec
       {
         id: "backend",
         path: "apps/api",
-        owner: "api-agent"
+        owner: "api-agent",
+        tier: "core"
       },
       {
         id: "web",
         path: "apps/web",
-        owner: "web-agent"
+        owner: "web-agent",
+        tier: "standard",
+        hasUi: true
       }
     ],
     agents: {

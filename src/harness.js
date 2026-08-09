@@ -5,7 +5,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
-import { pathExists, readTextIfExists } from "./file-utils.js";
+import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
+import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
+import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
+import { detectCiEnvironment } from "./ci-detect.js";
+import { describeTools } from "./external-tools.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -19,11 +23,39 @@ function normalize(value) {
   return String(value ?? "").replace(/\r\n/g, "\n").trim();
 }
 
+// En Windows hay que pasar por el shell: desde la mitigacion de CVE-2024-27980,
+// Node se niega a ejecutar `.cmd`/`.bat` (npm.cmd, corepack.cmd, yarn.cmd) sin
+// shell. Como el shell interpreta metacaracteres, la defensa no puede ser
+// escapar: es RECHAZAR. Cualquier token con metacaracteres de cmd.exe se
+// bloquea antes de construir la linea, en vez de intentar quotearlo.
+//
+// Importa mas de lo que parece: cuando el contrato de calidad permita declarar
+// `probes[].command` en el YAML del consumidor, ese valor llega hasta aqui.
+const SHELL_METACHARACTERS = /[&|<>^"`$\n\r;()!%]/;
+
+export function assertShellSafeToken(token, role) {
+  const text = String(token);
+  if (SHELL_METACHARACTERS.test(text)) {
+    const error = new Error(
+      `Token no permitido en ${role}: contiene metacaracteres de shell (${text.slice(0, 60)}).`
+    );
+    error.code = "UNSAFE_COMMAND_TOKEN";
+    throw error;
+  }
+  return text;
+}
+
 function runCommand(command, args = [], cwd = process.cwd(), timeout = 8000) {
   const windowsShell = process.platform === "win32";
+  if (windowsShell) {
+    assertShellSafeToken(command, "comando");
+    for (const arg of args) {
+      assertShellSafeToken(arg, "argumento");
+    }
+  }
   const quoteWindowsArg = (value) => {
     const text = String(value);
-    return /[\s"&|<>^]/.test(text) ? `"${text.replace(/"/g, '\\"')}"` : text;
+    return /\s/.test(text) ? `"${text}"` : text;
   };
   const result = windowsShell
     ? spawnSync([command, ...args].map(quoteWindowsArg).join(" "), {
@@ -50,6 +82,67 @@ function firstLine(value) {
   return normalize(value).split("\n")[0] ?? "";
 }
 
+// ---------------------------------------------------------------------------
+// Package manager detection
+// The harness used to hardcode `corepack pnpm`, which made `verdict` and
+// `tools-doctor` fail on npm or yarn consumers. Resolution order:
+//   1. package.json "packageManager" field (corepack standard)
+//   2. lockfile present in the target repo
+//   3. pnpm as historical default
+// ---------------------------------------------------------------------------
+
+const PACKAGE_MANAGERS = {
+  pnpm: {
+    name: "pnpm",
+    versionCommand: ["corepack", ["pnpm", "--version"]],
+    runScript: (script) => ["corepack", ["pnpm", "run", script, "--if-present"]]
+  },
+  npm: {
+    name: "npm",
+    versionCommand: ["npm", ["--version"]],
+    runScript: (script) => ["npm", ["run", "--if-present", script]]
+  },
+  yarn: {
+    name: "yarn",
+    versionCommand: ["yarn", ["--version"]],
+    runScript: (script) => ["yarn", ["run", script]]
+  },
+  bun: {
+    name: "bun",
+    versionCommand: ["bun", ["--version"]],
+    runScript: (script) => ["bun", ["run", script]]
+  }
+};
+
+export function detectPackageManager(target) {
+  const packageJsonPath = path.join(target, "package.json");
+  const raw = readTextIfExists(packageJsonPath);
+  if (raw) {
+    try {
+      const declared = JSON.parse(raw).packageManager;
+      if (typeof declared === "string") {
+        const name = declared.split("@")[0].trim().toLowerCase();
+        if (PACKAGE_MANAGERS[name]) {
+          return { ...PACKAGE_MANAGERS[name], source: "packageManager" };
+        }
+      }
+    } catch {
+      /* package.json ilegible: se cae a los lockfiles */
+    }
+  }
+  for (const [lockfile, name] of [
+    ["pnpm-lock.yaml", "pnpm"],
+    ["yarn.lock", "yarn"],
+    ["bun.lockb", "bun"],
+    ["package-lock.json", "npm"]
+  ]) {
+    if (pathExists(path.join(target, lockfile))) {
+      return { ...PACKAGE_MANAGERS[name], source: lockfile };
+    }
+  }
+  return { ...PACKAGE_MANAGERS.pnpm, source: "default" };
+}
+
 function contractCandidates(target) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   return [
@@ -58,6 +151,10 @@ function contractCandidates(target) {
     path.join(moduleRoot, "phase-contract.yaml")
   ];
 }
+
+// Version de contrato que este engine entiende. v2 anade `quality_gates` por
+// fase; v1 sigue siendo valido y simplemente no adjudica calidad.
+export const CONTRACT_VERSION_EXPECTED = 2;
 
 export function loadPhaseContract(target) {
   for (const candidate of contractCandidates(target)) {
@@ -124,16 +221,135 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
   const outputs = checkArtifacts(target, slice, phase.outputs_required ?? []);
   const missingInputs = inputs.filter((entry) => !entry.exists);
   const missingOutputs = outputs.filter((entry) => !entry.exists);
+  const evidenceAbsolute = evidencePath(target, slice, phase.id);
   const evidence = {
-    path: evidencePath(target, slice, phase.id),
+    path: evidenceAbsolute,
     required: Boolean(phase.evidence_required),
-    exists: pathExists(evidencePath(target, slice, phase.id))
+    exists: pathExists(evidenceAbsolute)
   };
-  const blocked = missingInputs.length > 0 || missingOutputs.length > 0 || (evidence.required && !evidence.exists);
+
+  // Hasta 1.8.0 el gate solo comprobaba que el archivo EXISTIERA: nunca lo
+  // abria. Un YAML vacio, corrupto o con cualquier forma pasaba igual. Ahora se
+  // lee y se valida contra el schema que el framework ya instalaba sin usar.
+  const evidenceBlockers = [];
+  const evidenceWarnings = [];
+
+  // Guard de version: un contrato v1 leido por un engine que ya entiende v2
+  // funciona, pero se dice en voz alta en vez de degradar en silencio.
+  const contractVersion = contract.version ?? 1;
+  if (contractVersion < CONTRACT_VERSION_EXPECTED) {
+    evidenceWarnings.push(`contract-version-outdated:v${contractVersion}`);
+  }
+  if (evidence.exists) {
+    const read = readEvidenceFile(evidenceAbsolute);
+    evidence.valid = read.ok;
+    if (!read.ok) {
+      evidence.errors = read.errors;
+      // Evidencia invalida solo bloquea donde la evidencia es obligatoria; en
+      // el resto de fases se reporta sin detener el flujo.
+      if (evidence.required) evidenceBlockers.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+      else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+    } else {
+      // Las expectativas vienen del contrato de la fase: si declara gates de
+      // calidad PROPIOS tiene que traer mediciones, y si tiene gate humano
+      // tiene que traer firma. Sin esto, una evidencia valida pero VACIA
+      // pasaba limpia.
+      //
+      // "Propios" no es lo mismo que "declarados": F14 (merge) declara gates
+      // de F8/F9/F10 para re-verificarlos antes de fusionar (herencia,
+      // src/quality-adjudicate.js), pero F14 nunca mide nada por si misma. Si
+      // se exigiera quality_metrics en F14.yaml por el solo hecho de listar
+      // gates heredados, toda evidencia de F14 legitima (sin mediciones
+      // propias) se marcaria como sospechosa por algo que nunca prometio.
+      const declaredGateIds = Array.isArray(phase.quality_gates) ? phase.quality_gates : [];
+      let declaresOwnQualityGates = declaredGateIds.length > 0;
+      if (declaredGateIds.length > 0) {
+        const qualityContractLoaded = loadQualityContract(target);
+        if (qualityContractLoaded.ok) {
+          const gatesById = new Map((qualityContractLoaded.contract.gates ?? []).map((gate) => [gate.id, gate]));
+          // Un id declarado que no resuelve en quality-contract.yaml se trata
+          // como propio por omision: silenciar el aviso por un id roto seria
+          // el vacio equivocado.
+          declaresOwnQualityGates = declaredGateIds.some((gateId) => {
+            const gate = gatesById.get(gateId);
+            return !gate || gate.phase === phase.id;
+          });
+        }
+      }
+      const smells = detectEvidenceSmells(read.evidence, {
+        expectsQualityMetrics: declaresOwnQualityGates,
+        expectsSignoff: Boolean(phase.human_gate)
+      });
+      if (smells.length > 0) {
+        evidence.smells = smells;
+        for (const smell of smells) {
+          // Un olor de nivel error en una fase que exige evidencia bloquea; el
+          // resto sigue siendo senal para el revisor.
+          if (smell.level === "error" && evidence.required) evidenceBlockers.push(smell.code);
+          else evidenceWarnings.push(smell.code);
+        }
+      }
+      // El gate humano deja de ser un campo de texto que el propio agente puede
+      // escribir: exige la referencia a un review verificable.
+      if (phase.human_gate) {
+        const signoff = read.evidence.human_gate_signoff;
+        if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
+          evidenceBlockers.push("human-gate-signoff-missing");
+        } else if (!signoff.review_id) {
+          evidenceWarnings.push("human-gate-signoff-unverifiable");
+        }
+      }
+    }
+  }
+
+  // phase-contract v2: la fase puede declarar que gates del contrato de calidad
+  // le aplican. Se adjudican desde la evidencia ya escrita, sin ejecutar nada:
+  // ejecutar es responsabilidad de `quality-gate --run`.
+  let quality = null;
+  const declaredGates = Array.isArray(phase.quality_gates) ? phase.quality_gates : null;
+  if (declaredGates && declaredGates.length > 0 && evidence.exists) {
+    const adjudication = adjudicateFromEvidence(target, {
+      slice,
+      phase: phase.id,
+      gateIds: declaredGates
+    });
+    if (adjudication.status !== "not-configured") {
+      quality = {
+        status: adjudication.status,
+        gates: declaredGates,
+        evaluated: adjudication.evaluated,
+        vacuous: adjudication.vacuous,
+        // `findings` trae los hallazgos que no son de gate: superficie
+        // fantasma, baseline manipulado y el drift del ancla del probe. Se
+        // calculaban y se DESCARTABAN aqui, asi que nunca llegaban a quien lee
+        // `phase-gate` para decidir si la fase avanza.
+        findings: adjudication.findings ?? [],
+        evidenceSource: adjudication.evidenceSource,
+        treeHash: adjudication.treeHash
+      };
+      for (const finding of adjudication.findings ?? []) {
+        if (finding.level === "error") evidenceBlockers.push(`quality-${finding.code}${finding.id ? `:${finding.id}` : ""}`);
+        else if (finding.level === "warning") evidenceWarnings.push(`quality-${finding.code}`);
+      }
+      for (const violation of adjudication.violations) {
+        evidenceBlockers.push(`quality-${violation.code}:${violation.id ?? violation.metric ?? ""}`);
+      }
+      for (const warning of adjudication.warnings) {
+        evidenceWarnings.push(`quality-${warning.code}:${warning.id ?? ""}`);
+      }
+    }
+  }
+
+  const blocked =
+    missingInputs.length > 0 ||
+    missingOutputs.length > 0 ||
+    (evidence.required && !evidence.exists) ||
+    evidenceBlockers.length > 0;
 
   return {
     status: blocked ? "blocked" : "ok",
     contractPath: contract.path,
+    contractVersion: contract.version ?? 1,
     phase: phase.id,
     slice,
     owner: phase.owner,
@@ -143,12 +359,15 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
     inputs,
     outputs,
     evidence,
+    quality,
     missingInputs,
     missingOutputs,
+    warnings: evidenceWarnings,
     blockers: [
       ...missingInputs.map((entry) => `input-missing:${entry.path}`),
       ...missingOutputs.map((entry) => `output-missing:${entry.path}`),
-      ...(evidence.required && !evidence.exists ? [`evidence-missing:${path.relative(target, evidence.path)}`] : [])
+      ...(evidence.required && !evidence.exists ? [`evidence-missing:${path.relative(target, evidence.path)}`] : []),
+      ...evidenceBlockers
     ]
   };
 }
@@ -196,6 +415,41 @@ const VERDICT_STEPS = [
   { key: "active-slices",        script: "validate:active-slices",         level: "WARNING"  },
 ];
 
+// Un paso cuyo script no existe en el package.json del consumidor NO se ejecuta.
+// Los invocadores usan `--if-present` (npm/pnpm), que sale 0 cuando el script
+// falta: sin este precheck, un paso BLOCKING inexistente se reportaba `pass` y
+// contribuia a un READY falso. Se reporta `not-configured`, que no es pass ni
+// fail y no dispara el fail-fast.
+//
+// La implementacion vive en file-utils.js (no aqui) porque quality-adjudicate.js
+// tambien la necesita para anclar los scripts de los probes por hash, y
+// quality-adjudicate no puede importar de harness.js: harness.js ya importa de
+// quality-adjudicate, y eso cerraria un ciclo. Se re-exporta para no romper a
+// quien ya la importaba desde aqui.
+export { readPackageScripts };
+
+/**
+ * Ejecuta un script del consumidor con el package manager detectado, aplicando
+ * el mismo precheck que `verdict`: un script no declarado NO se invoca y se
+ * reporta como `not-configured`, porque `--if-present` sale 0 y produciria un
+ * falso pass.
+ */
+export function runPackageScript(target, packageManager, script, timeout = 60_000) {
+  const declared = readPackageScripts(target);
+  if (declared && !Object.prototype.hasOwnProperty.call(declared, script)) {
+    return { status: "not-configured", ok: false, exitCode: null, stdout: "", stderr: "" };
+  }
+  const [command, args] = packageManager.runScript(script);
+  const result = runCommand(command, args, target, timeout);
+  return {
+    status: result.ok ? "ok" : "failed",
+    ok: result.ok,
+    exitCode: result.status ?? (result.ok ? 0 : 1),
+    stdout: result.stdout,
+    stderr: result.stderr
+  };
+}
+
 export function commandVerdict(options) {
   const target = path.resolve(options.target ?? process.cwd());
   const write = Boolean(options.write);
@@ -203,10 +457,28 @@ export function commandVerdict(options) {
   const phase = options.phase ?? null;
   const blockers = [];
   const warnings = [];
+  const notConfigured = [];
   const steps = [];
+  const packageManager = detectPackageManager(target);
+  // null = no hay package.json legible: no se puede prechequear y se ejecuta
+  // todo como antes, para no romper consumidores que no son Node.
+  const declaredScripts = readPackageScripts(target);
 
   for (const step of VERDICT_STEPS) {
-    const result = runCommand("corepack", ["pnpm", "run", step.script, "--if-present"], target, 60_000);
+    if (declaredScripts && !Object.prototype.hasOwnProperty.call(declaredScripts, step.script)) {
+      notConfigured.push(step.key);
+      steps.push({
+        key: step.key,
+        script: step.script,
+        level: step.level,
+        status: "not-configured",
+        exitCode: null,
+        detail: `El consumidor no declara el script ${step.script} en package.json.`
+      });
+      continue;
+    }
+    const [command, args] = packageManager.runScript(step.script);
+    const result = runCommand(command, args, target, 60_000);
     const passed = result.ok;
     const entry = {
       key: step.key,
@@ -231,8 +503,10 @@ export function commandVerdict(options) {
   const payload = {
     status: ready ? "ready" : "not-ready",
     verdict: ready ? "READY" : "NOT-READY",
+    packageManager: { name: packageManager.name, source: packageManager.source },
     blockers,
     warnings,
+    notConfigured,
     steps
   };
 
@@ -302,10 +576,42 @@ export function commandStatus(options) {
     phaseGateExitCode = pgResult.exitCode;
   }
 
+  // Cuarto componente: la calidad medida. Se adjudica desde la evidencia ya
+  // escrita, sin ejecutar probes, porque `status` es una foto y no una medicion.
+  // Un `no-configurado` no cuenta como fallo: la mayoria de consumidores todavia
+  // no tiene contrato de calidad y no se les puede poner en no-go por eso.
+  let qualityResult = null;
+  if (resolvedPhase && resolvedSlice) {
+    const adjudication = adjudicateFromEvidence(target, { slice: resolvedSlice, phase: resolvedPhase });
+    qualityResult = {
+      status: adjudication.status,
+      code: adjudication.code ?? null,
+      evaluated: adjudication.evaluated ?? [],
+      violations: adjudication.violations ?? [],
+      vacuous: adjudication.vacuous ?? [],
+      findings: adjudication.findings ?? [],
+      evidenceSource: adjudication.evidenceSource ?? null,
+      // `advisory` sale del entorno REAL de este proceso, no de
+      // `quality_metrics.source`. Ese campo lo redacta el evaluado en un YAML
+      // que el guard de frontera no protege, asi que usarlo aqui permitia
+      // presentar una medicion 100% local como autoritativa (`advisory: false`)
+      // cambiando una palabra. Un veredicto solo puede dejar de ser advisory si
+      // quien lo emite puede atestiguarlo: fuera de un runner, nadie puede.
+      advisory: !detectCiEnvironment().isCi || adjudication.evidenceSource !== "ci",
+      evidenceSourceVerified: detectCiEnvironment().isCi && adjudication.evidenceSource === "ci"
+    };
+  }
+
   const govOk = govResult.exitCode === EXIT_OK;
   const toolsOk = toolsResult.exitCode === EXIT_OK;
   const phaseOk = phaseGateResult === null || phaseGateExitCode === EXIT_OK;
-  const ready = govOk && toolsOk && phaseOk;
+  const qualityOk =
+    qualityResult === null ||
+    qualityResult.status === "ok" ||
+    qualityResult.status === "warning" ||
+    qualityResult.status === "not-configured" ||
+    qualityResult.status === "no-evidence";
+  const ready = govOk && toolsOk && phaseOk && qualityOk;
 
   const payload = {
     ready,
@@ -314,13 +620,30 @@ export function commandStatus(options) {
     tools: { exitCode: toolsResult.exitCode, ...toolsResult.payload },
     phaseGate: phaseGateResult
       ? { exitCode: phaseGateExitCode, phase: resolvedPhase, slice: resolvedSlice, ...phaseGateResult }
-      : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" }
+      : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" },
+    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" }
   };
 
   if (writeMd) {
     const govStatus = govOk ? "✅ OK" : "❌ ERROR";
     const toolsStatus = toolsOk ? "✅ OK" : "⚠️ WARNINGS";
     const phaseStatus = phaseOk ? "✅ OK" : "🔴 BLOCKED";
+    const qualityLabel =
+      qualityResult === null
+        ? "➖ n/a"
+        : qualityResult.status === "not-configured"
+          ? "➖ sin contrato"
+          : qualityResult.status === "no-evidence"
+            ? "➖ sin evidencia"
+            : qualityResult.status === "blocked"
+              ? "🔴 BLOCKED"
+              : qualityResult.status === "warning"
+                ? "⚠️ WARNINGS"
+                : "✅ OK";
+    // Un veredicto de calidad calculado en local no es autoritativo: se dice.
+    const qualityStatus = qualityResult?.advisory && qualityResult.evaluated?.length > 0
+      ? `${qualityLabel} (advisory)`
+      : qualityLabel;
     const readinessLine = ready ? "## ✅ GO — Governance ready" : "## ❌ NO-GO — Governance not ready";
     const lines = [
       `# Governance Status — ${new Date().toISOString()}`,
@@ -332,6 +655,7 @@ export function commandStatus(options) {
       `| governance-check | ${govStatus} |`,
       `| tools-doctor | ${toolsStatus} |`,
       `| phase-gate (${resolvedPhase ?? "?"}/${resolvedSlice ?? "?"}) | ${phaseStatus} |`,
+      `| quality | ${qualityStatus} |`,
       "",
       "## Details",
       "",
@@ -347,6 +671,9 @@ export function commandStatus(options) {
     ];
     if (phaseGateResult) {
       lines.push("", "### phase-gate", "```json", JSON.stringify(phaseGateResult, null, 2), "```");
+    }
+    if (qualityResult) {
+      lines.push("", "### quality", "```json", JSON.stringify(qualityResult, null, 2), "```");
     }
     const md = lines.join("\n") + "\n";
     try {
@@ -472,10 +799,17 @@ export function commandToolsDoctor(options) {
   const profile = options.profile ?? "default";
   const home = os.homedir();
   const claudeSettings = readTextIfExists(path.join(home, ".claude", "settings.json")) ?? "";
+  const packageManager = detectPackageManager(target);
   const tools = [
-    checkTool("pnpm", () => {
-      const result = runCommand("corepack", ["pnpm", "--version"], target, 10_000);
-      return { status: result.ok ? "ok" : "missing", version: firstLine(result.stdout || result.stderr) };
+    checkTool("package-manager", () => {
+      const [command, args] = packageManager.versionCommand;
+      const result = runCommand(command, args, target, 10_000);
+      return {
+        status: result.ok ? "ok" : "missing",
+        manager: packageManager.name,
+        detectedFrom: packageManager.source,
+        version: firstLine(result.stdout || result.stderr)
+      };
     }),
     checkTool("openspec", () => ({
       status: pathExists(path.join(target, "openspec", "config.yaml")) ? "ok" : "missing",
@@ -508,16 +842,68 @@ export function commandToolsDoctor(options) {
     checkTool("party-mode", () => ({
       status: pathExists(path.join(target, ".github", "skills", "party-mode", "SKILL.md")) ? "ok" : "missing",
       path: ".github/skills/party-mode/SKILL.md"
-    }))
+    })),
+    // Un script de gate que resuelve `@latest` en cada corrida no es
+    // reproducible (cambia de comportamiento cuando publican) y paga red cada
+    // vez. Medido en un consumidor real: `npx @fission-ai/openspec@latest` era
+    // 9.1 de los 9.3 segundos de `sdlc verdict`.
+    checkTool("pinned-tooling", () => {
+      const raw = readTextIfExists(path.join(target, "package.json"));
+      if (!raw) return { status: "ok", detail: "sin package.json" };
+      let scripts = {};
+      try {
+        scripts = JSON.parse(raw).scripts ?? {};
+      } catch {
+        return { status: "warning", detail: "package.json ilegible" };
+      }
+      const floating = Object.entries(scripts)
+        .filter(([, body]) => typeof body === "string" && /npx\s+(-y\s+|--yes\s+)?[^\s|&]*@latest/.test(body))
+        .map(([name]) => name);
+      return floating.length > 0
+        ? {
+            status: "warning",
+            floatingScripts: floating,
+            detail: `Scripts que resuelven @latest en cada corrida: ${floating.join(", ")}. Fijar la version como devDependency.`
+          }
+        : { status: "ok" };
+    })
   ];
-  const required = profile === "full" ? new Set(["pnpm", "openspec", "autoskills", "party-mode"]) : new Set(["pnpm"]);
+  const required =
+    profile === "full"
+      ? new Set(["package-manager", "openspec", "autoskills", "party-mode"])
+      : new Set(["package-manager"]);
+  // La deteccion no cambia; lo que cambia es que el hallazgo ahora dice QUE
+  // ES la herramienta y COMO conseguirla. Antes `tool-graphify: warning` con
+  // una ruta era todo lo que el usuario recibia: sin forma de saber si esa
+  // "opcional" le hacia falta ni donde buscarla. El inventario
+  // (external-tools.yaml) es la fuente unica de esa informacion.
+  const described = describeTools(target);
   const findings = tools
     .filter((tool) => tool.status !== "ok")
-    .map((tool) => ({
-      level: required.has(tool.name) ? "error" : "warning",
-      code: `tool-${tool.name}`,
-      message: `${tool.name}: ${tool.status}`
-    }));
+    .map((tool) => {
+      const meta = described.ok ? described.byId.get(tool.name) : null;
+      return {
+        level: required.has(tool.name) ? "error" : "warning",
+        code: `tool-${tool.name}`,
+        message: `${tool.name}: ${tool.status}`,
+        ...(meta
+          ? {
+              purpose: meta.purpose,
+              required: meta.required,
+              profile: meta.profile,
+              // `install` cuando se puede automatizar; `manual` cuando el paso
+              // es de una persona. Distinguirlos importa: prometer un comando
+              // que no existe es peor que decir "esto lo haces tu".
+              ...(meta.install ? { install: meta.install } : {}),
+              ...(meta.manual ? { manual: meta.manual } : {}),
+              ...(meta.docs ? { docs: meta.docs } : {}),
+              hint: meta.install
+                ? `sdlc tools-install --tool ${tool.name} --apply`
+                : "requiere un paso manual (ver 'manual')"
+            }
+          : {})
+      };
+    });
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {
@@ -526,6 +912,7 @@ export function commandToolsDoctor(options) {
       status: hasErrors ? "error" : hasWarnings ? "warning" : "ok",
       profile,
       target,
+      packageManager: { name: packageManager.name, source: packageManager.source },
       tools,
       findings
     }

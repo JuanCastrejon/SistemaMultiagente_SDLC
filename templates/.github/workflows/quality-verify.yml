@@ -1,0 +1,134 @@
+# Arbitro de calidad (ADR 0007, D1)
+#
+# El harness local calcula los mismos controles, pero se autodeclara advisory:
+# corre en la maquina donde el agente escribe. Este workflow es el que cuenta,
+# porque RE-EJECUTA los probes y compara lo recomputado contra lo que la
+# evidencia declara. Esa discrepancia (`evidence-mismatch`) es el detector de
+# fraude: no depende de confiar en quien produjo el YAML.
+#
+# Requisitos de configuracion, fuera del alcance de este archivo:
+#   1. Marcar este check como required status check en la rama protegida.
+#   2. Restringir quien puede editar .github/workflows (CODEOWNERS), o el
+#      arbitro es editable por el evaluado y no arbitra nada.
+
+name: quality-verify
+
+on:
+  pull_request:
+  push:
+    branches: [{{gitFlow.integrationBranch}}, {{gitFlow.stableBranch}}]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: quality-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # El guard de frontera compara contra la rama de integracion remota:
+          # sin historia no hay merge-base que valga.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # El gestor de paquetes se DETECTA, no se asume. Hardcodear `npm ci` aqui
+      # romperia en cualquier consumidor pnpm o yarn — que es justo el caso del
+      # consumidor mas maduro. El engine ya sabe detectarlo desde 1.8.0; el
+      # arbitro tiene que ser igual de agnostico.
+      - name: Resolver gestor de paquetes
+        id: pm
+        run: |
+          if [ -f pnpm-lock.yaml ]; then
+            corepack enable
+            echo "install=corepack pnpm install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+            echo "exec=corepack pnpm exec" >> "$GITHUB_OUTPUT"
+          elif [ -f yarn.lock ]; then
+            corepack enable
+            echo "install=corepack yarn install --immutable" >> "$GITHUB_OUTPUT"
+            echo "exec=corepack yarn exec" >> "$GITHUB_OUTPUT"
+          else
+            echo "install=npm ci" >> "$GITHUB_OUTPUT"
+            echo "exec=npx --no-install" >> "$GITHUB_OUTPUT"
+          fi
+
+      # El CLI se resuelve por la dependencia declarada y fijada en el lockfile,
+      # NUNCA por link al working copy del framework: si el codigo que juzga lo
+      # puede editar el juzgado, el arbitro es decorativo.
+      - name: Instalar dependencias
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Verificar que el CLI no viene de un link local
+        run: |
+          RESOLVED=$(node -e "console.log(require.resolve('sistema-multiagente-sdlc/package.json'))" 2>/dev/null || echo "")
+          if [ -z "$RESOLVED" ]; then
+            echo "El consumidor no declara sistema-multiagente-sdlc como dependencia."
+            echo "El arbitro exige una version fijada por lockfile, no un link global."
+            exit 1
+          fi
+          case "$RESOLVED" in
+            *node_modules*) echo "CLI resuelto desde node_modules: $RESOLVED" ;;
+            *) echo "CLI resuelto FUERA de node_modules ($RESOLVED): posible link local."; exit 1 ;;
+          esac
+
+      - name: Resolver slice y fase vigentes
+        id: state
+        run: |
+          SLICE=$(grep -E '^current_slice:' .github/agent-state/phase-status.yaml | sed 's/.*: *//' | tr -d '"')
+          PHASE=$(grep -E '^current_phase:' .github/agent-state/phase-status.yaml | sed 's/.*: *//' | tr -d '"')
+          echo "slice=$SLICE" >> "$GITHUB_OUTPUT"
+          echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+
+      - name: Gobernanza
+        run: ${{ steps.pm.outputs.exec }} sdlc governance-check --target . --json
+
+      # Aqui esta la diferencia con el harness local: se vuelve a medir.
+      - name: Recomputar calidad
+        run: >
+          ${{ steps.pm.outputs.exec }} sdlc quality-gate
+          --target .
+          --slice "${{ steps.state.outputs.slice }}"
+          --phase "${{ steps.state.outputs.phase }}"
+          --run
+          --source ci
+          --exit-code
+          --json
+
+      # Se ejecuta la copia del guard que vive en la rama de integracion, NO la
+      # del checkout del PR: si un PR neutraliza su propia copia del script
+      # (el ejemplo mas barato: reemplazarla por `process.exit(0)`), ninguna
+      # lista de rutas protegidas ayuda si el codigo que arbitra es justo el
+      # codigo que el PR controla. `.sdlc/locked-paths.txt` se lee del
+      # checkout de todas formas: eso es seguro porque solo puede EXTENDER
+      # proteccion, nunca quitarla (ver ALWAYS_LOCKED en el script).
+      - name: Frontera de especificacion
+        run: |
+          BASE="origin/{{gitFlow.integrationBranch}}"
+          TRUSTED="$RUNNER_TEMP/validate-spec-boundary.trusted.mjs"
+          if git show "$BASE:scripts/validate-spec-boundary.mjs" > "$TRUSTED" 2>/dev/null && [ -s "$TRUSTED" ]; then
+            node "$TRUSTED" --base "$BASE"
+          else
+            echo "aviso: $BASE no tiene scripts/validate-spec-boundary.mjs (bootstrap); se usa la copia del checkout"
+            node scripts/validate-spec-boundary.mjs --base "$BASE"
+          fi
+
+      - name: Publicar evidencia recomputada
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evidence-${{ github.sha }}
+          path: |
+            .github/agent-state/evidence/**
+            coverage/**
+            reports/**
+          retention-days: 90
+          if-no-files-found: ignore

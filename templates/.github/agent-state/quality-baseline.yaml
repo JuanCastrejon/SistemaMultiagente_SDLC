@@ -1,0 +1,24 @@
+# Referencia de forma. NO se instala por manifiesto: `promoteBaseline` crea
+# .github/agent-state/quality-baseline.yaml en el consumidor la primera vez
+# que se promueve, igual que `session-start` crea .sdlc/session.json. Un
+# archivo gestionado que otra ruta legitima reescribe en runtime produce
+# managed-file-drift permanente contra si mismo; se resuelve dejandolo fuera
+# del manifiesto en vez de perseguir el drift.
+#
+# NO EDITAR A MANO. Se escribe unicamente por promocion desde la evidencia de
+# una fase (por convencion F15, post-merge), via `sdlc quality-baseline
+# --promote --source ci`. Cualquier edicion manual queda sin `integrity_sha256`
+# valido y `sdlc doctor` la reporta como `baseline-tampered`.
+#
+# Antes de la primera promocion no existe fisicamente: `loadBaseline()`
+# devuelve este mismo estado en memoria, y todo gate en modo ratchet se evalua
+# sin comparacion hasta que exista una linea base real.
+
+version: 1
+promoted_at: null
+promoted_by: null
+commit_sha: null
+slice: null
+source: null
+metrics: {}
+integrity_sha256: null

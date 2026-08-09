@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import YAML from "yaml";
 import {
   copyFilePreservingPath,
   ensureDir,
@@ -38,6 +39,20 @@ import {
   commandSkillEval,
   commandSkillPropose
 } from "./eval-runner.js";
+import { commandQualityGate, commandQualityBaseline } from "./quality.js";
+import { baselineDoctorFindings } from "./quality-baseline.js";
+import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
+import { commandCoverageDiff } from "./coverage-diff.js";
+import { computeTreeHash } from "./evidence-writer.js";
+import { createAttestationCommit, verifySignoff } from "./signoff.js";
+import { verifyAcceptanceDir } from "./acceptance.js";
+import { commandRedProofVerify } from "./red-proof.js";
+import { verifyChangeClosure } from "./change-closure.js";
+import { commandAdopt, detectCliLinked } from "./adopt.js";
+import { commandQualityDocs } from "./quality-docs.js";
+import { buildInstallPlan, runInstallPlan } from "./external-tools.js";
+import { recordLesson, listLessons, promoteLesson, rejectLesson, DEFAULT_PROMOTION_THRESHOLD } from "./skill-lessons.js";
+import { checkRetentionPolicy } from "./retention.js";
 
 const EXIT_OK = 0;
 const EXIT_ERROR = 1;
@@ -244,13 +259,93 @@ function createBackup(target, relativePaths, reason) {
   return id;
 }
 
-function writeManagedFiles(target, files, config, previousManifest = null) {
+function writeManagedFiles(target, files, config, previousManifest = null, skipWrite = new Set()) {
   for (const [relativePath, content] of Object.entries(files)) {
+    if (skipWrite.has(relativePath)) {
+      // Divergencia local aceptada: el archivo del consumidor se conserva tal
+      // cual y solo se registra su hash en el manifiesto.
+      continue;
+    }
     writeText(path.join(target, relativePath), content);
   }
   const manifest = buildManifest(config, files, previousManifest ?? {});
   writeManifest(target, manifest);
   return manifest;
+}
+
+// ---------------------------------------------------------------------------
+// Overrides de archivos gestionados (.sdlc/overrides.yaml)
+//
+// `upgrade` abortaba entero ante cualquier archivo gestionado modificado
+// localmente, asi que un consumidor que personaliza gobernanza a proposito
+// quedaba sin via de actualizacion. Un override declara que esa divergencia es
+// intencional: el archivo local se conserva y doctor deja de reportarlo como
+// drift anonimo.
+// ---------------------------------------------------------------------------
+
+function overridesPath(target) {
+  return path.join(target, ".sdlc", "overrides.yaml");
+}
+
+function readOverrides(target) {
+  const raw = readTextIfExists(overridesPath(target));
+  if (!raw) {
+    return { version: 1, overrides: [] };
+  }
+  try {
+    const parsed = YAML.parse(raw);
+    const overrides = Array.isArray(parsed?.overrides) ? parsed.overrides : [];
+    return { version: parsed?.version ?? 1, overrides };
+  } catch {
+    return { version: 1, overrides: [] };
+  }
+}
+
+function writeOverrides(target, document) {
+  const header = [
+    "# Archivos gestionados con divergencia local aceptada.",
+    "# Cada entrada declara que el consumidor mantiene su propia version de un",
+    "# archivo del framework. `sdlc doctor` los reporta como override y no como",
+    "# drift; si el archivo cambia despues de aceptarlo, el override queda stale.",
+    ""
+  ].join("\n");
+  writeText(overridesPath(target), `${header}${YAML.stringify(document)}`);
+}
+
+function overrideIndex(target) {
+  const index = new Map();
+  for (const entry of readOverrides(target).overrides) {
+    if (entry && typeof entry.path === "string") {
+      index.set(entry.path, entry);
+    }
+  }
+  return index;
+}
+
+function parsePathList(value) {
+  if (!value || value === true) return [];
+  return String(value)
+    .split(",")
+    .map((item) => toPosixPath(item.trim()))
+    .filter(Boolean);
+}
+
+function registerOverrides(target, entries, frameworkVersion) {
+  const document = readOverrides(target);
+  const byPath = new Map(document.overrides.filter((entry) => entry?.path).map((entry) => [entry.path, entry]));
+  const acceptedAt = new Date().toISOString();
+  for (const entry of entries) {
+    byPath.set(entry.path, {
+      path: entry.path,
+      sha256: entry.sha256,
+      reason: entry.reason,
+      acceptedAt,
+      frameworkVersion
+    });
+  }
+  const next = { version: 1, overrides: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)) };
+  writeOverrides(target, next);
+  return next;
 }
 
 function pruneBackupsInternal(target, keep) {
@@ -316,21 +411,73 @@ function commandInstall(options) {
   const backup = createBackup(target, Object.keys(files), "install");
   const manifest = writeManagedFiles(target, files, config, previousManifest);
   pruneBackupsInternal(target, config.backup.keepLast ?? 5);
+
+  // El scaffold termina, pero la instalacion del sistema no: quedan las
+  // herramientas externas. Antes el usuario se enteraba de que existian
+  // corriendo `tools-doctor` por su cuenta, y aun asi solo veia "missing".
+  // Aqui se le ofrece la lista completa —obligatorias y opcionales— con el
+  // repo de cada una y el comando exacto, en el momento en que esta
+  // instalando.
+  //
+  // Se OFRECE, no se instala: `install` sigue sin ejecutar software de
+  // terceros (y sin `--with-tools` no toca nada), asi que sigue siendo apto
+  // para CI y para un scaffold reproducible.
+  const toolsOffer = buildToolsOffer(target, options);
+
   return {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
       message: "SistemaMultiagente_SDLC instalado.",
       backup,
-      managedFiles: manifest.managedFiles.length
+      managedFiles: manifest.managedFiles.length,
+      externalTools: toolsOffer
     }
   };
+}
+
+// Oferta de herramientas al cerrar el install. `--with-tools <ids|all>` instala
+// las automatizables elegidas; sin el flag solo se informa.
+function buildToolsOffer(target, options) {
+  const doctor = commandToolsDoctor({ target });
+  const detected = new Map((doctor.payload.tools ?? []).map((tool) => [tool.name, tool.status]));
+  const plan = buildInstallPlan(target, { detected });
+  if (!plan.ok) return { status: "unavailable", code: plan.code };
+
+  const requested = String(options["with-tools"] ?? "").trim();
+  const chosen = requested === "all"
+    ? plan.installable.map((entry) => entry.id)
+    : requested
+      ? requested.split(",").map((value) => value.trim()).filter(Boolean)
+      : [];
+
+  const offer = {
+    // Separadas por obligatoriedad, que es lo que el usuario necesita para
+    // decidir: "opcional" a secas no le dice si puede seguir sin ella.
+    required: [...plan.installable, ...plan.manualOnly]
+      .filter((entry) => entry.required && entry.required !== false)
+      .map((entry) => ({ id: entry.id, name: entry.name, required: entry.required, repo: entry.repo ?? null, command: entry.command ?? null, manual: entry.manual ?? null })),
+    optional: [...plan.installable, ...plan.manualOnly]
+      .filter((entry) => !entry.required || entry.required === false)
+      .map((entry) => ({ id: entry.id, name: entry.name, repo: entry.repo ?? null, command: entry.command ?? null, manual: entry.manual ?? null })),
+    alreadyPresent: plan.satisfied.map((entry) => entry.id),
+    hint: "sdlc tools-install --target . --apply  (o --tool <id> --apply para una sola). Las marcadas como manuales se instalan desde su repo."
+  };
+
+  if (chosen.length === 0) return { status: "offered", applied: false, ...offer };
+
+  const selected = { ...plan, installable: plan.installable.filter((entry) => chosen.includes(entry.id)) };
+  const execution = runInstallPlan(target, selected, { apply: true });
+  return { status: "offered", applied: true, results: execution.results, ...offer };
 }
 
 function collectDrift(target, config, manifest) {
   const files = buildManagedFiles(config);
   const drift = [];
   const missing = [];
+  const overridden = [];
+  const staleOverrides = [];
+  const overrides = overrideIndex(target);
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     const existing = readTextIfExists(absolute);
@@ -339,16 +486,32 @@ function collectDrift(target, config, manifest) {
       continue;
     }
     if (normalizeLF(existing) !== content) {
+      // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
+      // en Windows el CRLF del working tree daria dos hashes distintos para el
+      // mismo archivo segun quien lo mire.
+      const actualSha256 = sha256Text(normalizeLF(existing));
+      const override = overrides.get(relativePath);
+      if (override) {
+        // La divergencia esta declarada. Solo sigue siendo la misma divergencia
+        // si el archivo no cambio desde que se acepto.
+        const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
+        if (override.sha256 === actualSha256) {
+          overridden.push(entry);
+        } else {
+          staleOverrides.push(entry);
+        }
+        continue;
+      }
       drift.push({
         path: relativePath,
-        actualSha256: sha256Text(existing),
+        actualSha256,
         expectedSha256: sha256Text(content)
       });
     }
   }
   const managedPathSet = getManagedPathSet(manifest);
   const unmanaged = Object.keys(files).filter((filePath) => !managedPathSet.has(filePath));
-  return { files, drift, missing, unmanaged };
+  return { files, drift, missing, unmanaged, overridden, staleOverrides };
 }
 
 function checkCommand(command, args = ["--version"]) {
@@ -504,8 +667,25 @@ function commandDoctor(options) {
     for (const entry of drift.drift) {
       findings.push({ level: "warning", code: "managed-file-drift", ...entry });
     }
+    for (const entry of drift.overridden) {
+      findings.push({ level: "info", code: "managed-file-override", ...entry });
+    }
+    for (const entry of drift.staleOverrides) {
+      findings.push({ level: "warning", code: "managed-file-override-stale", ...entry });
+    }
   }
   findings.push(...collectDoctorEnhancements(target, config));
+  findings.push(...baselineDoctorFindings(target));
+  findings.push(...probeAnchorDoctorFindings(target));
+  findings.push(...checkRetentionPolicy(target));
+  const cliLinked = detectCliLinked(target);
+  if (cliLinked.declared && cliLinked.linked) {
+    findings.push({
+      level: "warning",
+      code: "cli-resolved-from-link",
+      detail: `sistema-multiagente-sdlc resuelve fuera de node_modules (${cliLinked.resolved}): valido para desarrollo local, pero CI lo rechaza (decision 9, ADR 0007)`
+    });
+  }
   const hasErrors = findings.some((finding) => finding.level === "error");
   const hasWarnings = findings.some((finding) => finding.level === "warning");
   return {
@@ -520,6 +700,144 @@ function commandDoctor(options) {
         managedFiles: manifest?.managedFiles?.length ?? 0
       }
     }
+  };
+}
+
+/**
+ * `sdlc signoff` (ADR 0007, P5)
+ *
+ * El sujeto que se aprueba/verifica es SIEMPRE { slice, phase, tree_hash },
+ * recomputado sobre las superficies declaradas en quality-contract.yaml en
+ * el momento de la llamada — nunca se confia en un tree_hash que alguien
+ * declare por fuera, porque eso reabriria exactamente el hueco que esto
+ * cierra (una firma que dice aprobar algo que nadie recomputo).
+ */
+function commandSignoff(options) {
+  const target = requireTarget(options);
+  const loaded = loadQualityContract(target);
+  if (!loaded.ok) {
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", code: loaded.code, path: loaded.path } };
+  }
+  const slice = options.slice ?? null;
+  const phase = options.phase ?? null;
+  if (!slice || !phase) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "signoff exige --slice y --phase." } };
+  }
+  const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
+  const tree = computeTreeHash(target, surfacePaths);
+  const subject = { slice, phase, tree_hash: tree.hash };
+
+  if (options.create) {
+    const created = createAttestationCommit({
+      target,
+      slice,
+      phase,
+      subject,
+      signingKey: options["signing-key"] ?? options.signingKey ?? null
+    });
+    if (!created.ok) return { exitCode: EXIT_ERROR, payload: { status: "error", ...created, subject } };
+    return { exitCode: EXIT_OK, payload: { status: "ok", ...created, subject } };
+  }
+
+  if (options.verify) {
+    let config;
+    try {
+      config = loadConfig(target);
+    } catch (error) {
+      return { exitCode: error.exitCode ?? EXIT_ERROR, payload: { status: "error", message: error.message } };
+    }
+    const maintainers = config.governance?.maintainers ?? [];
+    if (maintainers.length === 0) {
+      return {
+        exitCode: EXIT_ACTION_REQUIRED,
+        payload: {
+          status: "not-configured",
+          code: "governance-maintainers-missing",
+          message: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida."
+        }
+      };
+    }
+    const result = verifySignoff({
+      target,
+      commitSha: options.commit ?? null,
+      subject,
+      maintainers,
+      headRef: options["head-ref"] ?? options.headRef ?? "HEAD"
+    });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED, payload: { status: result.ok ? "ok" : "blocked", ...result, subject } };
+  }
+
+  return {
+    exitCode: EXIT_ERROR,
+    payload: { status: "error", message: "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha>>" }
+  };
+}
+
+/**
+ * `sdlc acceptance-verify` (ADR 0007, P9)
+ *
+ * Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario
+ * debe traer un `sc_id` cuyo hash coincida con (capability, requirement,
+ * titulo) ACTUALES. No ejecuta ningun test; eso es responsabilidad de
+ * `test_ref` y del control spec-trace, fuera de esta pieza.
+ */
+function commandAcceptanceVerify(options) {
+  const target = requireTarget(options);
+  const changeSlug = options.change ?? null;
+  if (!changeSlug) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "acceptance-verify exige --change <slug>." } };
+  }
+  const result = verifyAcceptanceDir(target, changeSlug);
+  if (!result.exists) {
+    return {
+      exitCode: EXIT_ACTION_REQUIRED,
+      payload: { status: "not-configured", code: "acceptance-dir-missing", change: changeSlug }
+    };
+  }
+  return {
+    exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+    payload: {
+      status: result.ok ? "ok" : "blocked",
+      change: changeSlug,
+      files: result.files.map((entry) => entry.file),
+      // Cuantos escenarios se verificaron de verdad: sin este numero, "verifique
+      // 12" y "verifique 0" se veian identicos para quien lee el resultado.
+      scenarioCount: result.scenarioCount ?? 0,
+      findings: result.findings
+    }
+  };
+}
+
+/**
+ * `sdlc change-close` (ADR 0007, P11)
+ *
+ * No archiva nada por si mismo: solo dice si el change puede cerrarse.
+ * Archivar (mover openspec/changes/<slug> a archive/) sigue siendo accion del
+ * CLI de OpenSpec; esta pieza es el gate que decide si corresponde llamarlo.
+ */
+function commandChangeClose(options) {
+  const target = requireTarget(options);
+  const changeSlug = options.change ?? null;
+  if (!changeSlug) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "change-close exige --change <slug>." } };
+  }
+  const tasksPath = path.join(target, "openspec", "changes", changeSlug, "tasks.md");
+  if (!pathExists(tasksPath)) {
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", code: "tasks-file-missing", path: tasksPath } };
+  }
+  let integrationBranch = options["integration-branch"] ?? options.integrationBranch ?? null;
+  if (!integrationBranch) {
+    try {
+      integrationBranch = loadConfig(target)?.gitFlow?.integrationBranch ?? null;
+    } catch {
+      integrationBranch = null;
+    }
+  }
+  const raw = fs.readFileSync(tasksPath, "utf8");
+  const result = verifyChangeClosure({ target, raw, slice: options.slice ?? null, integrationBranch });
+  return {
+    exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+    payload: { status: result.ok ? "ok" : "blocked", change: changeSlug, tasks: result.tasks, findings: result.findings }
   };
 }
 
@@ -561,26 +879,251 @@ function commandUpgrade(options) {
   }
   const fromVersion = config.frameworkVersion;
   const nextConfig = { ...config, frameworkVersion: toVersion };
+  // A diferencia de `install`, `upgrade` lee `nextConfig` de `.sdlc/config.json`
+  // en disco -- un archivo que spec-boundary-guard NO protege. `buildManagedFiles`
+  // interpola sus campos (project.name, gitFlow.*, etc.) como texto crudo dentro
+  // de YAML/comentarios (`template-loader.js: interpolate`), sin escapar. Sin este
+  // chequeo, un `project.name` con un salto de linea inyectaba una key YAML real
+  // (`enforcement: block`) en quality-contract.yaml -- el mismo archivo que
+  // spec-boundary-guard bloquea editar directamente, alcanzado por la puerta de
+  // al lado. Reproducido con PoC antes de este fix.
+  const configErrors = validateConfigShape(nextConfig);
+  if (configErrors.length > 0) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", errors: configErrors } };
+  }
   const migrations = migrationsToRun(fromVersion, toVersion);
-  const files = applyMigrations(buildManagedFiles(nextConfig), migrations);
+  const migrationContext = {
+    target,
+    config: nextConfig,
+    readDisk: (relativePath) => {
+      const content = readTextIfExists(path.join(target, relativePath));
+      return content === null ? null : normalizeLF(content);
+    },
+    existsOnDisk: (relativePath) => pathExists(path.join(target, relativePath))
+  };
+  const files = applyMigrations(buildManagedFiles(nextConfig), migrations, migrationContext);
   const conflicts = detectConflicts(target, files, manifest);
-  if (conflicts.length > 0) {
+
+  // Resolucion por archivo: sin esto, un solo archivo gestionado con
+  // personalizacion local bloquea el upgrade completo y el consumidor se queda
+  // sin via de actualizacion. `--accept-managed` conserva la version local de
+  // los paths indicados y la registra en .sdlc/overrides.yaml.
+  const acceptAll = Boolean(options["accept-all-managed"]);
+  const acceptRequested = new Set(parsePathList(options["accept-managed"]));
+  const alreadyOverridden = overrideIndex(target);
+  const accepted = [];
+  const blocking = [];
+  for (const conflict of conflicts) {
+    const isManaged = conflict.reason === "archivo gestionado modificado localmente";
+    const previouslyAccepted = alreadyOverridden.get(conflict.path)?.sha256 === conflict.existingSha256;
+    if (isManaged && (acceptAll || acceptRequested.has(conflict.path) || previouslyAccepted)) {
+      accepted.push(conflict);
+    } else {
+      blocking.push(conflict);
+    }
+  }
+  const unknownAccepts = [...acceptRequested].filter(
+    (candidate) => !conflicts.some((conflict) => conflict.path === candidate)
+  );
+  if (unknownAccepts.length > 0) {
+    return {
+      exitCode: EXIT_ERROR,
+      payload: {
+        status: "error",
+        message: "Se pidio aceptar rutas que no estan en conflicto.",
+        unknownAccepts
+      }
+    };
+  }
+
+  if (blocking.length > 0) {
     if (!dryRun) {
       createBackup(target, [".sdlc/patch-plan.json"], "patch-plan-conflict");
     }
-    const patchPlan = dryRun ? { conflicts, proposedFiles: Object.keys(files).sort() } : writePatchPlan(target, conflicts, files);
-    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "conflict", conflicts, patchPlan } };
+    const patchPlan = dryRun
+      ? { conflicts: blocking, proposedFiles: Object.keys(files).sort() }
+      : writePatchPlan(target, blocking, files);
+    return {
+      exitCode: EXIT_ACTION_REQUIRED,
+      payload: {
+        status: "conflict",
+        conflicts: blocking,
+        acceptable: blocking.filter((conflict) => conflict.reason === "archivo gestionado modificado localmente").map((conflict) => conflict.path),
+        hint: "Repetir con --accept-managed <paths separados por coma> o --accept-all-managed para conservar la version local de esos archivos.",
+        patchPlan
+      }
+    };
   }
+
   if (dryRun) {
-    return { exitCode: EXIT_OK, payload: { status: "ok", message: `Dry-run upgrade a ${toVersion}` } };
+    return {
+      exitCode: EXIT_OK,
+      payload: {
+        status: "ok",
+        message: `Dry-run upgrade a ${toVersion}`,
+        accepted: accepted.map((conflict) => conflict.path)
+      }
+    };
   }
+
   const backup = createBackup(target, [...new Set([...Object.keys(files), ...manifest.managedFiles.map((entry) => entry.path)])], "upgrade");
-  const nextManifest = writeManagedFiles(target, files, nextConfig, {
-    ...manifest,
-    migrationsApplied: [...new Set([...(manifest.migrationsApplied ?? []), ...migrations.map((m) => m.version)])]
-  });
+
+  // El manifiesto debe registrar lo que queda EN DISCO, no lo que el framework
+  // habria escrito: si guardara el hash del framework, el archivo conservado
+  // volveria a detectarse como conflicto en el siguiente upgrade.
+  const effectiveFiles = { ...files };
+  const skipWrite = new Set();
+  const overrideEntries = [];
+  for (const conflict of accepted) {
+    const localContent = readTextIfExists(path.join(target, conflict.path));
+    if (localContent === null) continue;
+    const normalized = normalizeLF(localContent);
+    effectiveFiles[conflict.path] = normalized;
+    skipWrite.add(conflict.path);
+    overrideEntries.push({
+      path: conflict.path,
+      sha256: sha256Text(normalized),
+      reason: alreadyOverridden.get(conflict.path)?.reason ?? "divergencia local aceptada en upgrade"
+    });
+  }
+  if (overrideEntries.length > 0) {
+    registerOverrides(target, overrideEntries, toVersion);
+  }
+
+  const nextManifest = writeManagedFiles(
+    target,
+    effectiveFiles,
+    nextConfig,
+    {
+      ...manifest,
+      migrationsApplied: [...new Set([...(manifest.migrationsApplied ?? []), ...migrations.map((m) => m.version)])]
+    },
+    skipWrite
+  );
   pruneBackupsInternal(target, nextConfig.backup?.keepLast ?? 5);
-  return { exitCode: EXIT_OK, payload: { status: "ok", backup, frameworkVersion: nextManifest.frameworkVersion } };
+  return {
+    exitCode: EXIT_OK,
+    payload: {
+      status: "ok",
+      backup,
+      frameworkVersion: nextManifest.frameworkVersion,
+      accepted: overrideEntries.map((entry) => entry.path)
+    }
+  };
+}
+
+// `sdlc tools-install` (ADR 0007)
+//
+// Cierra el hueco que dejaba `tools-doctor`: decia que faltaba algo, no como
+// conseguirlo. Aqui se reune el inventario con lo que el doctor ya detecta y
+// se produce un plan.
+//
+// DRY-RUN POR DEFECTO, y no es un detalle de ergonomia: instalar software de
+// terceros no puede ser un efecto secundario de pedir un diagnostico. Sin
+// `--apply` se imprime exactamente que se correria y no se ejecuta nada.
+function commandToolsInstall(options) {
+  const target = requireTarget(options);
+  const apply = Boolean(options.apply);
+  const only = options.tool ?? null;
+
+  // Se reutiliza la deteccion de `tools-doctor` en vez de reimplementarla: dos
+  // criterios distintos para "esta instalada" acabarian contestando cosas
+  // distintas sobre el mismo repo, que es exactamente lo que costo caro en
+  // `detectCliLinked`.
+  const doctor = commandToolsDoctor({ ...options, target });
+  const detected = new Map((doctor.payload.tools ?? []).map((tool) => [tool.name, tool.status]));
+
+  const plan = buildInstallPlan(target, { detected, only });
+  if (!plan.ok) {
+    return { exitCode: EXIT_ERROR, payload: { status: "error", ...plan } };
+  }
+
+  const execution = runInstallPlan(target, plan, { apply });
+  const failed = execution.results.filter((result) => result.status === "failed");
+  const pendingRequired = [...plan.installable, ...plan.manualOnly].filter((entry) => entry.required === true);
+
+  return {
+    exitCode: failed.length > 0 ? EXIT_ERROR : EXIT_OK,
+    payload: {
+      status: failed.length > 0 ? "error" : "ok",
+      applied: execution.applied,
+      inventory: plan.path,
+      // Los tres grupos separados: mezclarlos es lo que hacia imposible saber
+      // cuales faltan de verdad y cuales exigen a una persona.
+      installable: plan.installable.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        required: entry.required,
+        purpose: entry.purpose,
+        command: entry.command
+      })),
+      manualOnly: plan.manualOnly,
+      satisfied: plan.satisfied.map((entry) => entry.id),
+      results: execution.results,
+      ...(pendingRequired.length > 0 ? { pendingRequired: pendingRequired.map((entry) => entry.id) } : {}),
+      hint: execution.applied
+        ? "los pasos marcados como manuales siguen pendientes: los hace una persona, no este comando"
+        : "dry-run: nada se ejecuto. Repetir con --apply para instalar lo automatizable."
+    }
+  };
+}
+
+// `sdlc skill-lesson` (ADR 025 del consumidor: skills vivas)
+//
+// Captura el disparador que faltaba: un error, un bloqueo o una tarea que ya
+// se hizo tres veces. Ese conocimiento hoy se pierde en el chat y el siguiente
+// agente tropieza con la misma piedra.
+//
+// Una leccion es EVIDENCIA de que hace falta una skill, no la skill. Promover
+// escribe una propuesta bajo `openspec/changes/` y nunca toca `.github/skills/`
+// (restriccion 1 del ADR 025); aprobar sigue siendo humano.
+function commandSkillLesson(options) {
+  const target = requireTarget(options);
+  const threshold = Number(options.threshold ?? DEFAULT_PROMOTION_THRESHOLD);
+
+  if (options.promote) {
+    const result = promoteLesson(target, String(options.promote), {
+      change: options.change ?? null,
+      threshold,
+      force: Boolean(options.force)
+    });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ERROR, payload: { status: result.ok ? "ok" : "error", ...result } };
+  }
+
+  if (options.reject) {
+    const result = rejectLesson(target, String(options.reject), { reason: options.reason ?? null });
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ERROR, payload: { status: result.ok ? "ok" : "error", ...result } };
+  }
+
+  if (options.record) {
+    const result = recordLesson(target, {
+      type: options.type ?? null,
+      title: options.title ?? (typeof options.record === "string" ? options.record : null),
+      detail: options.detail ?? null,
+      correction: options.correction ?? null,
+      skill: options.skill ?? null
+    });
+    return {
+      exitCode: result.ok ? EXIT_OK : EXIT_ERROR,
+      payload: {
+        status: result.ok ? "ok" : "error",
+        ...result,
+        ...(result.ok && result.repeated
+          ? { hint: `ya habia pasado: van ${result.lesson.occurrences} veces. Con ${threshold} se puede promover a propuesta de skill.` }
+          : {})
+      }
+    };
+  }
+
+  const listed = listLessons(target, { threshold });
+  return {
+    exitCode: listed.ok ? EXIT_OK : EXIT_ERROR,
+    payload: {
+      status: listed.ok ? "ok" : "error",
+      ...listed,
+      hint: "sdlc skill-lesson --record --type <error|blocker|repetition> --title <t> --correction <que hacer la proxima vez> [--skill <id>]"
+    }
+  };
 }
 
 function commandMigrateConfig(options) {
@@ -646,13 +1189,18 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdiet: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]"
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\ninstall: [--mode greenfield|legacy] [--project-name <n>] [--dry-run] [--with-tools <ids|all>]\n         Al terminar OFRECE las herramientas externas (obligatorias y opcionales) con el repo\n         de cada una y su comando. Sin --with-tools no instala ninguna: sigue apto para CI.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
     }
   };
 }
 
 export function run(argv) {
   const parsed = parseArgs(argv);
+  // `--version` se parsea como opcion booleana, no como subcomando, asi que caia
+  // en la ayuda con exit 0 sin decir nunca la version.
+  if (parsed.options.version === true || parsed.command === "version") {
+    return { exitCode: EXIT_OK, payload: { status: "ok", version: FRAMEWORK_VERSION } };
+  }
   switch (parsed.command) {
     case "init":
     case "install":
@@ -687,6 +1235,10 @@ export function run(argv) {
       return commandGovernanceCheck(parsed.options);
     case "tools-doctor":
       return commandToolsDoctor(parsed.options);
+    case "tools-install":
+      return commandToolsInstall(parsed.options);
+    case "skill-lesson":
+      return commandSkillLesson(parsed.options);
     case "pr-body-check":
       return commandPrBodyCheck(parsed.options);
     case "verdict":
@@ -705,18 +1257,51 @@ export function run(argv) {
       };
       return commandSkillPropose(propOpts);
     }
+    case "quality-gate":
+      return commandQualityGate(parsed.options);
+    case "quality-baseline":
+      return commandQualityBaseline(parsed.options);
+    case "coverage-diff":
+      return commandCoverageDiff(parsed.options);
+    case "signoff":
+      return commandSignoff(parsed.options);
+    case "acceptance-verify":
+      return commandAcceptanceVerify(parsed.options);
+    case "red-proof-verify":
+      return commandRedProofVerify(parsed.options);
+    case "change-close":
+      return commandChangeClose(parsed.options);
+    case "adopt":
+      return commandAdopt(parsed.options);
+    case "quality-docs":
+      return commandQualityDocs(parsed.options);
     case "hooks install":
       return commandHooks(parsed.options);
     case "help":
-    default:
+    case null:
+    case undefined:
       return commandHelp();
+    default:
+      // Un subcomando desconocido salia 0 imprimiendo la ayuda: un typo en un
+      // paso de CI se contabilizaba como exito.
+      return {
+        exitCode: EXIT_ERROR,
+        payload: {
+          status: "error",
+          message: `Comando desconocido: ${parsed.command}`,
+          help: commandHelp().payload.message
+        }
+      };
   }
 }
 
-export function main(argv) {
+export async function main(argv) {
   const parsed = parseArgs(argv);
   try {
-    const result = run(argv);
+    // `quality-gate` es asincrono (carga adapters del consumidor por import
+    // dinamico); el resto de comandos sigue siendo sincrono y `await` sobre un
+    // valor plano no cambia su comportamiento.
+    const result = await run(argv);
     print(result.payload, parsed.json);
     process.exitCode = result.exitCode;
   } catch (error) {

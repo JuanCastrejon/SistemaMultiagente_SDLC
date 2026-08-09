@@ -101,10 +101,11 @@ npm install -g headroom
 pwsh -NonInteractive -File scripts/headroom-start.ps1
 ```
 
-**Registrar autoarranque en Windows** (una sola vez por máquina — acto del usuario, no del agente):
+**Registrar autoarranque en Windows** (una sola vez por máquina — acto del usuario, no del agente). El script es dry-run por defecto: sin `-Apply` solo imprime el plan.
 
 ```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Json
+pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Apply
 Get-ScheduledTask -TaskName "{{project.slug}}-Headroom-Autostart"
 ```
 

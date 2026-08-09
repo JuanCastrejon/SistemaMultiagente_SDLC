@@ -122,14 +122,25 @@ const localGatePortable = runPowerShellScript(
   greenfield
 );
 assert.match(localGatePortable, /Local gate OK/);
+// Los validate:* son contrato del consumidor, no artefactos del framework: se
+// reportan como no configurados y no abortan el gate.
+assert.match(localGatePortable, /Scripts no configurados en este consumidor/);
 
+// -Strict solo exige lo que el framework SI entrega. En un repo recien
+// instalado eso significa que falla por la dependencia ausente del framework,
+// no por los validate:* que el consumidor todavia no escribio.
 const localGateStrict = runPowerShellScriptStatus(
   path.join(greenfield, "scripts", "validate-local-gate.ps1"),
   ["-SkipInstall", "-SkipBootstrap", "-Strict"],
   greenfield
 );
 assert.notEqual(localGateStrict.status, 0);
-assert.match(`${localGateStrict.stdout}\n${localGateStrict.stderr}`, /modo -Strict/);
+const strictOutput = `${localGateStrict.stdout}\n${localGateStrict.stderr}`;
+assert.match(strictOutput, /Dependencia sistema-multiagente-sdlc ausente/);
+assert.ok(
+  !/Script npm ausente/.test(strictOutput),
+  "-Strict no debe abortar por un validate:* que el framework nunca entrega"
+);
 
 const toolsDoctor = runStatus(["tools-doctor", "--target", greenfield, "--profile", "full", "--json"]);
 assert.ok([0, 2].includes(toolsDoctor.status));
@@ -198,9 +209,17 @@ assert.deepEqual(
   readGolden("register-task-dryrun.json")
 );
 
+// Un repo recien instalado no tiene NINGUNA muestra de calibracion. Antes esto
+// devolvia agreement 1.0 y status "ok": concordancia perfecta sobre el conjunto
+// vacio, el mismo falso verde por denominador vacio que los gates de calidad
+// rechazan. Ahora dice lo que realmente sabe.
 const calibrationOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "compute-calibration.ps1"), ["-Json"], greenfield));
-assert.equal(calibrationOutput.status, "ok");
-assert.equal(typeof calibrationOutput.agreement, "number");
+assert.equal(calibrationOutput.status, "not-measured");
+assert.equal(calibrationOutput.agreement, null, "sin muestras no hay concordancia que reportar");
+assert.equal(calibrationOutput.scored, 0);
+assert.equal(calibrationOutput.graduation_threshold, 0.8);
+assert.equal(calibrationOutput.freeze_threshold, 0.75);
+assert.match(calibrationOutput.interpretation, /falta evidencia/);
 
 const bootstrapSkillsOutput = JSON.parse(runPowerShellScript(path.join(greenfield, "scripts", "bootstrap-agent-skills.ps1"), ["-SkipExternalInstall", "-Json"], greenfield));
 assert.equal(bootstrapSkillsOutput.status, "ok");
@@ -278,5 +297,318 @@ assert.equal(conflictResult.status, 2);
 assert.ok(fs.existsSync(path.join(conflict, ".sdlc", "patch-plan.json")));
 
 run(["prune-backups", "--target", legacy100, "--keep", "1", "--json"]);
+
+// Deteccion de package manager: el harness ya no asume pnpm.
+const { detectPackageManager } = await import(
+  new URL("../src/harness.js", import.meta.url).href
+);
+
+const pmNpm = makeRepo("pm-npm");
+fs.writeFileSync(
+  path.join(pmNpm, "package.json"),
+  JSON.stringify({ name: "pm-npm", packageManager: "npm@11.9.0" }, null, 2),
+  "utf8"
+);
+const detectedNpm = detectPackageManager(pmNpm);
+assert.equal(detectedNpm.name, "npm");
+assert.equal(detectedNpm.source, "packageManager");
+assert.deepEqual(detectedNpm.runScript("validate:drift"), ["npm", ["run", "--if-present", "validate:drift"]]);
+
+const pmYarnLock = makeRepo("pm-yarn-lock");
+fs.writeFileSync(path.join(pmYarnLock, "yarn.lock"), "", "utf8");
+const detectedYarn = detectPackageManager(pmYarnLock);
+assert.equal(detectedYarn.name, "yarn");
+assert.equal(detectedYarn.source, "yarn.lock");
+
+const pmDefault = makeRepo("pm-default");
+const detectedDefault = detectPackageManager(pmDefault);
+assert.equal(detectedDefault.name, "pnpm");
+assert.equal(detectedDefault.source, "default");
+assert.deepEqual(detectedDefault.runScript("validate:drift"), [
+  "corepack",
+  ["pnpm", "run", "validate:drift", "--if-present"]
+]);
+
+// tools-doctor reporta el package manager detectado en vez de exigir pnpm.
+const pmNpmInstalled = makeRepo("pm-npm-installed");
+fs.writeFileSync(
+  path.join(pmNpmInstalled, "package.json"),
+  JSON.stringify({ name: "pm-npm-installed", packageManager: "npm@11.9.0" }, null, 2),
+  "utf8"
+);
+run(["install", "--target", pmNpmInstalled, "--mode", "greenfield", "--project-name", "PM npm", "--json"]);
+const npmToolsDoctorOutput = JSON.parse(
+  runStatus(["tools-doctor", "--target", pmNpmInstalled, "--profile", "full", "--json"]).stdout
+);
+assert.equal(npmToolsDoctorOutput.packageManager.name, "npm");
+const packageManagerTool = npmToolsDoctorOutput.tools.find((tool) => tool.name === "package-manager");
+assert.ok(packageManagerTool, "tools-doctor debe reportar el tool package-manager");
+assert.equal(packageManagerTool.manager, "npm");
+assert.ok(!npmToolsDoctorOutput.findings.some((finding) => finding.code === "tool-pnpm"));
+
+// Los scripts de headroom que documenta el README ahora se entregan de verdad.
+assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "headroom-start.ps1")));
+assert.ok(fs.existsSync(path.join(pmNpmInstalled, "scripts", "register-headroom-task.ps1")));
+
+// Gate fantasma: un paso BLOCKING cuyo script no existe se reportaba pass
+// porque npm/pnpm salen 0 con --if-present. Ahora es not-configured.
+const verdictOutput = JSON.parse(
+  runStatus(["verdict", "--target", pmNpmInstalled, "--json"]).stdout
+);
+assert.ok(Array.isArray(verdictOutput.notConfigured));
+assert.ok(verdictOutput.notConfigured.includes("control-plane"));
+const controlPlaneStep = verdictOutput.steps.find((step) => step.key === "control-plane");
+assert.equal(controlPlaneStep.status, "not-configured");
+assert.equal(controlPlaneStep.exitCode, null);
+assert.ok(!verdictOutput.steps.some((step) => step.status === "pass"));
+assert.deepEqual(verdictOutput.blockers, []);
+
+// El interpolador preserva las expresiones de GitHub Actions: sin esto, cada
+// workflow instalado perdia sus ${{ ... }} y llegaba roto al consumidor.
+const { interpolate } = await import(new URL("../src/template-loader.js", import.meta.url).href);
+const workflowSample = "on:\n  push:\n    branches: [{{gitFlow.integrationBranch}}]\nname: x-${{ github.sha }}\nrun: echo ${{ steps.a.outputs.b }}";
+const interpolated = interpolate(workflowSample, { gitFlow: { integrationBranch: "develop" } });
+assert.match(interpolated, /branches: \[develop\]/);
+assert.match(interpolated, /x-\$\{\{ github\.sha \}\}/);
+assert.match(interpolated, /echo \$\{\{ steps\.a\.outputs\.b \}\}/);
+
+// El workflow arbitro llega instalado y con sus expresiones intactas.
+const installedWorkflow = fs.readFileSync(path.join(greenfield, ".github", "workflows", "quality-verify.yml"), "utf8");
+assert.match(installedWorkflow, /\$\{\{ github\.ref \}\}/);
+assert.match(installedWorkflow, /branches: \[develop, main\]/);
+assert.ok(fs.existsSync(path.join(greenfield, "scripts", "validate-spec-boundary.mjs")));
+assert.ok(fs.existsSync(path.join(greenfield, "quality-contract.yaml")));
+
+// phase-gate ahora ABRE la evidencia en vez de solo comprobar que exista.
+function writeEvidence(repo, slice, phase, body) {
+  const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${phase}.yaml`), body, "utf8");
+}
+
+// Evidencia ilegible: antes pasaba porque el archivo existia.
+writeEvidence(greenfield, "slice-ev", "F1", "esto: no: es: yaml: valido:\n  - [\n");
+const corruptGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev", "--json"])
+);
+assert.equal(corruptGate.status, "blocked");
+assert.ok(corruptGate.blockers.some((blocker) => blocker.startsWith("evidence-unparseable")));
+
+// Evidencia con forma invalida segun el schema que el framework ya instalaba.
+writeEvidence(greenfield, "slice-ev2", "F1", "phase: 123\nslice: []\n");
+const invalidGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev2", "--json"])
+);
+assert.equal(invalidGate.status, "blocked");
+assert.ok(invalidGate.blockers.some((blocker) => blocker.startsWith("evidence-invalid")));
+
+// Evidencia valida: el gate deja de bloquear por evidencia.
+const validEvidence = [
+  "phase: F1",
+  "slice: slice-ev3",
+  "agent_id: analista",
+  "started_at: 2026-08-06T00:00:00Z",
+  "outputs: []",
+  "validators_run: []"
+].join("\n");
+writeEvidence(greenfield, "slice-ev3", "F1", validEvidence);
+const validGate = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F1", "--slice", "slice-ev3", "--json"])
+);
+assert.equal(validGate.evidence.valid, true);
+assert.ok(!validGate.blockers.some((blocker) => blocker.startsWith("evidence-")));
+
+// Fase con gate humano: la firma no puede faltar, y si es texto libre sin
+// review verificable se reporta como tal.
+writeEvidence(
+  greenfield,
+  "slice-hg",
+  "F13",
+  ["phase: F13", "slice: slice-hg", "agent_id: pm", "started_at: 2026-08-06T00:00:00Z", "outputs: []", "validators_run: []"].join("\n")
+);
+const humanGateMissing = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg", "--json"])
+);
+assert.ok(humanGateMissing.blockers.includes("human-gate-signoff-missing"));
+
+writeEvidence(
+  greenfield,
+  "slice-hg2",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg2",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien"
+  ].join("\n")
+);
+const humanGateUnverifiable = JSON.parse(
+  run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
+);
+assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
+assert.ok(humanGateUnverifiable.warnings.includes("human-gate-signoff-unverifiable"));
+
+// tools-doctor detecta scripts de gate que resuelven @latest en cada corrida.
+const floatingRepo = makeRepo("floating-tooling");
+fs.writeFileSync(
+  path.join(floatingRepo, "package.json"),
+  JSON.stringify(
+    {
+      name: "floating-tooling",
+      packageManager: "npm@11.9.0",
+      scripts: {
+        "validate:openspec": "npx @fission-ai/openspec@latest validate --all",
+        "validate:drift": "node scripts/validate-drift.mjs"
+      }
+    },
+    null,
+    2
+  ),
+  "utf8"
+);
+run(["install", "--target", floatingRepo, "--mode", "greenfield", "--project-name", "Floating", "--json"]);
+const floatingDoctor = JSON.parse(
+  runStatus(["tools-doctor", "--target", floatingRepo, "--profile", "full", "--json"]).stdout
+);
+const pinnedTool = floatingDoctor.tools.find((tool) => tool.name === "pinned-tooling");
+assert.equal(pinnedTool.status, "warning");
+assert.deepEqual(pinnedTool.floatingScripts, ["validate:openspec"]);
+assert.ok(floatingDoctor.findings.some((f) => f.code === "tool-pinned-tooling"));
+
+// Inyeccion de shell: en Windows el harness ejecuta via cmd.exe por obligacion,
+// asi que los tokens con metacaracteres se rechazan en vez de escaparse.
+const { assertShellSafeToken } = await import(new URL("../src/harness.js", import.meta.url).href);
+assert.equal(assertShellSafeToken("validate:drift", "argumento"), "validate:drift");
+assert.equal(assertShellSafeToken("npm", "comando"), "npm");
+for (const payload of [
+  "validate:drift & calc.exe",
+  "x | whoami",
+  "a > out.txt",
+  "b $(id)",
+  "c `id`",
+  'd " & del',
+  "e %PATH%",
+  "f ; rm -rf /"
+]) {
+  assert.throws(
+    () => assertShellSafeToken(payload, "argumento"),
+    (error) => error.code === "UNSAFE_COMMAND_TOKEN",
+    `deberia rechazar: ${payload}`
+  );
+}
+
+// Las migraciones pueden leer el disco del consumidor, no solo los archivos
+// recien renderizados desde templates/.
+const { applyMigrations: applyMigrationsFn } = await import(
+  new URL("../src/migrations.js", import.meta.url).href
+);
+const migrationProbe = { seen: null, existed: null, hadContext: false };
+const migrationsResult = applyMigrationsFn(
+  { "a.md": "renderizado" },
+  [
+    {
+      version: "test",
+      up: (files, context) => {
+        migrationProbe.hadContext = Boolean(context && typeof context.readDisk === "function");
+        migrationProbe.seen = context.readDisk("README.md");
+        migrationProbe.existed = context.existsOnDisk("README.md");
+        return { "b.md": `desde disco: ${String(migrationProbe.seen).slice(0, 12)}` };
+      }
+    }
+  ],
+  {
+    target: greenfield,
+    config: greenfieldConfig,
+    readDisk: (relativePath) => {
+      const absolute = path.join(greenfield, relativePath);
+      return fs.existsSync(absolute) ? fs.readFileSync(absolute, "utf8").replace(/\r\n/g, "\n") : null;
+    },
+    existsOnDisk: (relativePath) => fs.existsSync(path.join(greenfield, relativePath))
+  }
+);
+assert.ok(migrationProbe.hadContext, "la migracion debe recibir contexto de disco");
+assert.equal(migrationProbe.existed, true);
+assert.ok(typeof migrationProbe.seen === "string" && migrationProbe.seen.length > 0);
+assert.equal(migrationsResult["a.md"], "renderizado");
+assert.ok(migrationsResult["b.md"].startsWith("desde disco: "));
+
+// Una migracion que ignora el contexto (todas las historicas) sigue funcionando.
+const legacyStyle = applyMigrationsFn({ "a.md": "x" }, [{ version: "legacy", up: (files) => ({ "c.md": files["a.md"] }) }]);
+assert.equal(legacyStyle["c.md"], "x");
+
+// Contrato de CLI: --version informa la version y un comando desconocido falla.
+const versionOutput = JSON.parse(run(["--version", "--json"]));
+assert.equal(versionOutput.version, FRAMEWORK_VERSION);
+const unknownCommand = runStatus(["comando-que-no-existe", "--json"]);
+assert.equal(unknownCommand.status, 1);
+assert.match(JSON.parse(unknownCommand.stdout).message, /Comando desconocido/);
+assert.equal(runStatus(["--json"]).status, 0);
+
+// Entregabilidad: un archivo gestionado con personalizacion local bloqueaba el
+// upgrade COMPLETO. Ahora se puede aceptar por archivo y queda registrado.
+const overrideRepo = makeRepo("upgrade-accept-managed");
+fs.copyFileSync(path.join(repoRoot, "examples", "task-manager-saas", "README.md"), path.join(overrideRepo, "README.md"));
+run(["install", "--target", overrideRepo, "--mode", "greenfield", "--project-name", "Override Repo", "--json"]);
+
+const customizedPath = path.join(overrideRepo, ".github", "AGENTS.md");
+const customizedContent = `${fs.readFileSync(customizedPath, "utf8")}\n\n## Personalizacion local\n\nRegla propia del consumidor.\n`;
+fs.writeFileSync(customizedPath, customizedContent, "utf8");
+
+// Sin flags sigue bloqueando, pero ahora dice que el conflicto es aceptable.
+const blockedUpgrade = runStatus(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"]);
+assert.equal(blockedUpgrade.status, 2);
+const blockedPayload = JSON.parse(blockedUpgrade.stdout);
+assert.equal(blockedPayload.status, "conflict");
+assert.ok(blockedPayload.acceptable.includes(".github/AGENTS.md"));
+
+// Aceptar una ruta inexistente en el conflicto es un error de uso, no un no-op.
+const badAccept = runStatus([
+  "upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION,
+  "--accept-managed", "docs/no-existe.md", "--json"
+]);
+assert.equal(badAccept.status, 1);
+assert.ok(JSON.parse(badAccept.stdout).unknownAccepts.includes("docs/no-existe.md"));
+
+// Con --accept-managed el upgrade completa y el archivo local se conserva.
+const acceptedUpgrade = JSON.parse(run([
+  "upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION,
+  "--accept-managed", ".github/AGENTS.md", "--json"
+]));
+assert.equal(acceptedUpgrade.status, "ok");
+assert.deepEqual(acceptedUpgrade.accepted, [".github/AGENTS.md"]);
+assert.equal(fs.readFileSync(customizedPath, "utf8"), customizedContent);
+assert.ok(fs.existsSync(path.join(overrideRepo, ".sdlc", "overrides.yaml")));
+
+// doctor deja de reportarlo como drift anonimo y lo reporta como override.
+const overrideDoctor = JSON.parse(runStatus(["doctor", "--target", overrideRepo, "--json"]).stdout);
+assert.ok(overrideDoctor.findings.some((f) => f.code === "managed-file-override" && f.path === ".github/AGENTS.md"));
+assert.ok(!overrideDoctor.findings.some((f) => f.code === "managed-file-drift" && f.path === ".github/AGENTS.md"));
+
+// Un segundo upgrade ya no pide aceptar de nuevo lo mismo.
+assert.equal(JSON.parse(run(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"])).status, "ok");
+
+// Si el archivo cambia despues de aceptarlo, el override queda stale.
+fs.writeFileSync(customizedPath, `${customizedContent}\nOtra edicion posterior.\n`, "utf8");
+const staleDoctor = JSON.parse(runStatus(["doctor", "--target", overrideRepo, "--json"]).stdout);
+assert.ok(staleDoctor.findings.some((f) => f.code === "managed-file-override-stale" && f.path === ".github/AGENTS.md"));
+
+// Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd.
+fs.writeFileSync(
+  path.join(pmNpmInstalled, "scripts", "obsidian-memory.config.local.json"),
+  JSON.stringify({ vaultRoot: ".sdlc/vault", projectSlug: "pm-npm-installed" }, null, 2),
+  "utf8"
+);
+fs.mkdirSync(path.join(pmNpmInstalled, ".sdlc", "vault"), { recursive: true });
+const runtimeWithVault = JSON.parse(
+  runStatus(["validate-runtime", "--target", pmNpmInstalled, "--json"]).stdout
+);
+assert.equal(runtimeWithVault.runtime.vault.root, path.join(pmNpmInstalled, ".sdlc", "vault"));
+assert.equal(runtimeWithVault.runtime.vault.exists, true);
+assert.ok(!runtimeWithVault.findings.some((finding) => finding.code === "vault-missing"));
 
 console.log("Regression suite: PASS");

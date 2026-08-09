@@ -62,6 +62,9 @@ function scoreTask(task, skillContent) {
     description: task.description,
     pass,
     weight: task.weight ?? 1,
+    // `train` por defecto: una tarea sin declarar no puede colarse como
+    // validacion held-out. El held-out se declara, no se asume.
+    split: task.split === "val" ? "val" : "train",
     presentFields,
     missingFields,
     wronglyPresentFields,
@@ -128,25 +131,104 @@ export function commandSkillEval(options) {
     });
   }
 
-  const overallScore = allResults
-    .filter(r => !r.error && Array.isArray(r.tasks) && r.tasks.length > 0)
-    .reduce((acc, r) => {
-      acc.totalWeight += r.tasks.reduce((s, t) => s + (t.weight ?? 1), 0);
-      acc.passedWeight += r.tasks.filter(t => t.pass).reduce((s, t) => s + (t.weight ?? 1), 0);
+  // SkillOpt (microsoft/SkillOpt) acepta una edicion solo cuando mejora
+  // ESTRICTAMENTE un score de VALIDACION HELD-OUT. Ese "held-out" no es un
+  // detalle: si la edicion se deriva de las mismas tareas contra las que se
+  // valida, el gate se esta midiendo a si mismo — puede pasar por haber
+  // memorizado el conjunto, no por haber mejorado. Es un control que no puede
+  // fallar por la razon correcta.
+  //
+  // Aqui las tareas declaran `split: train|val`. Sin `val` no hay held-out, y
+  // en ese caso el gate se reporta VACUO en vez de dar un numero que parece
+  // una validacion.
+  const scored = allResults.filter(r => !r.error && Array.isArray(r.tasks) && r.tasks.length > 0);
+  const weigh = (tasks) => tasks.reduce(
+    (acc, task) => {
+      const weight = task.weight ?? 1;
+      acc.totalWeight += weight;
+      if (task.pass) acc.passedWeight += weight;
       return acc;
-    }, { totalWeight: 0, passedWeight: 0 });
+    },
+    { totalWeight: 0, passedWeight: 0 }
+  );
+  const ratio = ({ passedWeight, totalWeight }) => (totalWeight > 0 ? passedWeight / totalWeight : 0);
 
-  const score = overallScore.totalWeight > 0
-    ? overallScore.passedWeight / overallScore.totalWeight
-    : 0;
+  const allTasks = scored.flatMap(r => r.tasks);
+  const trainTasks = allTasks.filter(task => (task.split ?? "train") === "train");
+  const valTasks = allTasks.filter(task => task.split === "val");
 
+  const overallScore = weigh(allTasks);
+  const score = ratio(overallScore);
+  const trainWeighed = weigh(trainTasks);
+  const valWeighed = weigh(valTasks);
+
+  const heldOut = valTasks.length > 0;
   const payload = {
     status: "ok",
     skill: skillName,
     score,
     scorePercent: Math.round(score * 100),
+    // ADVERTENCIA ESTRUCTURAL, no un detalle de implementacion.
+    //
+    // SkillOpt puntua ROLLOUTS: el agente ejecuta tareas y se mide su
+    // comportamiento (`hard`/`soft` por trayectoria). Aqui no hay rollout:
+    // `scoreTask` recibe el PROPIO documento de skill como si fuera la salida,
+    // y comprueba si contiene ciertas cadenas. Como el optimizador edita ese
+    // mismo documento, la recompensa es trivialmente jugable: reproducido,
+    // pegar los `expected_fields` en el markdown lleva el score held-out de
+    // 0% a 100% y aprueba el gate de mejora estricta sin ensenarle nada al
+    // agente.
+    //
+    // Mientras eso siga asi, este score NO puede presentarse como validacion.
+    // Se declara igual que `red-proof-verify` declara la suya: el numero es
+    // real, lo que no es real es lo que parece demostrar.
+    scoringMode: "document-presence",
+    authoritative: false,
+    // QUE ES ESTO Y QUE NO ES. Este comando es un LINT local del documento de
+    // skill: comprueba que menciona lo que su eval set declara. Util como
+    // pre-chequeo barato antes de abrir un change, y nada mas.
+    //
+    // NO es una implementacion de SkillOpt, y este framework no aspira a serlo:
+    // el optimizador real es la herramienta externa (`sdlc tools-install --tool
+    // skillopt`), que ejecuta rollouts, puntua comportamiento y acepta ediciones
+    // contra una validacion held-out. Lo que aporta este repo es la gobernanza
+    // alrededor —propuestas bajo openspec/changes, gate humano en serie, ledger
+    // de rechazos (ADR 025)—, no el motor.
+    role: "lint local del documento; el optimizador real es microsoft/SkillOpt",
+    limitations: [
+      "no hay rollout: no se ejecuta al agente, se inspecciona el texto de la skill",
+      "la recompensa es jugable por construccion — insertar los expected_fields en el documento sube el score sin cambiar comportamiento",
+      "para optimizar de verdad, instalar SkillOpt: `sdlc tools-install --tool skillopt --apply`"
+    ],
+    // El score que el gate debe leer es el de validacion, no el global.
+    splits: {
+      train: { tasks: trainTasks.length, score: ratio(trainWeighed), scorePercent: Math.round(ratio(trainWeighed) * 100) },
+      val: { tasks: valTasks.length, score: ratio(valWeighed), scorePercent: Math.round(ratio(valWeighed) * 100) }
+    },
+    heldOut,
+    // NO se emite `gateScorePercent` mientras la senal sea de presencia de
+    // texto. Declarar que un numero no es autoritativo y entregarlo igual con
+    // exit 0 es pedirle al consumidor que lea la letra chica: aguas abajo se
+    // usa el numero, no la advertencia. Un control que no puede fallar por la
+    // razon correcta no debe ofrecer la cifra con la que se aprueba.
+    //
+    // El score sigue publicandose para diagnostico (`score`, `splits`), pero
+    // el campo que un gate leeria solo aparece cuando exista rollout real.
+    ...(heldOut
+      ? {
+          gate: "not-authoritative",
+          gateReason:
+            "hay held-out, pero el score mide presencia de texto en el propio documento que se edita: no puede usarse para aprobar una edicion. Falta la fase Rollout (ejecutar al agente y puntuar su comportamiento)."
+        }
+      : {
+          gate: "vacuous",
+          gateReason:
+            "ninguna tarea declara `split: val`: no hay conjunto held-out, asi que un score mejor puede venir de haber memorizado las mismas tareas que motivaron la edicion. Declarar tareas de validacion antes de usar este score como gate."
+        }),
     evalSets: allResults,
-    summary: `${skillName}: score ${Math.round(score * 100)}% (${overallScore.passedWeight}/${overallScore.totalWeight} weighted tasks passed)`,
+    summary: heldOut
+      ? `${skillName}: score ${Math.round(score * 100)}% global, ${Math.round(ratio(valWeighed) * 100)}% en validacion held-out (${valTasks.length} tareas)`
+      : `${skillName}: score ${Math.round(score * 100)}% (${overallScore.passedWeight}/${overallScore.totalWeight}) — SIN held-out: el gate seria vacuo`
   };
 
   return { exitCode: EXIT_OK, payload };
@@ -164,6 +246,14 @@ export function commandSkillPropose(options) {
   const changeName = options.change ?? options._positionals?.[2];
   const intent = options.intent ?? options.message ?? "";
   const blastRadiusCap = Number(options["blast-radius"] ?? 3);
+  // `learning_rate` en SkillOpt NO es un factor de escala: es el numero MAXIMO
+  // de ediciones que un ciclo puede aplicar (su propia analogia es el gradient
+  // clipping), y se aplica en la fase Select, que rankea y RECORTA. Nuestro
+  // cap heredado de ADR-023 contaba secciones/archivos, que es otra cosa: diez
+  // ediciones dentro de una misma seccion pasaban el cap y siguen siendo diez
+  // ediciones. Se declaran los dos, porque acotan dimensiones distintas.
+  const maxEdits = Number(options["learning-rate"] ?? options["max-edits"] ?? 5);
+  const lrScheduler = String(options["lr-scheduler"] ?? "constant");
 
   if (!skillName || !changeName) {
     return {
@@ -205,6 +295,9 @@ export function commandSkillPropose(options) {
     `**Skill canónica:** \`.github/skills/${skillName}/SKILL.md\``,
     `**Intención:** ${intent || "(describir el objetivo del cambio)"}`,
     `**Blast-radius cap:** máximo ${blastRadiusCap} secciones`,
+    `**Learning rate (max edits):** máximo ${maxEdits} ediciones \`add\`/\`delete\`/\`replace\` en este ciclo (scheduler: ${lrScheduler}).`,
+    `Es el cap de SkillOpt y acota una dimensión distinta del blast-radius: diez ediciones dentro`,
+    `de una misma sección pasan el cap de secciones y siguen siendo diez ediciones.`,
     ``,
     `## Instrucciones`,
     ``,
@@ -212,7 +305,11 @@ export function commandSkillPropose(options) {
     `2. Ejecutar \`sdlc skill-eval ${skillName}\` para obtener el score base del canónico.`,
     `3. Aplicar el diff localmente a una copia temporal y re-evaluar para obtener el score de la propuesta.`,
     `4. Completar la sección "Score" con ambos valores.`,
-    `5. Someter el change al gate humano: el validador aprueba si score_propuesta >= score_base (no-regresión).`,
+    `5. Someter el change al gate humano. La regla es MEJORA ESTRICTA sobre el conjunto held-out:`,
+    `   apruébese solo si score_val_propuesta > score_val_base. No basta \`>=\`: un empate significa`,
+    `   que la edición no demostró nada, y aceptarlo deja entrar cambios que no mejoran.`,
+    `   Si el eval set no declara tareas \`split: val\`, NO hay held-out y el gate es vacuo:`,
+    `   el score se estaría midiendo contra las mismas tareas que motivaron la edición.`,
     `6. NUNCA editar \`.github/skills/${skillName}/SKILL.md\` directamente; solo via este change.`,
     ``,
     `## Diff propuesto`,

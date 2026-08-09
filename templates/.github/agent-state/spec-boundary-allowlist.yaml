@@ -1,0 +1,21 @@
+# Excepciones a la frontera de especificacion.
+#
+# Cada entrada declara que un cambio en una ruta protegida es legitimo. La
+# proteccion existe porque el agente no puede reescribir el criterio con el que
+# se le juzga; una excepcion sin revision humana derrota el control entero.
+#
+# Formato:
+#   - path: openspec/specs/cobros/spec.md
+#     reason: correccion de una regla mal modelada detectada en F9
+#     approved_by: <login de la lista de mantenedores>
+#     review_id: <id del review que la aprobo>
+#     expires_at: 2026-12-31T00:00:00Z
+#
+# Reglas:
+#   1. `path` es exacto, no un glob: una excepcion amplia es una puerta abierta.
+#   2. `approved_by` debe estar en la lista de mantenedores del repo.
+#   3. Toda entrada caduca. Sin `expires_at`, la excepcion se vuelve permanente
+#      por olvido, que es como mueren estos controles.
+
+version: 1
+allowlist: []
