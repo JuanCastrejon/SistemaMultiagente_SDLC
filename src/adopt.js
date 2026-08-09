@@ -92,15 +92,36 @@ function git(args, cwd) {
   return { ok: result.status === 0, stdout: (result.stdout ?? "").trim() };
 }
 
+// La rama de integracion no es cosmetica: `gitFlow.integrationBranch` alimenta
+// el `BASE` contra el que el guard de frontera compara el PR y la comprobacion
+// de ancestria de `change-close`. Apuntar a la rama equivocada no rompe nada de
+// forma visible -- produce un diff contra otra base, que es peor.
+//
+// El orden de respaldo pone `develop` antes que `main` para coincidir con
+// `resolveBase` del guard (templates/scripts/validate-spec-boundary.mjs) y con
+// el default de `defaultConfig`. Antes era el contrario: dos piezas del mismo
+// framework con precedencias opuestas sobre el mismo repo.
+//
+// `origin/HEAD` sigue mandando cuando existe, porque es lo que el repo DECLARA
+// como rama por defecto. Pero en un repo gitflow suele apuntar a `main` mientras
+// la integracion ocurre en `develop`, asi que cuando hay mas candidatas se
+// devuelven todas: elegir en silencio entre alternativas es como se cuela una
+// base equivocada.
 function detectIntegrationBranch(target) {
+  const FALLBACK_ORDER = ["develop", "main", "master"];
+  const existing = FALLBACK_ORDER.filter(
+    (candidate) => git(["rev-parse", "--verify", "--quiet", `origin/${candidate}`], target).ok
+  );
+
   const remoteHead = git(["symbolic-ref", "refs/remotes/origin/HEAD"], target);
   if (remoteHead.ok && remoteHead.stdout) {
-    return remoteHead.stdout.replace("refs/remotes/origin/", "");
+    const declared = remoteHead.stdout.replace("refs/remotes/origin/", "");
+    return { branch: declared, source: "origin/HEAD", alternatives: existing.filter((name) => name !== declared) };
   }
-  for (const candidate of ["main", "develop", "master"]) {
-    if (git(["rev-parse", "--verify", "--quiet", `origin/${candidate}`], target).ok) return candidate;
+  if (existing.length > 0) {
+    return { branch: existing[0], source: "rama remota existente", alternatives: existing.slice(1) };
   }
-  return "main";
+  return { branch: "main", source: "default sin remoto resoluble", alternatives: [] };
 }
 
 function slugFromName(name) {
@@ -148,8 +169,10 @@ export function commandAdopt(options = {}) {
   // 2. .sdlc/config.json minimo, SIN inventar superficies: un repo maduro
   // tiene su propio layout, no apps/api ni apps/web de ejemplo (ver P6).
   const configPath = path.join(target, ".sdlc", "config.json");
+  let integrationBranch = null;
   if (!pathExists(configPath)) {
     const projectName = options["project-name"] ?? packageJson.name ?? path.basename(target);
+    integrationBranch = detectIntegrationBranch(target);
     const config = {
       $schema: "./schemas/sdlc.config.schema.json",
       schemaVersion: 1,
@@ -162,7 +185,7 @@ export function commandAdopt(options = {}) {
       // opcional, se omite hasta que el consumidor declare firmantes reales.
       governance: { threatModel: "single-maintainer" },
       gitFlow: {
-        integrationBranch: detectIntegrationBranch(target),
+        integrationBranch: integrationBranch.branch,
         stableBranch: "main",
         branchPrefixes: ["feature/", "fix/", "docs/"]
       },
@@ -195,12 +218,16 @@ export function commandAdopt(options = {}) {
   const verbatimFiles = ["phase-contract.yaml", path.join("schemas", "phase-evidence.schema.json")];
   for (const relativePath of verbatimFiles) {
     const destination = path.join(target, relativePath);
+    // Se reporta en POSIX siempre. `path.join` usa el separador del sistema, y
+    // en Windows el payload mezclaba `schemas\phase-evidence.schema.json` con
+    // rutas de barra normal en la misma lista JSON.
+    const reported = relativePath.split(path.sep).join("/");
     if (pathExists(destination)) {
-      skipped.push(`${relativePath} (ya existe)`);
+      skipped.push(`${reported} (ya existe)`);
       continue;
     }
     writeText(destination, fs.readFileSync(path.join(moduleRoot, relativePath), "utf8"));
-    created.push(relativePath);
+    created.push(reported);
   }
 
   const cli = detectCliLinked(target);
@@ -212,7 +239,26 @@ export function commandAdopt(options = {}) {
       message: "adopt es aditivo: nunca sobreescribe lo que ya existe. Correrlo de nuevo despues de editar a mano es seguro.",
       created,
       skipped,
-      cli
+      cli,
+      // La rama de integracion decide contra que base compara el guard de
+      // frontera. Cuando se eligio entre varias candidatas hay que decirlo:
+      // en un repo gitflow `origin/HEAD` suele apuntar a `main` mientras la
+      // integracion ocurre en `develop`, y elegir en silencio es como se cuela
+      // una base equivocada que nadie revisa.
+      ...(integrationBranch
+        ? {
+            gitFlow: {
+              integrationBranch: integrationBranch.branch,
+              detectedFrom: integrationBranch.source,
+              alternatives: integrationBranch.alternatives,
+              ...(integrationBranch.alternatives.length > 0
+                ? {
+                    hint: `tambien existe(n) origin/${integrationBranch.alternatives.join(", origin/")}: si la integracion real de este repo ocurre ahi, corregir gitFlow.integrationBranch en .sdlc/config.json antes de correr el guard`
+                  }
+                : {})
+            }
+          }
+        : {})
     }
   };
 }

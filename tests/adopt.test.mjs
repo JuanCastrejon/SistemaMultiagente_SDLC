@@ -185,6 +185,45 @@ assert.match(migratedPackageJson.devDependencies["sistema-multiagente-sdlc"], /^
 
 console.log("adopt e2e (migracion file:): PASS");
 
+// --- rama de integracion: elegir en silencio entre candidatas ---------------
+// `gitFlow.integrationBranch` decide contra que BASE compara el guard de
+// frontera y la ancestria de change-close. En un repo gitflow `origin/HEAD`
+// suele apuntar a `main` mientras la integracion real ocurre en `develop`
+// (es el caso del repo padre), asi que la eleccion tiene que verse.
+const gitflowTarget = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-adopt-gitflow-")), "consumidor");
+fs.mkdirSync(gitflowTarget, { recursive: true });
+fs.writeFileSync(path.join(gitflowTarget, "package.json"), JSON.stringify({ name: "gitflow-demo" }, null, 2), "utf8");
+execFileSync("git", ["init", "--quiet"], { cwd: gitflowTarget });
+execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: gitflowTarget });
+execFileSync("git", ["config", "user.name", "Test"], { cwd: gitflowTarget });
+execFileSync("git", ["add", "-A"], { cwd: gitflowTarget });
+execFileSync("git", ["commit", "--quiet", "-m", "base"], { cwd: gitflowTarget });
+execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: gitflowTarget });
+execFileSync("git", ["update-ref", "refs/remotes/origin/develop", "HEAD"], { cwd: gitflowTarget });
+execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], { cwd: gitflowTarget });
+
+const gitflowResult = commandAdopt({ target: gitflowTarget });
+assert.equal(gitflowResult.exitCode, 0);
+assert.equal(gitflowResult.payload.gitFlow.integrationBranch, "main", "origin/HEAD manda cuando existe: es lo que el repo declara");
+assert.equal(gitflowResult.payload.gitFlow.detectedFrom, "origin/HEAD");
+assert.deepEqual(
+  gitflowResult.payload.gitFlow.alternatives,
+  ["develop"],
+  "si habia otra candidata hay que decirlo: una base equivocada no falla de forma visible, produce un diff contra otra cosa"
+);
+assert.match(gitflowResult.payload.gitFlow.hint, /origin\/develop/);
+
+// Rutas siempre en POSIX: `path.join` mezclaba `schemas\phase-evidence...` con
+// rutas de barra normal dentro de la misma lista JSON en Windows.
+const todasLasRutas = [...gitflowResult.payload.created, ...gitflowResult.payload.skipped];
+assert.ok(
+  todasLasRutas.every((entry) => !entry.includes("\\")),
+  `el payload no puede mezclar separadores: ${JSON.stringify(todasLasRutas)}`
+);
+assert.ok(todasLasRutas.some((entry) => entry.startsWith("schemas/phase-evidence.schema.json")));
+
+console.log("adopt e2e (rama de integracion y rutas POSIX): PASS");
+
 // --- E2E: aditivo puro -- correrlo de nuevo no pisa lo que ya existe -------
 fs.writeFileSync(
   path.join(target, "quality-contract.yaml"),
