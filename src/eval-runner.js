@@ -62,6 +62,9 @@ function scoreTask(task, skillContent) {
     description: task.description,
     pass,
     weight: task.weight ?? 1,
+    // `train` por defecto: una tarea sin declarar no puede colarse como
+    // validacion held-out. El held-out se declara, no se asume.
+    split: task.split === "val" ? "val" : "train",
     presentFields,
     missingFields,
     wronglyPresentFields,
@@ -128,25 +131,60 @@ export function commandSkillEval(options) {
     });
   }
 
-  const overallScore = allResults
-    .filter(r => !r.error && Array.isArray(r.tasks) && r.tasks.length > 0)
-    .reduce((acc, r) => {
-      acc.totalWeight += r.tasks.reduce((s, t) => s + (t.weight ?? 1), 0);
-      acc.passedWeight += r.tasks.filter(t => t.pass).reduce((s, t) => s + (t.weight ?? 1), 0);
+  // SkillOpt (microsoft/SkillOpt) acepta una edicion solo cuando mejora
+  // ESTRICTAMENTE un score de VALIDACION HELD-OUT. Ese "held-out" no es un
+  // detalle: si la edicion se deriva de las mismas tareas contra las que se
+  // valida, el gate se esta midiendo a si mismo — puede pasar por haber
+  // memorizado el conjunto, no por haber mejorado. Es un control que no puede
+  // fallar por la razon correcta.
+  //
+  // Aqui las tareas declaran `split: train|val`. Sin `val` no hay held-out, y
+  // en ese caso el gate se reporta VACUO en vez de dar un numero que parece
+  // una validacion.
+  const scored = allResults.filter(r => !r.error && Array.isArray(r.tasks) && r.tasks.length > 0);
+  const weigh = (tasks) => tasks.reduce(
+    (acc, task) => {
+      const weight = task.weight ?? 1;
+      acc.totalWeight += weight;
+      if (task.pass) acc.passedWeight += weight;
       return acc;
-    }, { totalWeight: 0, passedWeight: 0 });
+    },
+    { totalWeight: 0, passedWeight: 0 }
+  );
+  const ratio = ({ passedWeight, totalWeight }) => (totalWeight > 0 ? passedWeight / totalWeight : 0);
 
-  const score = overallScore.totalWeight > 0
-    ? overallScore.passedWeight / overallScore.totalWeight
-    : 0;
+  const allTasks = scored.flatMap(r => r.tasks);
+  const trainTasks = allTasks.filter(task => (task.split ?? "train") === "train");
+  const valTasks = allTasks.filter(task => task.split === "val");
 
+  const overallScore = weigh(allTasks);
+  const score = ratio(overallScore);
+  const trainWeighed = weigh(trainTasks);
+  const valWeighed = weigh(valTasks);
+
+  const heldOut = valTasks.length > 0;
   const payload = {
     status: "ok",
     skill: skillName,
     score,
     scorePercent: Math.round(score * 100),
+    // El score que el gate debe leer es el de validacion, no el global.
+    splits: {
+      train: { tasks: trainTasks.length, score: ratio(trainWeighed), scorePercent: Math.round(ratio(trainWeighed) * 100) },
+      val: { tasks: valTasks.length, score: ratio(valWeighed), scorePercent: Math.round(ratio(valWeighed) * 100) }
+    },
+    heldOut,
+    ...(heldOut
+      ? { gateScorePercent: Math.round(ratio(valWeighed) * 100) }
+      : {
+          gate: "vacuous",
+          gateReason:
+            "ninguna tarea declara `split: val`: no hay conjunto held-out, asi que un score mejor puede venir de haber memorizado las mismas tareas que motivaron la edicion. Declarar tareas de validacion antes de usar este score como gate."
+        }),
     evalSets: allResults,
-    summary: `${skillName}: score ${Math.round(score * 100)}% (${overallScore.passedWeight}/${overallScore.totalWeight} weighted tasks passed)`,
+    summary: heldOut
+      ? `${skillName}: score ${Math.round(score * 100)}% global, ${Math.round(ratio(valWeighed) * 100)}% en validacion held-out (${valTasks.length} tareas)`
+      : `${skillName}: score ${Math.round(score * 100)}% (${overallScore.passedWeight}/${overallScore.totalWeight}) — SIN held-out: el gate seria vacuo`
   };
 
   return { exitCode: EXIT_OK, payload };
@@ -212,7 +250,11 @@ export function commandSkillPropose(options) {
     `2. Ejecutar \`sdlc skill-eval ${skillName}\` para obtener el score base del canónico.`,
     `3. Aplicar el diff localmente a una copia temporal y re-evaluar para obtener el score de la propuesta.`,
     `4. Completar la sección "Score" con ambos valores.`,
-    `5. Someter el change al gate humano: el validador aprueba si score_propuesta >= score_base (no-regresión).`,
+    `5. Someter el change al gate humano. La regla es MEJORA ESTRICTA sobre el conjunto held-out:`,
+    `   apruébese solo si score_val_propuesta > score_val_base. No basta \`>=\`: un empate significa`,
+    `   que la edición no demostró nada, y aceptarlo deja entrar cambios que no mejoran.`,
+    `   Si el eval set no declara tareas \`split: val\`, NO hay held-out y el gate es vacuo:`,
+    `   el score se estaría midiendo contra las mismas tareas que motivaron la edición.`,
     `6. NUNCA editar \`.github/skills/${skillName}/SKILL.md\` directamente; solo via este change.`,
     ``,
     `## Diff propuesto`,
