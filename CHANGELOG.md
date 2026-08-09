@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-08-09
+
+Encontrado instalando la 1.8.0 **publicada** en un repo brownfield real (una extensión Chrome, sin `package.json`). Ninguna suite lo veía porque todos los fixtures crean `package.json`.
+
+### Fixed
+
+- **`sdlc verdict` acusaba a un validador sano en repos sin `package.json`.** El veredicto devolvía `NOT-READY` con bloqueante `control-plane`, mientras `node scripts/validators/validate-control-plane.mjs` salía 0 con *"OK: 10 referencias de persona resuelven a un archivo real"*. El validador estaba bien; fallaba **cómo se invocaba**: el precheck que clasifica un paso como `not-configured` exigía `declaredScripts` truthy, y sin `package.json` eso es `null`, así que el paso se ejecutaba igual, `pnpm run` fallaba con exit 1 y el fallo se atribuía al archivo equivocado. Quien lo viera iría a depurar código sano. La intención original del código era "no romper consumidores que no son Node" y lograba exactamente lo contrario. Sin `package.json` no hay **ningún** script declarado, que es justo el caso que `not-configured` ya modela.
+- **Y el arreglo anterior, solo, producía un falso VERDE.** Con los 8 pasos en `not-configured`, `blockers` quedaba vacío y el veredicto salía `READY` sobre un repo donde no corrió un solo validator. El falso verde es peor que el falso rojo porque nadie lo investiga. Se añade guarda de vacuidad: si **ningún** paso llegó a ejecutarse, el veredicto es `NOT-VERIFIABLE` (`status: not-configured`, exit distinto de 0) con `vacuousReason`, en vez de READY. Es la misma regla que el resto del gauntlet ya aplica (`gate: vacuous`, `red-proof-vacuous`): no poder medir no puede parecerse a que todo está bien.
+- **`tools-doctor` reportaba `package-manager: ok` sin nada que gestionar.** En un repo sin `package.json` se cae al default `pnpm` y, como el binario existe en la máquina, `pnpm --version` responde y el check daba verde. "El gestor anda" y "hay algo que gestionar" son cosas distintas, y el harness necesita la segunda para ejecutar un solo validator. Ahora el `ok` viaja con un `detail` que lo dice, en vez de quedar desnudo. **No** se escala a `warning` a propósito: `package-manager` es un check requerido, así que un warning se volvería error y dejaría en rojo el doctor de cualquier consumidor que no sea Node — un estado legítimo. La consecuencia real la reporta `sdlc verdict` como `NOT-VERIFIABLE`, que es donde importa.
+
+### Added
+
+- `migrations/1.8.1/`: entrada en el registro de migraciones. Sin ella `sdlc upgrade --to-version 1.8.1` la rechazaría con *"Version no soportada"* — el mismo defecto que 1.7.1 tuvo que corregir para 1.7.0.
+
 ### Added
 
 - **`external-tools.yaml` + `sdlc tools-install`: el diagnóstico ahora dice qué hacer.** `tools-doctor` sabía detectar nueve herramientas y reportarlas como `missing`/`warning` con una ruta; lo que no sabía era decir **qué es** cada una, si el consumidor la necesita, o **cómo** conseguirla. Ese conocimiento existía —en el README y en la matriz de docs— pero no donde el comando lo reporta, así que el usuario que instala se quedaba con una lista de "opcionales" sin forma de decidir cuáles le hacían falta. Nuevo inventario declarativo como fuente única (propósito, requerida u opcional, perfil elegible, comando de instalación, cuándo **no** usarla), leído por `tools-doctor` —que ahora enriquece cada hallazgo con propósito, `install` o `manual`, docs y un `hint` accionable— y por el nuevo `sdlc tools-install`, que cruza inventario y detección y arma un plan separado en tres grupos: `installable`, `manualOnly` (el paso lo hace una persona) y `satisfied`. Mezclar esos tres era justo lo que impedía saber qué falta de verdad.
