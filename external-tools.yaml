@@ -116,8 +116,12 @@ tools:
     required: false
     profile: segun tarea
     detectPath: scripts/agent-skills.manifest.json
-    install:
-      argv: [pwsh, "-ExecutionPolicy", Bypass, "-File", scripts/bootstrap-agent-skills.ps1]
+    install: null
+    manual: >-
+      Correr `pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1`.
+      NO se automatiza a proposito: permitir un interprete (pwsh, node) en la allowlist
+      la convierte en permiso para ejecutar cualquier archivo del repo, que es lo contrario
+      de lo que una allowlist hace.
     notUsedFor: Reemplazar las skills internas protegidas (commit, enrich-us, openspec-*, contexto-proyecto).
 
   - id: caveman

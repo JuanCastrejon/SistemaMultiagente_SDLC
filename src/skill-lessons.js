@@ -165,18 +165,35 @@ export function promoteLesson(target, lessonId, { change, threshold = DEFAULT_PR
   if (!lesson) return { ok: false, code: "lesson-unknown", detail: `no existe la leccion '${lessonId}'` };
   if (lesson.status !== "open") return { ok: false, code: "lesson-not-open", detail: `la leccion esta en estado '${lesson.status}'` };
 
+  // Un umbral que el invocador puede poner en 0 no es un umbral. `Number()`
+  // aceptaba 0 y negativos, con lo que se saltaba la evidencia sin `--force`
+  // y sin dejar rastro.
+  const effectiveThreshold = Number.isFinite(threshold) && threshold >= 1 ? Math.floor(threshold) : DEFAULT_PROMOTION_THRESHOLD;
   const occurrences = lesson.occurrences ?? 1;
-  if (occurrences < threshold && !force) {
+  if (occurrences < effectiveThreshold && !force) {
     return {
       ok: false,
       code: "lesson-below-threshold",
-      detail: `la leccion aparecio ${occurrences} vez/veces y el umbral es ${threshold}: todavia es un incidente, no un patron. Usar --force para promover igual y dejarlo explicito`,
+      detail: `la leccion aparecio ${occurrences} vez/veces y el umbral es ${effectiveThreshold}: todavia es un incidente, no un patron. Usar --force para promover igual y dejarlo explicito`,
       occurrences,
-      threshold
+      threshold: effectiveThreshold
     };
   }
 
-  const changeDir = path.join(target, "openspec", "changes", change);
+  // CONTENCION. `path.join` resuelve `..`, asi que `--change
+  // ../../.github/skills/commit` escribia DENTRO del directorio canonico de
+  // skills — precisamente la restriccion 1 del ADR 025 que esta funcion dice
+  // respetar. Reproducido antes del fix. Que la ruta "normalmente" caiga en
+  // openspec/changes/ no es contencion; contencion es comprobarlo.
+  const changesRoot = path.resolve(target, "openspec", "changes");
+  const changeDir = path.resolve(changesRoot, change);
+  if (changeDir !== changesRoot && !changeDir.startsWith(changesRoot + path.sep)) {
+    return {
+      ok: false,
+      code: "change-outside-changes-dir",
+      detail: `'${change}' resuelve fuera de openspec/changes/. Una propuesta solo puede escribirse ahi (ADR 025, restriccion 1)`
+    };
+  }
   ensureDir(changeDir);
   const proposalPath = path.join(changeDir, `skill-lesson-${lesson.id}.md`);
 
@@ -214,6 +231,10 @@ export function promoteLesson(target, lessonId, { change, threshold = DEFAULT_PR
   fs.writeFileSync(proposalPath, body, "utf8");
   lesson.status = "promoted";
   lesson.promotedTo = change;
+  // Forzar deja rastro: "fue explicito" no sirve si no queda escrito.
+  if (occurrences < effectiveThreshold) {
+    lesson.forcedPromotion = { occurrences, threshold: effectiveThreshold, at: new Date().toISOString() };
+  }
   writeLessons(target, loaded.lessons);
 
   return { ok: true, lesson, proposal: path.relative(target, proposalPath).split(path.sep).join("/"), change };

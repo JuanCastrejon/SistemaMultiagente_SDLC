@@ -36,7 +36,19 @@ import { pathExists } from "./file-utils.js";
 // Binarios que el inventario puede invocar. Deliberadamente corta: si una
 // herramienta necesita otra cosa, se documenta como paso manual en vez de
 // ampliar la lista. Ampliarla es una decision de seguridad, no de comodidad.
-const ALLOWED_EXECUTABLES = new Set(["npm", "npx", "pnpm", "yarn", "node", "pip", "pip3", "pwsh", "gh", "corepack"]);
+// UNA ALLOWLIST DE INTERPRETES NO ES UNA ALLOWLIST. `pwsh` y `node` estaban
+// aqui y aceptan una RUTA DE SCRIPT como argumento, asi que
+// `pwsh -File scripts/lo-que-sea.ps1` pasaba el filtro y ejecutaba codigo
+// arbitrario del repo — el propio inventario que enviabamos tenia esa forma
+// para el bootstrap de skills. Filtrar argv[0] solo sirve si argv[0] no puede
+// convertirse en "ejecuta este archivo".
+//
+// Quedan gestores de paquetes. Instalar un paquete ES la funcion de esta
+// pieza, asi que ese riesgo es inherente y se acota por otra via: el
+// inventario ejecutable es el del FRAMEWORK, no el del consumidor (ver
+// loadExternalTools). Lo que necesite un interprete se declara como paso
+// manual.
+const ALLOWED_EXECUTABLES = new Set(["npm", "npx", "pnpm", "yarn", "pip", "pip3", "corepack"]);
 
 const INVENTORY_FILENAME = "external-tools.yaml";
 
@@ -50,7 +62,17 @@ function frameworkInventoryPath() {
  * el resto de contratos: el consumidor puede extender, y sin config propia hay
  * un default util en vez de un vacio.
  */
-export function inventoryPath(target) {
+export function inventoryPath(target, { forExecution = false } = {}) {
+  // Para EJECUTAR manda el inventario del framework, nunca el del consumidor.
+  // Antes ganaba el local, y `external-tools.yaml` no esta en las rutas que el
+  // guard de frontera protege: un PR podia declarar su propio comando de
+  // instalacion y esperar a que alguien corriera `tools-install --apply`. Un
+  // archivo que el evaluado escribe puede DESCRIBIR herramientas; no puede
+  // decidir que se ejecuta en la maquina de quien lo revisa.
+  //
+  // Para describir (doctor, docs) el del consumidor sigue siendo util: ahi solo
+  // aporta texto.
+  if (forExecution) return frameworkInventoryPath();
   const local = path.join(target, INVENTORY_FILENAME);
   return pathExists(local) ? local : frameworkInventoryPath();
 }
@@ -71,8 +93,8 @@ function validateCommand(tool, key, command) {
   return [];
 }
 
-export function loadExternalTools(target = process.cwd()) {
-  const absolute = inventoryPath(target);
+export function loadExternalTools(target = process.cwd(), { forExecution = false } = {}) {
+  const absolute = inventoryPath(target, { forExecution });
   const raw = fs.existsSync(absolute) ? fs.readFileSync(absolute, "utf8") : null;
   if (!raw) {
     return { ok: false, code: "external-tools-missing", path: absolute, tools: [] };
@@ -135,7 +157,8 @@ export function describeTools(target = process.cwd()) {
  *   - `satisfied`  : ya esta.
  */
 export function buildInstallPlan(target, { detected = new Map(), only = null } = {}) {
-  const loaded = loadExternalTools(target);
+  // El plan lleva a ejecutar: inventario del framework, sin excepcion.
+  const loaded = loadExternalTools(target, { forExecution: true });
   if (!loaded.ok) return { ok: false, ...loaded };
 
   const installable = [];

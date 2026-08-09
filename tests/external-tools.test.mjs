@@ -62,30 +62,72 @@ function writeInventory(dir, tools) {
 
 {
   // Metacaracteres DENTRO de un argv permitido: no hay shell, asi que son
-  // argumentos literales. Se comprueba que el plan los conserva tal cual en vez
-  // de concatenarlos en una linea que alguien pudiera pasar a un shell.
+  // argumentos literales y el argv no se aplana en una linea.
   const meta = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-tools-meta-"));
   writeInventory(meta, [{ id: "raro", purpose: "x", install: { argv: ["npm", "install", "-g", "pkg; rm -rf /"] } }]);
   const loaded = loadExternalTools(meta);
   assert.equal(loaded.ok, true, "el argv es valido en forma: el token raro es un ARGUMENTO, no un comando");
-  const plan = buildInstallPlan(meta, { detected: new Map() });
-  assert.deepEqual(plan.installable[0].argv, ["npm", "install", "-g", "pkg; rm -rf /"], "el argv viaja como lista, sin aplanarse");
+  assert.deepEqual(loaded.tools[0].install.argv, ["npm", "install", "-g", "pkg; rm -rf /"], "viaja como lista");
 }
+
+// --- EL INVENTARIO DEL CONSUMIDOR NO DECIDE QUE SE EJECUTA ------------------
+// `external-tools.yaml` no esta en las rutas que el guard de frontera protege,
+// asi que un PR podia declarar su propio comando y esperar a que alguien
+// corriera `tools-install --apply`. Un archivo que el evaluado escribe puede
+// DESCRIBIR herramientas; no puede decidir que corre en la maquina de quien lo
+// revisa. El plan de ejecucion lee siempre el inventario del framework.
+{
+  const hostile = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-tools-hostile-"));
+  writeInventory(hostile, [{ id: "propia-del-consumidor", purpose: "x", install: { argv: ["npm", "install", "-g", "paquete-del-atacante"] } }]);
+
+  const plan = buildInstallPlan(hostile, { detected: new Map() });
+  assert.equal(plan.ok, true);
+  const ids = [...plan.installable, ...plan.manualOnly, ...plan.satisfied].map((entry) => entry.id);
+  assert.ok(
+    !ids.includes("propia-del-consumidor"),
+    "una herramienta declarada por el consumidor no puede entrar al plan de ejecucion"
+  );
+  assert.ok(ids.includes("openspec"), "el plan sale del inventario del framework");
+}
+
+// --- UNA ALLOWLIST DE INTERPRETES NO ES UNA ALLOWLIST -----------------------
+// `pwsh -File x.ps1` y `node x.js` pasaban el filtro de argv[0] y ejecutaban
+// codigo arbitrario del repo: filtrar el ejecutable solo sirve si ese
+// ejecutable no puede convertirse en "corre este archivo".
+{
+  const interpreter = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-tools-interp-"));
+  for (const argv of [["pwsh", "-File", "scripts/lo-que-sea.ps1"], ["node", "scripts/lo-que-sea.js"]]) {
+    writeInventory(interpreter, [{ id: "x", purpose: "y", install: { argv } }]);
+    const loaded = loadExternalTools(interpreter);
+    assert.equal(loaded.ok, false, `'${argv[0]}' es un interprete: no puede estar en la allowlist`);
+    assert.ok(loaded.errors.some((e) => e.includes("allowlist")));
+  }
+  assert.ok(!ALLOWED_EXECUTABLES_LIST.includes("pwsh"));
+  assert.ok(!ALLOWED_EXECUTABLES_LIST.includes("node"));
+}
+
+console.log("external-tools inventario del consumidor no ejecuta: PASS");
 
 console.log("external-tools allowlist y forma de comando: PASS");
 
 // --- el plan separa lo automatizable de lo manual y de lo ya presente -------
 {
+  // Se usa el inventario REAL del framework, que es el unico que alimenta la
+  // ejecucion. `openspec` trae comando; `gh` es manual; lo detectado como `ok`
+  // sale del plan.
   const target = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-tools-plan-"));
-  writeInventory(target, [
-    { id: "auto", purpose: "instalable", required: true, install: { argv: ["npm", "install", "-g", "x"] } },
-    { id: "humano", purpose: "manual", required: false, install: null, manual: "hacerlo a mano" },
-    { id: "ya", purpose: "presente", required: false, install: { argv: ["npm", "install", "-g", "y"] } }
-  ]);
-  const plan = buildInstallPlan(target, { detected: new Map([["ya", "ok"]]) });
-  assert.deepEqual(plan.installable.map((e) => e.id), ["auto"]);
-  assert.deepEqual(plan.manualOnly.map((e) => e.id), ["humano"]);
-  assert.deepEqual(plan.satisfied.map((e) => e.id), ["ya"]);
+  const plan = buildInstallPlan(target, { detected: new Map([["openspec", "ok"]]) });
+  assert.ok(plan.installable.some((e) => e.id === "graphify"), "con comando y ausente -> instalable");
+  assert.ok(plan.manualOnly.some((e) => e.id === "gh"), "sin comando automatizable -> manual, con su repo");
+  assert.ok(plan.satisfied.some((e) => e.id === "openspec"), "lo ya presente sale del plan");
+  assert.ok(
+    plan.manualOnly.find((e) => e.id === "gh").repo,
+    "una herramienta manual tiene que decir DONDE conseguirla: el repo es la instruccion"
+  );
+  assert.ok(
+    !plan.installable.some((e) => e.id === "autoskills"),
+    "autoskills paso a manual: automatizarla exigia un interprete en la allowlist"
+  );
 
   // DRY-RUN: no se ejecuta nada sin `apply`. Instalar software de terceros no
   // puede ser un efecto secundario de pedir un diagnostico.
@@ -95,7 +137,7 @@ console.log("external-tools allowlist y forma de comando: PASS");
 
   // --tool acota, y un id inexistente es error explicito en vez de plan vacio
   // (un plan vacio se ve igual que "no falta nada").
-  assert.deepEqual(buildInstallPlan(target, { detected: new Map(), only: "auto" }).installable.map((e) => e.id), ["auto"]);
+  assert.deepEqual(buildInstallPlan(target, { detected: new Map(), only: "graphify" }).installable.map((e) => e.id), ["graphify"]);
   const unknown = buildInstallPlan(target, { detected: new Map(), only: "no-existe" });
   assert.equal(unknown.ok, false);
   assert.equal(unknown.code, "external-tool-unknown");

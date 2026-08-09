@@ -99,7 +99,8 @@ console.log("skill-eval senal jugable declarada: PASS");
   assert.equal(payload.heldOut, true);
   assert.equal(payload.splits.train.scorePercent, 100);
   assert.equal(payload.splits.val.scorePercent, 0);
-  assert.equal(payload.gateScorePercent, 0, "el gate lee el held-out (0), nunca el global (50)");
+  assert.equal(payload.gate, "not-authoritative", "con held-out pero senal de texto, sigue sin haber cifra de gate");
+  assert.equal(payload.gateScorePercent, undefined, "entregar la cifra igual seria pedirle al consumidor que lea la letra chica");
   assert.equal(payload.scorePercent, 50);
 }
 

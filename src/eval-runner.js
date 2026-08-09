@@ -195,8 +195,20 @@ export function commandSkillEval(options) {
       val: { tasks: valTasks.length, score: ratio(valWeighed), scorePercent: Math.round(ratio(valWeighed) * 100) }
     },
     heldOut,
+    // NO se emite `gateScorePercent` mientras la senal sea de presencia de
+    // texto. Declarar que un numero no es autoritativo y entregarlo igual con
+    // exit 0 es pedirle al consumidor que lea la letra chica: aguas abajo se
+    // usa el numero, no la advertencia. Un control que no puede fallar por la
+    // razon correcta no debe ofrecer la cifra con la que se aprueba.
+    //
+    // El score sigue publicandose para diagnostico (`score`, `splits`), pero
+    // el campo que un gate leeria solo aparece cuando exista rollout real.
     ...(heldOut
-      ? { gateScorePercent: Math.round(ratio(valWeighed) * 100) }
+      ? {
+          gate: "not-authoritative",
+          gateReason:
+            "hay held-out, pero el score mide presencia de texto en el propio documento que se edita: no puede usarse para aprobar una edicion. Falta la fase Rollout (ejecutar al agente y puntuar su comportamiento)."
+        }
       : {
           gate: "vacuous",
           gateReason:

@@ -113,6 +113,53 @@ console.log("skill-lessons umbral: PASS");
   assert.match(body, /skill-propose --skill commit/, "para una skill existente, enruta al comando gated que ya existe");
 }
 
+// TRAVERSAL: el caso benigno no demuestra contencion.
+// `path.join` resuelve `..`, asi que `--change ../../.github/skills/commit`
+// escribia DENTRO del directorio canonico — la misma restriccion que el bloque
+// de arriba dice verificar, rota por la ruta que ese bloque no probaba.
+// Reproducido antes del fix.
+{
+  const target = freshTarget();
+  const canonicalDir = path.join(target, ".github", "skills", "commit");
+  fs.mkdirSync(canonicalDir, { recursive: true });
+  fs.writeFileSync(path.join(canonicalDir, "SKILL.md"), "# commit\nORIGINAL\n", "utf8");
+
+  const args = { type: "error", title: "traversal", correction: "contener la ruta" };
+  recordLesson(target, args);
+  const repetida = recordLesson(target, args);
+
+  for (const evil of ["../../.github/skills/commit", "..", "../../..", "sub/../../../escape"]) {
+    const result = promoteLesson(target, repetida.lesson.id, { change: evil });
+    assert.equal(result.ok, false, `'${evil}' resuelve fuera de openspec/changes y debe rechazarse`);
+    assert.equal(result.code, "change-outside-changes-dir");
+  }
+  assert.deepEqual(
+    fs.readdirSync(canonicalDir),
+    ["SKILL.md"],
+    "ningun intento pudo dejar un archivo en el directorio canonico"
+  );
+
+  // Contracara: un slug normal, y uno anidado legitimo, siguen funcionando.
+  assert.equal(promoteLesson(target, repetida.lesson.id, { change: "slug-normal" }).ok, true);
+}
+
+// El umbral no puede desactivarse pasando 0 o negativo, y forzar deja rastro.
+{
+  const target = freshTarget();
+  const created = recordLesson(target, { type: "error", title: "una sola vez", correction: "z" });
+
+  for (const bogus of [0, -5, Number.NaN]) {
+    const result = promoteLesson(target, created.lesson.id, { change: "demo", threshold: bogus });
+    assert.equal(result.ok, false, `threshold ${bogus} no puede desactivar la evidencia`);
+    assert.equal(result.code, "lesson-below-threshold");
+  }
+
+  const forced = promoteLesson(target, created.lesson.id, { change: "demo", force: true });
+  assert.equal(forced.ok, true);
+  assert.ok(forced.lesson.forcedPromotion, "forzar tiene que quedar registrado: 'fue explicito' no sirve si no se escribe");
+  assert.equal(forced.lesson.forcedPromotion.occurrences, 1);
+}
+
 console.log("skill-lessons no muta lo canonico: PASS");
 
 // --- ledger de rechazos: memoria de los "no" --------------------------------

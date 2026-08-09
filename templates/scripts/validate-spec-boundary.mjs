@@ -25,6 +25,11 @@ const DEFAULT_LOCKED = [
   "quality-contract.yaml",
   "phase-contract.yaml",
   ".github/agent-state/quality-baseline.yaml",
+  // El ledger de lecciones lo escribe el propio evaluado y guarda sus errores.
+  // Sin protegerlo, borrar el historial de las piedras con las que uno tropezo
+  // es un `rm` que nadie ve — la memoria institucional que el ADR 025 pide se
+  // evapora justo cuando conviene que exista.
+  ".github/agent-state/lessons.yaml",
   ".github/workflows/",
   "vitest.config",
   "stryker.conf",
