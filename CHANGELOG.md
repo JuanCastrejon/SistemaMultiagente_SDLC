@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.8.2] — 2026-08-09
+
+Los tres defectos de esta versión salieron de **usar** `sdlc save` en un repo recién instalado, no de leer el código.
+
+### Fixed
+
+- **Un marcador sin resolver viajaba como ruta real.** El config que genera `install` trae `vaultPath: "${VAULT_PATH}"` y `memoryWorkspace: "${MEMORY_WORKSPACE}"` a propósito — `validate:no-personal-paths` impide poner una ruta real ahí. Pero `expandEnv` devuelve el marcador **literal** cuando la variable no existe en el entorno, y nadie lo comprobaba después: el guard solo contemplaba `{{...}}` (mustache), no `${...}`. Resultado reproducido: `sdlc save` creaba `<repo>/${MEMORY_WORKSPACE}/vault/<slug>/checkpoints/…`, un directorio con el marcador literal en el nombre. El usuario cree que su checkpoint está en su vault y está en un directorio basura dentro del repo. Ahora un marcador sin expandir **bloquea** el uso de ese valor: se cae al `.sdlc/vault` local y la degradación se reporta en el propio checkpoint, en vez de ocurrir en silencio.
+
+### Added
+
+- **Checkpoints enriquecidos.** `sdlc save` producía runtime + diffstat + «Continua». Sin el porqué de las decisiones ni lo pendiente, un checkpoint no se puede retomar sin la conversación — que es justamente lo que existe para evitar. Ahora reúne todo lo **factual** que sí puede derivar del repo (commits desde el checkpoint anterior, `supersedes`, HEAD, archivos sin commitear, qué fases tienen evidencia escrita, estado del vault) y deja **huecos explícitos** para lo que el CLI no puede saber: «Qué se hizo y por qué» y «Pendiente, con la pista de dónde mirar». El hueco dice quién lo llena y por qué importa, en vez de omitir la sección y parecer completo.
+
+  El CLI no tiene modelo y no puede inventar el criterio de una decisión; lo honesto es exigirlo, no simularlo.
+
+- `migrations/1.8.2/` en el registro, para que `sdlc upgrade --to-version 1.8.2` no la rechace.
+
+### Notas de implementación
+
+Dos defectos propios, encontrados al probar el código nuevo antes de darlo por bueno:
+
+- `--format=%h %s` fue rechazado por `assertShellSafeToken` (lleva `%` y espacio, metacaracteres de `cmd.exe`). Se usa `--oneline`, que produce lo mismo sin ellos. El guard de inyección del propio framework atrapó el código nuevo.
+- El nombre del checkpoint sale de `toISOString()` (**UTC**) y `git log --since` sin zona interpreta la cadena en hora **local**. En UTC-5 el `since` apuntaba cinco horas al futuro y la sección de commits salía vacía **siempre**. Una sección decorativa es peor que ninguna: parece que no hubo trabajo. Se ancla con `Z` explícita.
+
 ## [1.8.1] — 2026-08-09
 
 Encontrado instalando la 1.8.0 **publicada** en un repo brownfield real (una extensión Chrome, sin `package.json`). Ninguna suite lo veía porque todos los fixtures crean `package.json`.
