@@ -71,6 +71,29 @@ tools:
     manual: "No hay instalador publico declarado en este repo. Instalar segun su README y luego `codegraph init -i` para construir el indice."
     notUsedFor: Semantica documental, ADRs, specs o memoria.
 
+  - id: skillopt
+    name: SkillOpt
+    repo: https://github.com/microsoft/SkillOpt
+    purpose: >-
+      Optimizador de skills en espacio de texto: trata el documento de skill como estado
+      entrenable de un modelo congelado y lo mejora con rollouts puntuados, ediciones acotadas
+      add/delete/replace y un gate que acepta solo si mejora ESTRICTAMENTE una validacion held-out.
+      Es quien hace la optimizacion de verdad; este framework aporta la gobernanza alrededor
+      (propuestas bajo openspec/changes, gate humano en serie, ledger de rechazos — ADR 025).
+    required: false
+    profile: ANALYSIS, disparo manual (el loop de rollouts cuesta tokens de un modelo optimizador)
+    install:
+      argv: [pip, install, "--user", skillopt]
+    manual: >-
+      Exige Python 3.10+. Tras instalar, la doc versionada vive en docs/ del repo
+      (index.md, guide/new-benchmark.md para el formato de tareas, sleep/README.md).
+      `skillopt-sleep` revisa sesiones de agente y PREPARA actualizaciones de skill para
+      adopcion humana, que es exactamente el gate en serie que exige el ADR 025.
+    notUsedFor: >-
+      Editar directamente `.github/skills/` ni sus mirrors. Sus ediciones entran como propuesta
+      bajo openspec/changes/ y las aprueba una persona: SkillOpt acepta por metrica automatica y
+      la regla 4 del proyecto dice que los gates humanos no se automatizan.
+
   - id: graphify
     name: Graphify
     repo: https://github.com/safishamsi/graphify

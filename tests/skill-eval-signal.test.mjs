@@ -66,6 +66,8 @@ const tasks = [
   // Por eso el score no puede presentarse como validacion.
   assert.equal(after.authoritative, false, "un score jugable no puede declararse autoritativo");
   assert.equal(after.scoringMode, "document-presence");
+  assert.match(after.role, /SkillOpt/, "tiene que decir que el optimizador real es la herramienta externa, no este comando");
+  assert.ok(after.limitations.some((l) => l.includes("tools-install --tool skillopt")), "y como conseguirla");
   assert.ok(
     after.limitations.some((line) => line.includes("rollout")),
     "la limitacion principal —que no hay rollout— tiene que estar dicha, no implicita"

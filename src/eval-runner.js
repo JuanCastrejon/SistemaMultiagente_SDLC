@@ -184,10 +184,21 @@ export function commandSkillEval(options) {
     // real, lo que no es real es lo que parece demostrar.
     scoringMode: "document-presence",
     authoritative: false,
+    // QUE ES ESTO Y QUE NO ES. Este comando es un LINT local del documento de
+    // skill: comprueba que menciona lo que su eval set declara. Util como
+    // pre-chequeo barato antes de abrir un change, y nada mas.
+    //
+    // NO es una implementacion de SkillOpt, y este framework no aspira a serlo:
+    // el optimizador real es la herramienta externa (`sdlc tools-install --tool
+    // skillopt`), que ejecuta rollouts, puntua comportamiento y acepta ediciones
+    // contra una validacion held-out. Lo que aporta este repo es la gobernanza
+    // alrededor —propuestas bajo openspec/changes, gate humano en serie, ledger
+    // de rechazos (ADR 025)—, no el motor.
+    role: "lint local del documento; el optimizador real es microsoft/SkillOpt",
     limitations: [
       "no hay rollout: no se ejecuta al agente, se inspecciona el texto de la skill",
       "la recompensa es jugable por construccion — insertar los expected_fields en el documento sube el score sin cambiar comportamiento",
-      "las fases Rollout y Reflect de SkillOpt no existen todavia; sin ellas Aggregate y Select no tienen que agregar ni que rankear"
+      "para optimizar de verdad, instalar SkillOpt: `sdlc tools-install --tool skillopt --apply`"
     ],
     // El score que el gate debe leer es el de validacion, no el global.
     splits: {
