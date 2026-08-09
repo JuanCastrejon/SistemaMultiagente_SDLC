@@ -41,14 +41,49 @@ const PACKAGE_NAME = "sistema-multiagente-sdlc";
  * dependencia" (`declared:false`).
  */
 export function detectCliLinked(target = process.cwd()) {
+  const resolvedTarget = path.resolve(target);
+
+  // `declared` es lo que el package.json DICE, no lo que se puede resolver.
+  // Antes se derivaba del exito de require.resolve, con lo que un consumidor
+  // que declara la dependencia pero todavia no corrio su install quedaba
+  // `declared:false` — indistinguible de uno que nunca la declaro. Dos estados
+  // distintos con una sola senal es justo lo que este framework rechaza en el
+  // codigo del consumidor.
+  let declared = false;
   try {
-    const resolvedTarget = path.resolve(target);
+    const manifest = JSON.parse(fs.readFileSync(path.join(resolvedTarget, "package.json"), "utf8"));
+    declared = Boolean(manifest.dependencies?.[PACKAGE_NAME]) || Boolean(manifest.devDependencies?.[PACKAGE_NAME]);
+  } catch {
+    declared = false;
+  }
+
+  try {
     const require = createRequire(path.join(resolvedTarget, "package.json"));
     const resolved = require.resolve(`${PACKAGE_NAME}/package.json`);
-    const expectedInstallDir = path.join(resolvedTarget, "node_modules", PACKAGE_NAME) + path.sep;
-    return { declared: true, linked: !resolved.startsWith(expectedInstallDir), resolved };
+
+    // Node resuelve por REALPATH. Con pnpm el paquete real vive en el store
+    // virtual (`node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>`) y lo que
+    // cuelga de `node_modules/<pkg>` es un enlace: anclar al directorio exacto
+    // marcaba como `linked` una instalacion pnpm perfectamente normal. El repo
+    // padre usa pnpm, asi que `doctor` le avisaba de un link inexistente
+    // diciendo ademas que "CI lo rechaza" cuando CI lo acepta: el bash de
+    // quality-verify.yml admite CUALQUIER ruta que contenga node_modules, y
+    // esta funcion existe justamente para no reimplementar ese criterio de otra
+    // manera. Lo que importa es si el paquete sale del arbol node_modules del
+    // target, no de que subdirectorio concreto.
+    const nodeModules = path.join(resolvedTarget, "node_modules");
+    const roots = [nodeModules];
+    try {
+      roots.push(fs.realpathSync(nodeModules));
+    } catch {
+      // sin node_modules en disco: queda solo la ruta nominal
+    }
+    const insideTargetTree = roots.some((root) => resolved.startsWith(root + path.sep));
+    return { declared, installed: true, linked: !insideTargetTree, resolved };
   } catch {
-    return { declared: false, linked: null, resolved: null };
+    // Declarada pero sin resolver = no instalada. No es lo mismo que ausente,
+    // y `linked` no se puede afirmar sobre algo que no existe en disco.
+    return { declared, installed: false, linked: null, resolved: null };
   }
 }
 

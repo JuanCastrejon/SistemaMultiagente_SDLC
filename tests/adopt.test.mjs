@@ -36,12 +36,58 @@ function fixturePackage(dir, version) {
   assert.equal(undeclaredResult.declared, false);
   assert.equal(undeclaredResult.linked, null);
 
-  // Paquete real instalado bajo target/node_modules (no symlink): declared
-  // true, linked false.
+  // DECLARADA PERO NO INSTALADA. Deriva `declared` de require.resolve
+  // confundia este caso con "nunca se declaro": dos estados distintos
+  // colapsados en una sola senal, que es lo que este framework rechaza en el
+  // codigo del consumidor. `declared` sale del package.json; `installed` dice
+  // si ademas se puede resolver.
+  const declaredNotInstalled = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-noinstall-"));
+  fs.writeFileSync(
+    path.join(declaredNotInstalled, "package.json"),
+    JSON.stringify({ name: "declara-sin-instalar", devDependencies: { [PACKAGE_NAME]: "^1.8.0" } }, null, 2),
+    "utf8"
+  );
+  const pendiente = detectCliLinked(declaredNotInstalled);
+  assert.equal(pendiente.declared, true, "el package.json la declara: decir lo contrario es reportar mal el estado real");
+  assert.equal(pendiente.installed, false);
+  assert.equal(pendiente.linked, null, "no se puede afirmar 'link' sobre algo que no existe en disco");
+
+  // PNPM. Node resuelve por realpath, y con pnpm el paquete real vive en el
+  // store virtual (node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>) mientras
+  // node_modules/<pkg> es un enlace. Anclar al directorio exacto marcaba como
+  // `linked` una instalacion pnpm normal, y el repo padre usa pnpm: `doctor` le
+  // avisaba de un link inexistente diciendo que "CI lo rechaza", cuando el bash
+  // de quality-verify.yml acepta cualquier ruta bajo node_modules.
+  const pnpmTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-pnpm-"));
+  fs.writeFileSync(
+    path.join(pnpmTarget, "package.json"),
+    JSON.stringify({ name: "consumidor-pnpm", devDependencies: { [PACKAGE_NAME]: "^1.8.0" } }, null, 2),
+    "utf8"
+  );
+  const storeDir = path.join(pnpmTarget, "node_modules", ".pnpm", `${PACKAGE_NAME}@1.8.0`, "node_modules", PACKAGE_NAME);
+  fixturePackage(storeDir, "1.8.0");
+  fs.symlinkSync(storeDir, path.join(pnpmTarget, "node_modules", PACKAGE_NAME), "junction");
+  const pnpmResult = detectCliLinked(pnpmTarget);
+  assert.equal(pnpmResult.declared, true);
+  assert.equal(pnpmResult.installed, true);
+  assert.equal(
+    pnpmResult.linked,
+    false,
+    "una instalacion pnpm resuelve al store virtual pero sigue estando dentro de node_modules: no es un link"
+  );
+
+  // Paquete real instalado bajo target/node_modules (npm/yarn planos, no
+  // symlink): declared true, linked false.
   const installedTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-installed-"));
+  fs.writeFileSync(
+    path.join(installedTarget, "package.json"),
+    JSON.stringify({ name: "consumidor-npm", devDependencies: { [PACKAGE_NAME]: "^1.8.0" } }, null, 2),
+    "utf8"
+  );
   fixturePackage(path.join(installedTarget, "node_modules", PACKAGE_NAME), "1.8.0");
   const installedResult = detectCliLinked(installedTarget);
   assert.equal(installedResult.declared, true);
+  assert.equal(installedResult.installed, true);
   assert.equal(installedResult.linked, false);
 
   // Escenario `npm link`: target/node_modules/<paquete> es un symlink hacia
@@ -50,13 +96,23 @@ function fixturePackage(dir, version) {
   // del framework, que no se depende a si mismo) revienta y cae al catch,
   // reportando declared:false en vez de declared:true, linked:true.
   const linkedTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-linked-"));
+  fs.writeFileSync(
+    path.join(linkedTarget, "package.json"),
+    JSON.stringify({ name: "consumidor-linkeado", devDependencies: { [PACKAGE_NAME]: "^1.8.0" } }, null, 2),
+    "utf8"
+  );
   const externalFrameworkDir = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-detect-external-fw-"));
   fixturePackage(externalFrameworkDir, "1.8.0-dev");
   fs.mkdirSync(path.join(linkedTarget, "node_modules"), { recursive: true });
   fs.symlinkSync(externalFrameworkDir, path.join(linkedTarget, "node_modules", PACKAGE_NAME), "junction");
   const linkedResult = detectCliLinked(linkedTarget);
   assert.equal(linkedResult.declared, true, "npm link debe seguir resolviendo la dependencia, no reportar declared:false");
-  assert.equal(linkedResult.linked, true, "el symlink resuelve fuera de node_modules del target -> linked debe ser true");
+  assert.equal(linkedResult.installed, true);
+  assert.equal(
+    linkedResult.linked,
+    true,
+    "el enlace resuelve a un working tree FUERA del arbol node_modules del target: eso si es un link y CI lo rechaza"
+  );
 }
 
 console.log("adopt detectCliLinked unit: PASS");
