@@ -168,6 +168,27 @@ export function commandSkillEval(options) {
     skill: skillName,
     score,
     scorePercent: Math.round(score * 100),
+    // ADVERTENCIA ESTRUCTURAL, no un detalle de implementacion.
+    //
+    // SkillOpt puntua ROLLOUTS: el agente ejecuta tareas y se mide su
+    // comportamiento (`hard`/`soft` por trayectoria). Aqui no hay rollout:
+    // `scoreTask` recibe el PROPIO documento de skill como si fuera la salida,
+    // y comprueba si contiene ciertas cadenas. Como el optimizador edita ese
+    // mismo documento, la recompensa es trivialmente jugable: reproducido,
+    // pegar los `expected_fields` en el markdown lleva el score held-out de
+    // 0% a 100% y aprueba el gate de mejora estricta sin ensenarle nada al
+    // agente.
+    //
+    // Mientras eso siga asi, este score NO puede presentarse como validacion.
+    // Se declara igual que `red-proof-verify` declara la suya: el numero es
+    // real, lo que no es real es lo que parece demostrar.
+    scoringMode: "document-presence",
+    authoritative: false,
+    limitations: [
+      "no hay rollout: no se ejecuta al agente, se inspecciona el texto de la skill",
+      "la recompensa es jugable por construccion — insertar los expected_fields en el documento sube el score sin cambiar comportamiento",
+      "las fases Rollout y Reflect de SkillOpt no existen todavia; sin ellas Aggregate y Select no tienen que agregar ni que rankear"
+    ],
     // El score que el gate debe leer es el de validacion, no el global.
     splits: {
       train: { tasks: trainTasks.length, score: ratio(trainWeighed), scorePercent: Math.round(ratio(trainWeighed) * 100) },
@@ -202,6 +223,14 @@ export function commandSkillPropose(options) {
   const changeName = options.change ?? options._positionals?.[2];
   const intent = options.intent ?? options.message ?? "";
   const blastRadiusCap = Number(options["blast-radius"] ?? 3);
+  // `learning_rate` en SkillOpt NO es un factor de escala: es el numero MAXIMO
+  // de ediciones que un ciclo puede aplicar (su propia analogia es el gradient
+  // clipping), y se aplica en la fase Select, que rankea y RECORTA. Nuestro
+  // cap heredado de ADR-023 contaba secciones/archivos, que es otra cosa: diez
+  // ediciones dentro de una misma seccion pasaban el cap y siguen siendo diez
+  // ediciones. Se declaran los dos, porque acotan dimensiones distintas.
+  const maxEdits = Number(options["learning-rate"] ?? options["max-edits"] ?? 5);
+  const lrScheduler = String(options["lr-scheduler"] ?? "constant");
 
   if (!skillName || !changeName) {
     return {
@@ -243,6 +272,9 @@ export function commandSkillPropose(options) {
     `**Skill canónica:** \`.github/skills/${skillName}/SKILL.md\``,
     `**Intención:** ${intent || "(describir el objetivo del cambio)"}`,
     `**Blast-radius cap:** máximo ${blastRadiusCap} secciones`,
+    `**Learning rate (max edits):** máximo ${maxEdits} ediciones \`add\`/\`delete\`/\`replace\` en este ciclo (scheduler: ${lrScheduler}).`,
+    `Es el cap de SkillOpt y acota una dimensión distinta del blast-radius: diez ediciones dentro`,
+    `de una misma sección pasan el cap de secciones y siguen siendo diez ediciones.`,
     ``,
     `## Instrucciones`,
     ``,
