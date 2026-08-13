@@ -11,6 +11,7 @@
 // La frescura de la evidencia se decide comparando arboles, nunca relojes.
 // ---------------------------------------------------------------------------
 
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -89,6 +90,79 @@ export function computeTreeHash(target, surfacePaths = []) {
     if (digest) parts.push(`${relative}:${digest}`);
   }
   return { hash: sha256Text(parts.join("\n")), files: parts.length };
+}
+
+// Rutas de superficie tal como se declaran en el contrato ("." , "src",
+// "apps/web/") normalizadas a la forma que usa git: separador `/`, sin `./`
+// inicial ni `/` final. `.` y `` significan "todo el arbol".
+function normalizeSurfacePrefix(surfacePath) {
+  const normalized = String(surfacePath ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  return normalized === "." ? "" : normalized;
+}
+
+function isUnderSurface(relativePath, prefixes) {
+  return prefixes.some((prefix) => prefix === "" || relativePath === prefix || relativePath.startsWith(`${prefix}/`));
+}
+
+/**
+ * Hash estable del arbol de las superficies TAL COMO QUEDO EN UN COMMIT, leido
+ * de git, no del working tree.
+ *
+ * Por que existe ademas de `computeTreeHash`: el sujeto de la firma humana
+ * (P5) tiene que poder re-verificarse manana, en CI, y dentro de diez commits.
+ * Anclarlo al working tree hace que la firma caduque en cuanto alguien edita
+ * cualquier archivo — reproducido en el consumidor manga-translator-mvp, donde
+ * la atestacion de F5 daba `signoff-subject-mismatch` un solo commit despues de
+ * emitirse, y por tanto no servia como registro de que esa fase se aprobo.
+ *
+ * NO es intercambiable con `computeTreeHash` y no debe compararse contra el:
+ * aquel hashea el CONTENIDO de cada archivo del working tree con sha256; este
+ * usa el object id que git ya calculo para cada blob. Los dos son deterministas
+ * y derivados de contenido, pero sus valores no coinciden. La frescura se mide
+ * comparando dos llamadas a ESTA funcion sobre dos refs distintas.
+ *
+ * @param {string} target
+ * @param {string[]} surfacePaths
+ * @param {string} ref  Commit-ish. Su arbol es lo que se hashea.
+ * @returns {{ok: boolean, hash: string|null, files: number, code: string|null, detail: string|null}}
+ */
+export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
+  const listed = spawnSync("git", ["ls-tree", "-r", "-z", ref], {
+    cwd: target,
+    encoding: "buffer",
+    maxBuffer: 256 * 1024 * 1024
+  });
+  if (listed.status !== 0) {
+    return {
+      ok: false,
+      hash: null,
+      files: 0,
+      code: "tree-ref-unreadable",
+      detail: (listed.stderr?.toString("utf8") ?? "").trim() || `git ls-tree fallo sobre '${ref}'`
+    };
+  }
+
+  const prefixes = [...new Set((surfacePaths ?? []).map(normalizeSurfacePrefix))].sort();
+  const parts = [];
+  for (const entry of listed.stdout.toString("utf8").split("\0")) {
+    if (!entry) continue;
+    // `<mode> SP <type> SP <object> TAB <path>`
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    const [, type, object] = entry.slice(0, tab).split(/\s+/);
+    if (type !== "blob") continue;
+    const relative = entry.slice(tab + 1);
+    const first = relative.split("/")[0];
+    if (ALWAYS_SKIPPED.has(first)) continue;
+    if (!isUnderSurface(relative, prefixes)) continue;
+    parts.push(`${relative}:${object}`);
+  }
+
+  parts.sort();
+  return { ok: true, hash: sha256Text(parts.join("\n")), files: parts.length, code: null, detail: null };
 }
 
 export function evidencePath(target, slice, phase) {

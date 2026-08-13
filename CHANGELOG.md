@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+Los defectos de este bloque salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
+
+### Fixed — firma humana (P5, ADR 0007)
+
+- **Una atestación dejaba de verificarse al commit siguiente.** El sujeto (`{slice, phase, tree_hash}`) se computaba sobre el **working tree en el momento de la llamada**, así que `sdlc signoff --verify` sobre una firma legítima devolvía `signoff-subject-mismatch` en cuanto entraba cualquier commit posterior — reproducido con la atestación F5 de `alineacion-del-arbitro-de-calidad`, inválida un solo commit después de emitirse. Una firma que no se puede volver a verificar no sirve como registro de que la fase se aprobó, que es exactamente para lo que existe. Ahora el árbol se lee de **git, en el commit que se presenta como firma** (`computeTreeHashAtRef`), y la verificación es reproducible indefinidamente.
+
+  Que el árbol se haya movido **después** es una pregunta distinta y ahora se responde aparte: `fresh: false` en la salida, y `--require-fresh` para quien exija que lo aprobado siga siendo lo actual (`signoff-stale`). Confundir validez con frescura era la causa raíz.
+
+- **Se podía firmar el vacío.** Con las superficies placeholder que deja el instalador (`apps/api`, `apps/web`) ninguna resuelve a archivos, el `tree_hash` es el SHA-256 de la cadena vacía y la firma resultaba **criptográficamente válida y semánticamente hueca**: atestaba la nada. Ahora es un error duro (`signoff-empty-subject`) tanto en `--create` como en `--verify`.
+
+- **El firmante declarado no podía coincidir nunca con `gpg.format=ssh`.** `%GS` devuelve el UID completo con GPG (`Nombre <email>`) y el **principal** de `allowed_signers` con SSH (normalmente el email solo); la comparación era igualdad exacta contra el valor declarado, y la documentación del propio módulo indicaba la forma GPG. Un consumidor con SSH tenía que averiguarlo empíricamente y gastó un commit de bootstrap en ello. Ahora se aceptan ambas formas y el error muestra **el `%GS` realmente observado** con la línea exacta a poner en `governance.maintainers`.
+
+- **`--create` asumía un keyid GPG.** `-S<clave>` pegado solo vale para GPG; con SSH la clave es una ruta o un literal. Se pasa con `-c user.signingkey`, que funciona en los dos formatos. Cubierto con un E2E de firma **SSH real**, además del de GPG que ya existía.
+
+- **Se podía firmar algo distinto de lo revisado.** El commit de atestación es vacío, así que su árbol es el de `HEAD`: con cambios sin commitear en las superficies, la firma aprobaba el árbol de `HEAD` y no lo que el humano tenía delante. Ahora se bloquea con `signoff-worktree-dirty` y la lista exacta de lo que estorba, salvo `--allow-dirty` explícito.
+
+### Added
+
+- **`tools-doctor` comprueba la preparación para firmar.** Antes, un consumidor descubría que no podía atestar nada en el momento en que un gate humano se lo pedía, con la fase ya bloqueada: en `manga-translator-mvp` no existía `governance.maintainers` y ningún commit de la historia estaba firmado. El probe `commit-signing` cruza maintainers declarados, `user.signingkey`, `gpg.format` y —en SSH— que `gpg.ssh.allowedSignersFile` esté configurado y exista, y explica qué forma de firmante espera cada backend. Los hallazgos de `tools-doctor` ahora arrastran el `detail` del propio probe: el inventario describe la herramienta en general y no puede decir qué le falta a **este** repo.
+
+### Breaking
+
+- El `tree_hash` del sujeto de firma cambia de formato (object id de git por blob, en lugar de sha256 del contenido en disco). Las atestaciones emitidas con versiones anteriores no verifican; hay que volver a firmar. `computeTreeHash` (frescura de evidencia de calidad, P7) **no** cambia.
+
 ## [1.8.2] — 2026-08-09
 
 Los tres defectos de esta versión salieron de **usar** `sdlc save` en un repo recién instalado, no de leer el código.

@@ -900,6 +900,51 @@ export function commandToolsDoctor(options) {
       status: pathExists(path.join(target, ".github", "skills", "party-mode", "SKILL.md")) ? "ok" : "missing",
       path: ".github/skills/party-mode/SKILL.md"
     })),
+    // Preparacion para firmar (P5). Sin esto, un consumidor descubre que no
+    // puede atestar NADA en el momento en que un gate humano se lo pide, con la
+    // fase ya bloqueada: es lo que paso en manga-translator-mvp, donde
+    // `governance.maintainers` no existia y ningun commit de la historia estaba
+    // firmado (%G? = N en todos). Todo lo que se comprueba aqui es local y
+    // barato; no se firma nada de prueba.
+    checkTool("commit-signing", () => {
+      const rawConfig = readTextIfExists(path.join(target, ".sdlc", "config.json"));
+      let maintainers = [];
+      if (rawConfig) {
+        try {
+          maintainers = JSON.parse(rawConfig).governance?.maintainers ?? [];
+        } catch {
+          return { status: "warning", detail: ".sdlc/config.json ilegible: no se puede saber quien puede firmar." };
+        }
+      }
+      const gitConfig = (key) => firstLine(runCommand("git", ["config", "--get", key], target, 5_000).stdout ?? "");
+      const format = gitConfig("gpg.format") || "openpgp";
+      const signingKey = gitConfig("user.signingkey");
+      const allowedSigners = format === "ssh" ? gitConfig("gpg.ssh.allowedSignersFile") : null;
+
+      const missing = [];
+      if (maintainers.length === 0) {
+        missing.push("config.governance.maintainers esta vacio: `sdlc signoff --verify` aborta antes de mirar la firma");
+      }
+      if (!signingKey) {
+        missing.push("git config user.signingkey sin valor: `sdlc signoff --create` no puede firmar");
+      }
+      if (format === "ssh" && !allowedSigners) {
+        missing.push("gpg.format=ssh sin gpg.ssh.allowedSignersFile: `git verify-commit` rechaza cualquier firma");
+      }
+      if (format === "ssh" && allowedSigners && !pathExists(allowedSigners)) {
+        missing.push(`gpg.ssh.allowedSignersFile apunta a ${allowedSigners}, que no existe`);
+      }
+      // El formato de `%GS` depende del backend, y declarar el maintainer en la
+      // forma del otro backend es el error que mas cuesta diagnosticar.
+      const hint =
+        format === "ssh"
+          ? "Con SSH, git reporta como firmante el PRINCIPAL de allowed_signers (normalmente el email solo)."
+          : "Con GPG, git reporta como firmante el UID completo (\"Nombre <email>\").";
+
+      return missing.length > 0
+        ? { status: "warning", format, signingKey: Boolean(signingKey), maintainers: maintainers.length, detail: `${missing.join("; ")}. ${hint}` }
+        : { status: "ok", format, maintainers: maintainers.length, detail: hint };
+    }),
     // Un script de gate que resuelve `@latest` en cada corrida no es
     // reproducible (cambia de comportamiento cuando publican) y paga red cada
     // vez. Medido en un consumidor real: `npx @fission-ai/openspec@latest` era
@@ -943,6 +988,10 @@ export function commandToolsDoctor(options) {
         level: required.has(tool.name) ? "error" : "warning",
         code: `tool-${tool.name}`,
         message: `${tool.name}: ${tool.status}`,
+        // El `detail` que produjo el propio probe: es lo unico que dice QUE
+        // falta en ESTE repo. El inventario describe la herramienta en general;
+        // no puede decir que a este consumidor le falta allowed_signers.
+        ...(tool.detail ? { detail: tool.detail } : {}),
         ...(meta
           ? {
               purpose: meta.purpose,
