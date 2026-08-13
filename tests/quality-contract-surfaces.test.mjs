@@ -113,3 +113,47 @@ assert.equal(
 );
 
 console.log("quality-contract-surfaces injection guard: PASS");
+
+// --- Divergencia entre las DOS declaraciones de superficies -----------------
+// Las superficies viven en `.sdlc/config.json` y en `quality-contract.yaml`, y
+// el arbitro y la firma leen SOLO el contrato. En manga-translator-mvp se
+// corrigieron las superficies fantasma del config y el KPI siguio sin cumplirse
+// y la firma siguio hueca, porque las mismas fantasmas seguian en el contrato.
+const driftTarget = path.join(tempRoot, "drift");
+fs.mkdirSync(path.join(driftTarget, ".sdlc"), { recursive: true });
+fs.mkdirSync(path.join(driftTarget, "src"), { recursive: true });
+fs.writeFileSync(path.join(driftTarget, "src", "index.js"), "export const z = 1;\n", "utf8");
+
+function writeDriftFiles(configSurfaces, contractSurfaces) {
+  fs.writeFileSync(
+    path.join(driftTarget, ".sdlc", "config.json"),
+    JSON.stringify({ schemaVersion: 1, project: { name: "Drift", slug: "drift" }, surfaces: configSurfaces }, null, 2),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(driftTarget, "quality-contract.yaml"),
+    YAML.stringify({ version: 1, enforcement: "observe", tiers: { core: { description: "unico" } }, surfaces: contractSurfaces, probes: [], gates: [] }),
+    "utf8"
+  );
+}
+
+writeDriftFiles(
+  [{ id: "app", path: "src", owner: "web-agent", tier: "core" }],
+  [{ id: "app", path: "apps/web", tier: "core" }]
+);
+const drifted = checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract);
+const divergence = drifted.find((finding) => finding.code === "surface-declaration-divergent");
+assert.ok(divergence, `se esperaba surface-declaration-divergent: ${JSON.stringify(drifted)}`);
+assert.equal(divergence.level, "warning", "escalera de adopcion: avisa, no rompe pipelines sanos al actualizar");
+assert.deepEqual(divergence.onlyInConfig, ["app@src"]);
+assert.deepEqual(divergence.onlyInContract, ["app@apps/web"]);
+
+// Sincronizadas: ni un hallazgo. Y `src/` existe, asi que tampoco fantasma.
+writeDriftFiles([{ id: "app", path: "src", owner: "web-agent", tier: "core" }], [{ id: "app", path: "src", tier: "core" }]);
+assert.deepEqual(checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract), []);
+
+// Sin superficies en el config no hay contra que cruzar: no se inventa nada.
+writeDriftFiles([], [{ id: "app", path: "src", tier: "core" }]);
+assert.deepEqual(checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract), []);
+
+console.log("quality-contract-surfaces declaration drift: PASS");

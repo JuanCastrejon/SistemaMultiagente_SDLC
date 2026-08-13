@@ -25,6 +25,56 @@ export function loadQualityContract(target) {
   }
 }
 
+// Las superficies se declaran DOS veces: en `.sdlc/config.json` (con owner y
+// tier) y en `quality-contract.yaml` (con money_path y has_ui). El contrato se
+// genera desde el config al instalar, pero nada volvia a cruzarlos despues, y
+// el arbitro y la firma leen SOLO el contrato. Reproducido en
+// manga-translator-mvp: corregir las superficies fantasma en `.sdlc/config.json`
+// dejaba el KPI sin cumplir y la firma hueca igual, porque las mismas
+// superficies fantasma seguian en el contrato. La divergencia era detectable
+// desde antes, solo que nadie la habia cruzado.
+function surfaceKeys(surfaces) {
+  return new Set((surfaces ?? []).map((surface) => `${surface.id ?? "?"}@${String(surface.path ?? "").replace(/\\/g, "/").replace(/\/+$/, "")}`));
+}
+
+function checkSurfaceDeclarationDrift(target, contract) {
+  const raw = readTextIfExists(path.join(target, ".sdlc", "config.json"));
+  if (!raw) return [];
+  let configSurfaces;
+  try {
+    configSurfaces = JSON.parse(raw).surfaces;
+  } catch {
+    return [];
+  }
+  // Sin superficies en el config no hay contra que cruzar. No se inventa un
+  // hallazgo: el consumidor puede estar declarandolas solo en el contrato.
+  if (!Array.isArray(configSurfaces) || configSurfaces.length === 0) return [];
+
+  const fromConfig = surfaceKeys(configSurfaces);
+  const fromContract = surfaceKeys(contract?.surfaces);
+  const onlyConfig = [...fromConfig].filter((key) => !fromContract.has(key));
+  const onlyContract = [...fromContract].filter((key) => !fromConfig.has(key));
+  if (onlyConfig.length === 0 && onlyContract.length === 0) return [];
+
+  // WARNING y no error, por la misma escalera de adopcion que los probes sin
+  // `command_sha256`: casi ningun consumidor existente mantiene las dos listas
+  // sincronizadas, y convertir eso en rojo el dia del upgrade rompe pipelines
+  // sanos. Lo que faltaba no era severidad: era que alguien las cruzara y
+  // dijera cual de las dos esta gobernando de verdad.
+  return [
+    {
+      level: "warning",
+      code: "surface-declaration-divergent",
+      detail:
+        "`.sdlc/config.json` y `quality-contract.yaml` declaran superficies distintas, y el arbitro y la firma " +
+        "leen SOLO el contrato: corregir una sola de las dos no arregla nada. " +
+        `Solo en config: ${onlyConfig.join(", ") || "(ninguna)"}. Solo en el contrato: ${onlyContract.join(", ") || "(ninguna)"}.`,
+      onlyInConfig: onlyConfig,
+      onlyInContract: onlyContract
+    }
+  ];
+}
+
 // Una superficie cuyo path no existe hace que todo gate sobre ella sea vacuo, y
 // "0 violaciones sobre 0 archivos" se ve igual de verde que un repo sano.
 export function checkSurfaces(target, contract) {
@@ -40,6 +90,7 @@ export function checkSurfaces(target, contract) {
       });
     }
   }
+  findings.push(...checkSurfaceDeclarationDrift(target, contract));
   return findings;
 }
 
