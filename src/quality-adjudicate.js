@@ -121,6 +121,18 @@ export function resolveUnavailableProbes(contract) {
 // "0 violaciones sobre 0 archivos" se ve igual de verde que un repo sano.
 export function checkSurfaces(target, contract) {
   const findings = [];
+  // Sin una sola superficie no hay tier, y sin tier los gates con umbral por
+  // tier no pueden resolverlo: el sintoma es un `gate-threshold-missing` que no
+  // dice nada de la causa. Se nombra la causa primero.
+  if ((contract?.surfaces ?? []).length === 0) {
+    findings.push({
+      level: "error",
+      code: "quality-contract-surfaces-empty",
+      detail:
+        "quality-contract.yaml no declara ninguna superficie: no hay nada que medir, no hay tier con el que resolver umbrales " +
+        "y `sdlc signoff` firmaria el arbol vacio. Declarar las superficies reales en .sdlc/config.json y regenerar el contrato."
+    });
+  }
   for (const surface of contract?.surfaces ?? []) {
     if (!pathExists(path.join(target, surface.path))) {
       findings.push({

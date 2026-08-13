@@ -13,6 +13,10 @@ const context = defaultConfig({
 context.surfacesTable = "| `backend` | `apps/api` | `api-agent` |";
 context.surfacesList = "- `apps/api`";
 context.qualityContractSurfaces = '[{ id: "backend", path: "apps/api", tier: "core", money_path: false, has_ui: false }]';
+context.surfaceTraceabilityRoots = '["apps/api"]';
+context.surfaceTraceabilitySurfaces = '[{ "id": "backend", "owner": "api-agent" }]';
+context.surfacesOwnedByApiAgent = "apps/api";
+context.surfacesOwnedByWebAgent = "apps/web";
 context.sdlcSharedRulesBlock = "<!-- SDLC_SHARED_RULES_START sha256:example -->\nshared rules\n<!-- SDLC_SHARED_RULES_END -->";
 
 const files = listFiles(path.join(root, "templates")).filter((file) => {
@@ -28,12 +32,34 @@ for (const file of files) {
   const content = fs.readFileSync(absolute, "utf8").replace(/\$\{\{[\s\S]*?\}\}/g, " ");
   for (const match of content.matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)) {
     const expr = match[1];
-    const value = expr.split(".").reduce((obj, key) => {
-      if (obj == null) return undefined;
-      if (/^\d+$/.test(key) && Array.isArray(obj)) return obj[Number(key)];
-      return obj[key];
-    }, context);
-    if (value == null) {
+    // Lo que este validador busca es una referencia a una clave que NO EXISTE
+    // (una errata en el template). `null` es un valor legitimo desde que el
+    // instalador dejo de escribir placeholders: `stack.backend: null` significa
+    // "este proyecto no tiene backend", no "alguien escribio mal la clave".
+    // Confundirlos ponia en rojo a un config honesto.
+    let cursor = context;
+    let exists = true;
+    for (const key of expr.split(".")) {
+      if (cursor === null || typeof cursor !== "object") {
+        exists = false;
+        break;
+      }
+      if (/^\d+$/.test(key) && Array.isArray(cursor)) {
+        const index = Number(key);
+        if (index >= cursor.length) {
+          exists = false;
+          break;
+        }
+        cursor = cursor[index];
+        continue;
+      }
+      if (!(key in cursor)) {
+        exists = false;
+        break;
+      }
+      cursor = cursor[key];
+    }
+    if (!exists) {
       errors.push(`${path.relative(root, absolute)}: unresolved {{${expr}}}`);
     }
   }

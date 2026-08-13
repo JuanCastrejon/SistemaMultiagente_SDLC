@@ -543,6 +543,36 @@ function daysSince(filePath) {
 
 function collectDoctorEnhancements(target, config) {
   const findings = [];
+
+  // Un repo recien instalado NO esta configurado, y tiene que verse asi. Antes
+  // el instalador dejaba superficies y stack de ejemplo, el repo parecia listo,
+  // y el precio se pagaba semanas despues: gates vacuos sobre paths que no
+  // existen y una firma humana sobre el arbol vacio.
+  if (config) {
+    const surfaces = Array.isArray(config.surfaces) ? config.surfaces : [];
+    if (surfaces.length === 0) {
+      findings.push({
+        level: "error",
+        code: "config-surfaces-empty",
+        message:
+          "config.surfaces esta vacio: sin superficies declaradas ningun gate mide nada y `sdlc signoff` no puede atestar nada. " +
+          "Declarar las superficies reales del repo en .sdlc/config.json y regenerar quality-contract.yaml."
+      });
+    }
+    const placeholders = Object.entries(config.stack ?? {})
+      .filter(([, value]) => typeof value === "string" && /^<.*>$/.test(value.trim()))
+      .map(([key]) => key);
+    if (placeholders.length > 0) {
+      findings.push({
+        level: "error",
+        code: "config-stack-placeholder",
+        fields: placeholders,
+        message:
+          `config.stack conserva placeholders de plantilla en: ${placeholders.join(", ")}. ` +
+          "Poner la tecnologia real, o `null` si el proyecto no tiene esa superficie."
+      });
+    }
+  }
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   findings.push({
     level: nodeMajor >= 18 ? "info" : "error",

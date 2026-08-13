@@ -29,16 +29,32 @@ const greenfield = path.join(tempRoot, "greenfield");
 fs.mkdirSync(greenfield, { recursive: true });
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Demo", "--json"]);
 
+// El instalador YA NO escribe superficies de ejemplo. Antes dejaba `apps/api`
+// y `apps/web`, y en un repo con otro layout eso no era un ejemplo sino
+// configuracion activa: gates vacuos sobre paths inexistentes y sujeto de
+// firma sobre el arbol vacio, sin que nada lo dijera. Un repo recien instalado
+// declara CERO superficies y `doctor` lo marca como error.
 const installedContract = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"));
-assert.equal(installedContract.surfaces.length, 2);
-const backend = installedContract.surfaces.find((s) => s.id === "backend");
-assert.equal(backend.path, "apps/api");
-assert.equal(backend.tier, "core", "el default de fabrica declara tier explicito: paridad con lo que el template estatico traia antes de P6");
-assert.equal(backend.money_path, false);
-assert.equal(backend.has_ui, false);
-const web = installedContract.surfaces.find((s) => s.id === "web");
-assert.equal(web.tier, "standard");
-assert.equal(web.has_ui, true);
+assert.deepEqual(installedContract.surfaces, [], "install no inventa superficies");
+
+const installedConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
+assert.deepEqual(installedConfig.surfaces, []);
+assert.deepEqual(
+  Object.values(installedConfig.stack),
+  [null, null, null, null, null],
+  "el stack se instala en null, no con placeholders <BACKEND_STACK>"
+);
+
+let doctorPayload;
+try {
+  doctorPayload = JSON.parse(run(["doctor", "--target", greenfield, "--json"]));
+} catch (error) {
+  doctorPayload = JSON.parse(error.stdout.toString());
+}
+assert.ok(
+  doctorPayload.findings.some((finding) => finding.code === "config-surfaces-empty" && finding.level === "error"),
+  `doctor tiene que marcar el repo a medio configurar: ${JSON.stringify(doctorPayload.findings.map((f) => f.code))}`
+);
 
 // --- 2. el piloto real: superficie propia, no apps/api/apps/web ------------
 const config = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));

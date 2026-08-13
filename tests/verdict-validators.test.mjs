@@ -39,7 +39,27 @@ const linkPath = path.join(target, "node_modules", "sistema-multiagente-sdlc");
 fs.mkdirSync(path.dirname(linkPath), { recursive: true });
 fs.symlinkSync(repoRoot, linkPath, os.platform() === "win32" ? "junction" : "dir");
 
-// --- drift: install de fabrica sin editar nada, sin drift bloqueante -------
+// --- drift: un install de fabrica NO esta configurado, y se ve --------------
+// El instalador ya no escribe superficies de ejemplo, asi que `doctor` sale en
+// error hasta que alguien declare las reales. Es el estado correcto: antes el
+// repo parecia listo y los gates median sobre paths inexistentes.
+const driftSinSuperficies = runValidator("drift");
+assert.notEqual(driftSinSuperficies.status, 0);
+assert.match(driftSinSuperficies.stdout + driftSinSuperficies.stderr, /config-surfaces-empty/);
+
+// Declaradas las superficies reales (lo que hace un consumidor), no hay drift.
+const configPath = path.join(target, ".sdlc", "config.json");
+const installedConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+installedConfig.surfaces = [
+  { id: "backend", path: "apps/api", owner: "api-agent", tier: "core" },
+  { id: "web", path: "apps/web", owner: "web-agent", tier: "standard", hasUi: true }
+];
+fs.writeFileSync(configPath, JSON.stringify(installedConfig, null, 2), "utf8");
+execFileSync("node", [cli, "upgrade", "--target", target, "--accept-managed", ".sdlc/config.json", "--json"], {
+  cwd: repoRoot,
+  encoding: "utf8"
+});
+
 const drift = runValidator("drift");
 assert.equal(drift.status, 0, drift.stdout + drift.stderr);
 

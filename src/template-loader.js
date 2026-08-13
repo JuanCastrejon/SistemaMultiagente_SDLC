@@ -154,10 +154,46 @@ export function buildQualityContractSurfaces(surfaces) {
   return `[${entries.join(", ")}]`;
 }
 
+// La matriz de trazabilidad se genera desde config.surfaces por el mismo
+// motivo que el contrato de calidad (P6): el template traia `apps/api`,
+// `apps/web` y `apps/mobile` fijos, asi que en cualquier repo con otro layout
+// declaraba superficies inexistentes con owners inventados.
+//
+// `indent` alinea el JSON generado con la posicion que ocupa dentro del
+// template, para que el archivo resultante siga siendo JSON valido y legible.
+export function buildSurfaceTraceability(surfaces, indent = 2) {
+  const pad = " ".repeat(indent);
+  const reindent = (value) => JSON.stringify(value, null, 2).split("\n").join(`\n${pad}`);
+  const roots = [...new Set([...surfaces.map((surface) => surface.path), "docs", "openspec"])];
+  const entries = surfaces.map((surface) => ({
+    id: surface.id,
+    owner: surface.owner,
+    tier: surface.tier ?? "standard",
+    pathPrefixes: [`${String(surface.path).replace(/\/+$/, "")}/`],
+    references: { requirements: [], userStories: [], useCases: [], adrs: [] },
+    notes: ""
+  }));
+  return { roots: reindent(roots), surfaces: reindent(entries) };
+}
+
+function surfacesOwnedBy(surfaces, owner) {
+  const owned = surfaces.filter((surface) => surface.owner === owner).map((surface) => surface.path);
+  return owned.length > 0 ? owned.join(", ") : "(sin superficie declarada todavia)";
+}
+
 function buildContext(config) {
   const surfaces = Array.isArray(config.surfaces) ? config.surfaces : [];
+  const traceability = buildSurfaceTraceability(surfaces);
   return {
     ...config,
+    surfaceTraceabilityRoots: traceability.roots,
+    surfaceTraceabilitySurfaces: traceability.surfaces,
+    // Las fichas de agente decian `{{surfaces.0.path}}` y `{{surfaces.1.path}}`:
+    // asumian que la superficie 0 es del api-agent y la 1 del web-agent, que
+    // era cierto solo mientras el instalador escribiera sus dos superficies de
+    // ejemplo. Se resuelve por OWNER, que es el dato que de verdad las liga.
+    surfacesOwnedByApiAgent: surfacesOwnedBy(surfaces, "api-agent"),
+    surfacesOwnedByWebAgent: surfacesOwnedBy(surfaces, "web-agent"),
     surfacesTable: surfaces
       .map((surface) => `| \`${surface.id}\` | \`${surface.path}\` | \`${surface.owner}\` |`)
       .join("\n"),

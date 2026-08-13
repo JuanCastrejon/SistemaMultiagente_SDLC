@@ -254,6 +254,22 @@ execFileSync("node", [cli, "install", "--target", installed, "--mode", "greenfie
   encoding: "utf8"
 });
 
+// El instalador ya no escribe superficies de ejemplo (antes dejaba apps/api y
+// apps/web, que en un repo con otro layout eran gates vacuos y firma sobre el
+// arbol vacio). Declararlas es ahora un paso explicito del consumidor.
+{
+  const configPath = path.join(installed, ".sdlc", "config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.surfaces = [{ id: "dominio", path: "packages/dominio", owner: "api-agent", tier: "core" }];
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
+  execFileSync("node", [cli, "upgrade", "--target", installed, "--accept-managed", ".sdlc/config.json", "--json"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  fs.mkdirSync(path.join(installed, "packages", "dominio"), { recursive: true });
+  fs.writeFileSync(path.join(installed, "packages", "dominio", "index.ts"), "export const dominio = 1;\n", "utf8");
+}
+
 // El contrato instalado ya es v2 y F9 declara sus gates.
 const phaseContract = fs.readFileSync(path.join(installed, "phase-contract.yaml"), "utf8");
 assert.match(phaseContract, /^version: 2$/m);

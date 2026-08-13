@@ -24,6 +24,16 @@ function run(args, options = {}) {
   });
 }
 
+// Para los comandos que DEBEN salir en no-cero: devuelve su stdout en vez de
+// tumbar la regresion.
+function runAllowingFailure(args, options = {}) {
+  try {
+    return run(args, options);
+  } catch (error) {
+    return `${error.stdout ?? ""}${error.stderr ?? ""}`;
+  }
+}
+
 function runStatus(args) {
   return spawnSync("node", [cli, ...args], {
     cwd: repoRoot,
@@ -106,6 +116,21 @@ run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name"
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
 assert.equal(greenfieldConfig.frameworkVersion, FRAMEWORK_VERSION);
 assert.equal(greenfieldConfig.scale, "feature");
+// Un install de fabrica ya NO declara superficies: `doctor` sale en error
+// hasta que se declaren las reales, que es el estado honesto de un repo a
+// medio configurar. Se comprueba el error y despues se configura, como haria
+// un consumidor.
+const doctorSinSuperficies = runAllowingFailure(["doctor", "--target", greenfield, "--json"]);
+assert.match(doctorSinSuperficies, /config-surfaces-empty/);
+
+const greenfieldConfigPath = path.join(greenfield, ".sdlc", "config.json");
+const configuredGreenfield = JSON.parse(fs.readFileSync(greenfieldConfigPath, "utf8"));
+configuredGreenfield.surfaces = [{ id: "app", path: "src", owner: "api-agent", tier: "core" }];
+fs.writeFileSync(greenfieldConfigPath, JSON.stringify(configuredGreenfield, null, 2), "utf8");
+fs.mkdirSync(path.join(greenfield, "src"), { recursive: true });
+fs.writeFileSync(path.join(greenfield, "src", "index.js"), "export const app = 1;\n", "utf8");
+run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
 
