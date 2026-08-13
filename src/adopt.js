@@ -131,15 +131,37 @@ function slugFromName(name) {
 export function commandAdopt(options = {}) {
   const target = path.resolve(options.target ?? process.cwd());
   const packageJsonPath = path.join(target, "package.json");
-  if (!pathExists(packageJsonPath)) {
-    return {
-      exitCode: EXIT_ERROR,
-      payload: { status: "error", message: "sdlc adopt exige un package.json existente: no es un scaffold, es incorporacion a un repo ya vivo." }
-    };
-  }
-
   const created = [];
   const skipped = [];
+
+  // Un repo de raiz plana sin package.json —una extension de navegador, por
+  // ejemplo— no podia adoptar el framework, y el mensaje se limitaba a decir
+  // que no. Reproducido en manga-translator-mvp: `adopt --dry-run` respondia
+  // "exige un package.json existente" y ahi terminaba la pista.
+  //
+  // Sigue sin ser un scaffold por defecto: crear un manifiesto de paquete en
+  // un repo ajeno es una decision del dueno del repo, no de una herramienta de
+  // gobernanza. Lo que cambia es que ahora hay un camino explicito
+  // (`--bootstrap-package-json`) y, si no se usa, el error dice exactamente que
+  // ejecutar.
+  if (!pathExists(packageJsonPath)) {
+    if (!(options["bootstrap-package-json"] ?? options.bootstrapPackageJson)) {
+      return {
+        exitCode: EXIT_ERROR,
+        payload: {
+          status: "error",
+          code: "adopt-package-json-missing",
+          message:
+            "sdlc adopt exige un package.json existente: no es un scaffold, es incorporacion a un repo ya vivo. " +
+            "Si este repo no tiene manifiesto de paquete (raiz plana, sin build), crear uno minimo con " +
+            "`sdlc adopt --bootstrap-package-json` o escribirlo a mano antes de reintentar."
+        }
+      };
+    }
+    const bootstrapName = slugFromName(options["project-name"] ?? options.projectName ?? path.basename(target));
+    writeJson(packageJsonPath, { name: bootstrapName, version: "0.0.0", private: true });
+    created.push("package.json (minimo, creado por --bootstrap-package-json)");
+  }
 
   // 1. devDependency versionada. Es el punto central de esta pieza: la
   // decision 9 abandona npm link porque el evaluado no puede ser quien
