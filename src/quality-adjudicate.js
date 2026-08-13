@@ -75,6 +75,48 @@ function checkSurfaceDeclarationDrift(target, contract) {
   ];
 }
 
+/**
+ * Probes que el contrato declara NO DISPONIBLES, con el motivo escrito.
+ *
+ * El caso que lo motiva: una extension Chrome de raiz plana, sin build y sin un
+ * solo test, contra un contrato que exige cobertura de lineas cambiadas, grafo
+ * de dependencias y mutation testing. Ahi el rojo no dice "calidad
+ * insuficiente", dice "no se pudo evaluar", y un rojo permanente que no
+ * distingue las dos cosas ensena a ignorar la senal.
+ *
+ * La exencion se declara sobre el PROBE (la capacidad ausente), no sobre el
+ * gate: renunciar a medir cobertura es una decision visible que arrastra a
+ * todos sus gates, mientras que apagar gates de uno en uno permite quedarse con
+ * los que pasan. Y sin `reason` no hay exencion: una exencion sin motivo
+ * escrito es indistinguible de bajar el liston.
+ *
+ * `metrics_prefix` existe porque el id del probe no siempre es el espacio de
+ * nombres de sus metricas (el probe `deps` emite `dependencies.*`).
+ */
+export function resolveUnavailableProbes(contract) {
+  const resolved = [];
+  const findings = [];
+  for (const probe of contract?.probes ?? []) {
+    if (!probe?.unavailable) continue;
+    const declared = typeof probe.unavailable === "object" ? probe.unavailable : {};
+    const reason = String(declared.reason ?? "").trim();
+    const prefix = String(probe.metrics_prefix ?? probe.id ?? "").trim();
+    if (!reason || !prefix) {
+      findings.push({
+        level: "warning",
+        code: "probe-unavailable-without-reason",
+        probe: probe.id ?? null,
+        detail:
+          `el probe '${probe.id ?? "?"}' se declara no disponible sin \`reason\`: sin motivo escrito no hay exencion, ` +
+          "y sus gates se siguen adjudicando como no medidos"
+      });
+      continue;
+    }
+    resolved.push({ probeId: probe.id ?? prefix, prefix, reason, since: declared.since ?? null });
+  }
+  return { resolved, findings };
+}
+
 // Una superficie cuyo path no existe hace que todo gate sobre ella sea vacuo, y
 // "0 violaciones sobre 0 archivos" se ve igual de verde que un repo sano.
 export function checkSurfaces(target, contract) {
@@ -244,7 +286,8 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
       evaluated: [],
       violations: [],
       warnings: [],
-      vacuous: []
+      vacuous: [],
+      notApplicable: []
     };
   }
 
@@ -296,8 +339,13 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
   }
 
   const declaredByContract = Array.isArray(gateIds) ? gateIds : null;
+  const unavailable = resolveUnavailableProbes(contract);
+  surfaceFindings.push(...unavailable.findings);
+  const unavailableProbes = unavailable.resolved;
   const ownMetrics = read.evidence?.quality_metrics?.metrics ?? {};
-  const groupResults = [evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract })];
+  const groupResults = [
+    evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract, unavailableProbes })
+  ];
   const inherited = [];
 
   // El arbol sobre el que ESTA fase se midio. Es la referencia contra la que se
@@ -315,7 +363,15 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
     const originTreeHash = originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null;
     groupResults.push(
-      evaluateQualityGates({ gates: originGates, metrics: originMetrics, phase: originPhase, tier, baseline, declaredByContract })
+      evaluateQualityGates({
+        gates: originGates,
+        metrics: originMetrics,
+        phase: originPhase,
+        tier,
+        baseline,
+        declaredByContract,
+        unavailableProbes
+      })
     );
     inherited.push({
       phase: originPhase,
@@ -349,7 +405,8 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     evaluated: groupResults.flatMap((result) => result.evaluated),
     violations: groupResults.flatMap((result) => result.violations),
     warnings: groupResults.flatMap((result) => result.warnings),
-    vacuous: groupResults.flatMap((result) => result.vacuous)
+    vacuous: groupResults.flatMap((result) => result.vacuous),
+    notApplicable: groupResults.flatMap((result) => result.notApplicable ?? [])
   };
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
