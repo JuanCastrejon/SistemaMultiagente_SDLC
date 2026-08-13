@@ -11,6 +11,7 @@
   "repoGovernedSkillSourceRoot": ".github/skills",
   "repoGovernedSkills": [
     "backend-audit",
+    "codex-sesion",
     "commit",
     "contexto-proyecto",
     "documentacion-viva",
@@ -51,6 +52,47 @@
         }
       ],
       "skippedSkills": []
+    },
+    {
+      "source": "addyosmani/agent-skills",
+      "license": "MIT © 2025 Addy Osmani",
+      "adoptionNote": "Fuente donante analizada el 2026-08-13. No se copian archivos: se adapta la ANATOMIA de sus skills (Racionalizaciones, Senales de alarma, Verificacion), que es lo que anade valor sobre nuestro formato Trigger+Pasos. Toda adaptacion entra como propuesta bajo openspec/changes/ y la aprueba una persona, igual que las de SkillOpt (ADR 025).",
+      "skills": [
+        {
+          "name": "security-and-hardening",
+          "why": "Cubre un hueco real: no tenemos skill de endurecimiento; encaja con qa-security-review."
+        },
+        {
+          "name": "debugging-and-error-recovery",
+          "why": "Triaje de cinco pasos. Hoy el diagnostico depende del criterio de cada agente."
+        },
+        {
+          "name": "deprecation-and-migration",
+          "why": "Complementa nuestras migraciones versionadas con el lado de producto."
+        },
+        {
+          "name": "observability-and-instrumentation",
+          "why": "No tenemos nada de observabilidad y la matriz NFR la exige por slice."
+        },
+        {
+          "name": "documentation-and-adrs",
+          "why": "Tenemos ADRs pero ninguna skill que diga cuando y como escribirlos."
+        }
+      ],
+      "skippedSkills": [
+        {
+          "name": "git-workflow-and-versioning",
+          "why": "Es trunk-based y choca con feature/ -> develop -> main, que es regla del proyecto. Importarla metia dos verdades contradictorias en el mismo repo."
+        },
+        {
+          "name": "spec-driven-development",
+          "why": "Se solapa con OpenSpec, que ya es la fuente canonica de capacidades."
+        },
+        {
+          "name": "planning-and-task-breakdown",
+          "why": "Cubierto por el ciclo F1-F5 y sus artefactos (proposal, design, tasks)."
+        }
+      ]
     }
   ],
   "crossMirrorSkills": [],
