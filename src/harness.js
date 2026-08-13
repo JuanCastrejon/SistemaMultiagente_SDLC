@@ -591,16 +591,10 @@ export function commandStatus(options) {
   const sliceFromOpts = options.slice ?? null;
   let resolvedPhase = phaseFromOpts;
   let resolvedSlice = sliceFromOpts;
+  const phaseStatus = readPhaseStatus(target);
   if (!resolvedPhase || !resolvedSlice) {
-    try {
-      const raw = fs.readFileSync(phaseStatusPath, "utf8");
-      for (const line of raw.split("\n")) {
-        const mp = line.match(/^\s*current_phase:\s*"?([^"\r\n]+?)"?\s*$/);
-        const ms = line.match(/^\s*current_slice:\s*"?([^"\r\n]+?)"?\s*$/);
-        if (mp) resolvedPhase = resolvedPhase ?? mp[1].trim();
-        if (ms) resolvedSlice = resolvedSlice ?? ms[1].trim();
-      }
-    } catch { /* phase-status.yaml absent */ }
+    resolvedPhase = resolvedPhase ?? phaseStatus.pointer.phase;
+    resolvedSlice = resolvedSlice ?? phaseStatus.pointer.slice;
   }
   if (resolvedPhase && resolvedSlice) {
     const pgOptions = { ...options, phase: resolvedPhase, slice: resolvedSlice, "exit-code": true };
@@ -635,6 +629,20 @@ export function commandStatus(options) {
     };
   }
 
+  // Estado de CADA slice declarado. El puntero decide el veredicto, pero un
+  // slice en vuelo que nadie mira es un slice que puede llegar a merge sin que
+  // su fase lo permita: por eso se adjudica tambien, y se reporta aparte.
+  const otherSlices = phaseStatus.slices.map((slice) => {
+    if (!slice.id || !slice.phase) {
+      return { ...slice, phaseGate: { status: "skipped", message: "el slice no declara fase" } };
+    }
+    if (slice.id === resolvedSlice && slice.phase === resolvedPhase && phaseGateResult) {
+      return { ...slice, phaseGate: { exitCode: phaseGateExitCode, status: phaseGateResult.status ?? null } };
+    }
+    const result = commandPhaseGate({ ...options, phase: slice.phase, slice: slice.id, "exit-code": true });
+    return { ...slice, phaseGate: { exitCode: result.exitCode, status: result.payload?.status ?? null, blockers: result.payload?.blockers ?? undefined } };
+  });
+
   const govOk = govResult.exitCode === EXIT_OK;
   const toolsOk = toolsResult.exitCode === EXIT_OK;
   const phaseOk = phaseGateResult === null || phaseGateExitCode === EXIT_OK;
@@ -654,7 +662,11 @@ export function commandStatus(options) {
     phaseGate: phaseGateResult
       ? { exitCode: phaseGateExitCode, phase: resolvedPhase, slice: resolvedSlice, ...phaseGateResult }
       : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" },
-    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" }
+    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" },
+    // Todos los slices declarados, no solo el apuntado. `ready` sigue saliendo
+    // del puntero: esto informa sin cambiar el veredicto, que es lo que permite
+    // que sea aditivo y no rompa a nadie al actualizar.
+    slices: otherSlices
   };
 
   if (writeMd) {
@@ -690,6 +702,22 @@ export function commandStatus(options) {
       `| phase-gate (${resolvedPhase ?? "?"}/${resolvedSlice ?? "?"}) | ${phaseStatus} |`,
       `| quality | ${qualityStatus} |`,
       "",
+      ...(otherSlices.length > 1
+        ? [
+            "## Slices declarados",
+            "",
+            "El veredicto de arriba sale del puntero. Estos son todos los slices que",
+            "`phase-status.yaml` declara, con su phase-gate adjudicado por separado.",
+            "",
+            "| slice | fase | phase-gate | puntero |",
+            "|---|---|---|---|",
+            ...otherSlices.map(
+              (slice) =>
+                `| ${slice.id} | ${slice.phase ?? "?"} | ${slice.phaseGate?.status ?? "?"} | ${slice.isPointer ? "sí" : ""} |`
+            ),
+            ""
+          ]
+        : []),
       "## Details",
       "",
       `### governance-check`,
@@ -820,6 +848,71 @@ export function commandGovernanceCheck(options) {
       findings
     }
   };
+}
+
+/**
+ * Lee `.github/agent-state/phase-status.yaml`.
+ *
+ * `current_slice`/`current_phase` son un puntero UNICO, y el arbitro lo lee
+ * para decidir que evalua. Con varios slices en vuelo —tres a la vez en
+ * manga-translator-mvp— eso significa que se evalua uno y los demas quedan
+ * invisibles: no fallan, no aparecen, no existen para el tablero.
+ *
+ * El mapa `slices:` es ADITIVO: el puntero se conserva tal cual (los workflows
+ * de los consumidores lo grepean y no se rompen), y quien declare el mapa
+ * obtiene ademas el estado de cada slice. Sin mapa, se deriva una entrada del
+ * propio puntero, asi que un phase-status antiguo se comporta igual que antes.
+ *
+ * @returns {{pointer: {slice: string|null, phase: string|null}, slices: Array, declared: boolean, parsed: boolean}}
+ */
+export function readPhaseStatus(target) {
+  const raw = readTextIfExists(path.join(target, ".github", "agent-state", "phase-status.yaml"));
+  const empty = { pointer: { slice: null, phase: null }, slices: [], declared: false, parsed: false };
+  if (!raw) return empty;
+
+  let doc = null;
+  try {
+    doc = YAML.parse(raw);
+  } catch {
+    // YAML roto: se cae al parseo por lineas que se usaba antes, para no
+    // perder el puntero por un error en una parte del archivo que no importa.
+    const pointer = { slice: null, phase: null };
+    for (const line of raw.split("\n")) {
+      const mp = line.match(/^\s*current_phase:\s*"?([^"\r\n]+?)"?\s*$/);
+      const ms = line.match(/^\s*current_slice:\s*"?([^"\r\n]+?)"?\s*$/);
+      if (mp) pointer.phase = pointer.phase ?? mp[1].trim();
+      if (ms) pointer.slice = pointer.slice ?? ms[1].trim();
+    }
+    return { pointer, slices: pointer.slice ? [{ id: pointer.slice, phase: pointer.phase, isPointer: true }] : [], declared: false, parsed: false };
+  }
+
+  const pointer = {
+    slice: doc?.current_slice ? String(doc.current_slice).trim() : null,
+    phase: doc?.current_phase ? String(doc.current_phase).trim() : null
+  };
+  const declaredMap = doc?.slices && typeof doc.slices === "object" && !Array.isArray(doc.slices) ? doc.slices : null;
+  if (!declaredMap) {
+    return {
+      pointer,
+      slices: pointer.slice ? [{ id: pointer.slice, phase: pointer.phase, isPointer: true, phasesCompleted: doc?.phases_completed ?? [] }] : [],
+      declared: false,
+      parsed: true
+    };
+  }
+
+  const slices = Object.entries(declaredMap).map(([id, value]) => ({
+    id,
+    phase: value?.phase ? String(value.phase).trim() : null,
+    phaseName: value?.phase_name ?? null,
+    phasesCompleted: value?.phases_completed ?? [],
+    isPointer: id === pointer.slice
+  }));
+  // El puntero apunta a un slice que el mapa no declara: el tablero y el mapa
+  // se contradicen y hay que decirlo, no elegir uno en silencio.
+  if (pointer.slice && !slices.some((slice) => slice.id === pointer.slice)) {
+    slices.push({ id: pointer.slice, phase: pointer.phase, isPointer: true, phasesCompleted: [], unlisted: true });
+  }
+  return { pointer, slices, declared: true, parsed: true };
 }
 
 function checkTool(name, probe) {

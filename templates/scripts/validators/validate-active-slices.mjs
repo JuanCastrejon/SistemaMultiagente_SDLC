@@ -28,9 +28,21 @@ if (phase === "F0") {
   process.exit(0);
 }
 
-const changeDir = path.join(target, "openspec", "changes", slice);
-if (!fs.existsSync(changeDir)) {
-  fail(`phase-status.yaml declara el slice activo '${slice}' pero openspec/changes/${slice}/ no existe: el tracker y el ledger divergen`);
+// El puntero es UNO de los slices en vuelo. Si el tracker declara el mapa
+// `slices:`, se cruzan TODOS: un slice que solo existe en el tracker es
+// exactamente la divergencia que este validador busca, y limitarse al apuntado
+// la dejaba pasar en cuanto habia mas de uno.
+const declared = Array.isArray(result.payload?.slices) ? result.payload.slices : [];
+const aTrazar = declared.length > 0
+  ? declared.filter((entry) => entry.id && entry.phase !== "F0").map((entry) => entry.id)
+  : [slice];
+
+const divergentes = [...new Set(aTrazar)].filter((id) => !fs.existsSync(path.join(target, "openspec", "changes", id)));
+if (divergentes.length > 0) {
+  fail(
+    `phase-status.yaml declara ${divergentes.length === 1 ? "el slice activo" : "los slices activos"} ` +
+      `${divergentes.map((id) => `'${id}'`).join(", ")} pero no existe su directorio en openspec/changes/: el tracker y el ledger divergen`
+  );
   process.exit(1);
 }
-ok(`slice activo '${slice}' tiene change correspondiente en openspec/changes/`);
+ok(`${aTrazar.length} slice(s) activo(s) con change correspondiente en openspec/changes/`);
