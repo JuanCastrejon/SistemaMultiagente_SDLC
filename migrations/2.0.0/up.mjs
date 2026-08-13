@@ -1,4 +1,4 @@
-// 1.8.3 — hallazgos de operar el framework en manga-translator-mvp.
+// 2.0.0 — hallazgos de operar el framework en manga-translator-mvp.
 //
 // La migracion es la minima posible a proposito: NO reescribe `surfaces` ni
 // `stack` del consumidor. Que el instalador dejara de escribir placeholders es
@@ -9,7 +9,7 @@
 // Lo que sí cambia de comportamiento tras actualizar, y por eso va escrito en
 // el archivo que queda en `.sdlc/migrations/`:
 //
-//   1. Las atestaciones emitidas antes de 1.8.3 NO verifican: el sujeto de la
+//   1. Las atestaciones emitidas antes de 2.0.0 NO verifican: el sujeto de la
 //      firma cambio de formato (object id de git por blob, en vez de sha256 del
 //      contenido del working tree). Hay que volver a firmar con
 //      `sdlc signoff --slice <id> --phase <F> --create`.
@@ -19,10 +19,10 @@
 //      la primera corrida: es la condicion que hacia vacuos sus gates.
 export function up(files = {}) {
   const extra = {
-    ".sdlc/migrations/1.8.3-applied.txt": [
-      "Migration 1.8.3 applied by SistemaMultiagente_SDLC.",
+    ".sdlc/migrations/2.0.0-applied.txt": [
+      "Migration 2.0.0 applied by SistemaMultiagente_SDLC.",
       "",
-      "BREAKING 1: las atestaciones firmadas antes de 1.8.3 no verifican.",
+      "BREAKING 1: las atestaciones firmadas antes de 2.0.0 no verifican.",
       "  El sujeto de la firma se computa ahora sobre el arbol de git en el commit",
       "  firmado, no sobre el working tree. Volver a firmar:",
       "    sdlc signoff --slice <id> --phase <F> --create",
@@ -39,7 +39,7 @@ export function up(files = {}) {
   const configPath = ".sdlc/config.json";
   if (typeof files[configPath] === "string") {
     const config = JSON.parse(files[configPath]);
-    config.frameworkVersion = "1.8.3";
+    config.frameworkVersion = "2.0.0";
     extra[configPath] = `${JSON.stringify(config, null, 2)}\n`;
   }
 

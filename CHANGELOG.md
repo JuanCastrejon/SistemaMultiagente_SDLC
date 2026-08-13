@@ -2,11 +2,11 @@
 
 ## [Unreleased]
 
-## [1.8.3] — 2026-08-13
+## [2.0.0] — 2026-08-13
 
 Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
 
-> **Patch con dos rupturas, y conviene decirlo aquí porque el número no lo dice.** Se numera 1.8.3 por decisión del mantenedor: la base instalada es un consumidor y la corrección no admitía esperar a un minor. Las dos rupturas están al final de estas notas y repetidas en `migrations/1.8.3/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
+> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **tres** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
 
 ### Fixed — firma humana (P5, ADR 0007)
 
