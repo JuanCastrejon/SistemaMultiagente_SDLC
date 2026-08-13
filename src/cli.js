@@ -11,6 +11,7 @@ import {
   readTextIfExists,
   removePath,
   sha256File,
+  sha256FileNormalized,
   sha256Text,
   toPosixPath,
   writeJson,
@@ -143,19 +144,32 @@ function verifyManifestIntegrity(target) {
     };
   }
   const expected = fs.readFileSync(paths.checksum, "utf8").trim();
-  const actual = sha256File(paths.manifest);
+  // Se compara sobre contenido normalizado a LF, no sobre bytes crudos. El
+  // manifiesto se versiona, y en Windows con `core.autocrlf=true` git lo
+  // entrega en CRLF al hacer checkout: el hash cambiaba sin que nadie tocara el
+  // archivo y `upgrade` quedaba bloqueado PARA SIEMPRE en ese repo, acusando
+  // ademas una edicion manual que no existio. Reproducido en
+  // manga-translator-mvp, donde impedia entregarle esta misma correccion.
+  //
+  // Se sigue aceptando el hash de bytes crudos: en un repo con finales LF los
+  // dos coinciden, y asi ningun checksum ya escrito deja de validar.
+  const actual = sha256FileNormalized(paths.manifest);
+  const raw = sha256File(paths.manifest);
+  const ok = expected === actual || expected === raw;
   return {
-    ok: expected === actual,
+    ok,
     expected,
     actual,
-    message: expected === actual ? "Manifest integro" : "Manifest corrupto o editado manualmente"
+    message: ok
+      ? "Manifest integro"
+      : "Manifest corrupto o editado manualmente: el contenido de .sdlc/install-manifest.json no coincide con .sdlc/install-manifest.sha256 (comparado con finales de linea normalizados, asi que CRLF no es la causa)"
   };
 }
 
 function writeManifest(target, manifest) {
   const paths = manifestPaths(target);
   writeJson(paths.manifest, manifest);
-  writeText(paths.checksum, `${sha256File(paths.manifest)}\n`);
+  writeText(paths.checksum, `${sha256FileNormalized(paths.manifest)}\n`);
 }
 
 function buildManifest(config, files, previous = {}) {
@@ -1252,7 +1266,7 @@ function commandRollback(options) {
   const manifestBackup = path.join(backupRoot, "install-manifest.json");
   if (pathExists(manifestBackup)) {
     copyFilePreservingPath(backupRoot, path.join(target, ".sdlc"), "install-manifest.json");
-    writeText(path.join(target, ".sdlc", "install-manifest.sha256"), `${sha256File(path.join(target, ".sdlc", "install-manifest.json"))}\n`);
+    writeText(path.join(target, ".sdlc", "install-manifest.sha256"), `${sha256FileNormalized(path.join(target, ".sdlc", "install-manifest.json"))}\n`);
   }
   return { exitCode: EXIT_OK, payload: { status: "ok", message: `Rollback aplicado: ${backup}` } };
 }

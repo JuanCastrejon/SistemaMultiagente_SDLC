@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
-import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
+import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
 import { computeTreeHashAtRef } from "./evidence-writer.js";
 import { verifySignoff } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
@@ -272,9 +272,21 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
           // Un id declarado que no resuelve en quality-contract.yaml se trata
           // como propio por omision: silenciar el aviso por un id roto seria
           // el vacio equivocado.
+          // Y tampoco cuenta como "propio" un gate cuya metrica depende de un
+          // probe que el repo declaro NO DISPONIBLE con motivo escrito: exigir
+          // `quality_metrics` por un gate que ya se adjudica como
+          // `not-applicable` es pedir la medicion que se acaba de declarar
+          // imposible. Reproducido contra el consumidor: declarar el probe
+          // `coverage` no disponible quitaba `quality-gate-not-measured` pero
+          // dejaba `quality-metrics-absent`, el mismo bloqueo con otro nombre.
+          const unavailablePrefixes = new Set(
+            resolveUnavailableProbes(qualityContractLoaded.contract).resolved.map((probe) => probe.prefix)
+          );
           declaresOwnQualityGates = declaredGateIds.some((gateId) => {
             const gate = gatesById.get(gateId);
-            return !gate || gate.phase === phase.id;
+            if (!gate) return true;
+            if (gate.phase !== phase.id) return false;
+            return !unavailablePrefixes.has(String(gate.metric ?? "").split(".")[0]);
           });
         }
       }
@@ -344,6 +356,10 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         gates: declaredGates,
         evaluated: adjudication.evaluated,
         vacuous: adjudication.vacuous,
+        // Lo declarado no medible, con su motivo. Sin esto, quien lee
+        // `phase-gate` ve que un gate no aparece y no sabe si es que paso, si
+        // no se midio o si se declaro no aplicable.
+        notApplicable: adjudication.notApplicable ?? [],
         // `findings` trae los hallazgos que no son de gate: superficie
         // fantasma, baseline manipulado y el drift del ancla del probe. Se
         // calculaban y se DESCARTABAN aqui, asi que nunca llegaban a quien lee

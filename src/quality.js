@@ -393,7 +393,13 @@ export async function commandQualityGate(options = {}) {
     enforcement: contract.enforcement ?? "observe",
     evidence: evidenceWritten,
     probes: probeResults,
-    surfaceFindings
+    surfaceFindings,
+    // Mismo contenido bajo el nombre que usa `adjudicateFromEvidence`. Los dos
+    // caminos de adjudicacion publicaban la misma lista con claves distintas, y
+    // quien leia `findings` en la salida de `quality-gate` veia un `blocked`
+    // sin ninguna razon a la vista — que es justo lo contrario de lo que este
+    // comando existe para dar.
+    findings: surfaceFindings
   };
 
   const exitCode = blocked && exitCodeMode ? EXIT_ACTION_REQUIRED : EXIT_OK;

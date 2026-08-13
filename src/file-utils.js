@@ -50,6 +50,27 @@ export function sha256File(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+/**
+ * Igual que `sha256File` pero sobre el contenido con finales de linea
+ * normalizados a LF.
+ *
+ * Existe por un defecto reproducido en un consumidor Windows real: el manifiesto
+ * de instalacion se versiona, y con `core.autocrlf=true` git lo entrega en CRLF
+ * al hacer checkout. El framework lo escribe en LF, asi que el hash de bytes
+ * crudos dejaba de coincidir sin que NADIE hubiera tocado el archivo — y el
+ * diagnostico acusaba "Manifest corrupto o editado manualmente". Consecuencia
+ * real: `sdlc upgrade` quedaba bloqueado para siempre en ese repo, es decir, el
+ * consumidor no podia recibir ninguna correccion.
+ *
+ * El resto del framework ya comparaba contenido normalizado (`normalizeLF` en
+ * el calculo de drift); el checksum del manifiesto era la unica pieza que
+ * miraba los bytes.
+ */
+export function sha256FileNormalized(filePath) {
+  const text = fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
 export function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }

@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
-Los defectos de este bloque salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
+## [1.8.3] — 2026-08-13
+
+Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
+
+> **Patch con dos rupturas, y conviene decirlo aquí porque el número no lo dice.** Se numera 1.8.3 por decisión del mantenedor: la base instalada es un consumidor y la corrección no admitía esperar a un minor. Las dos rupturas están al final de estas notas y repetidas en `migrations/1.8.3/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
 
 ### Fixed — firma humana (P5, ADR 0007)
 
@@ -37,6 +41,14 @@ Los defectos de este bloque salieron de **operar** el framework en el consumidor
 ### Added — qué se mide y qué no
 
 - **Un probe puede declararse no disponible, con motivo escrito.** `quality-gate` salía exit 2 con `violations: 0`: no suspendía por calidad insuficiente, suspendía por **no poder evaluar**, y un rojo permanente que no distingue las dos cosas enseña a ignorar la señal. Con `unavailable: { reason }` en un probe, todos los gates que dependen de sus métricas salen `not-applicable` en un bucket propio que no entra en el status. Tres contenciones para que no sea una puerta trasera: sin `reason` no hay exención, si la métrica aparece igual manda el número medido y se avisa de que la declaración sobra, y los gates de otras familias siguen bloqueando. `quality-docs` documenta la exención con su motivo.
+
+### Fixed — encontrados probando 1.8.3 contra el consumidor antes de publicar
+
+- **CRLF dejaba a un consumidor Windows sin poder actualizar, para siempre.** `.sdlc/install-manifest.json` se versiona; con `core.autocrlf=true` git lo entrega en CRLF al hacer checkout, y el checksum se comparaba sobre **bytes crudos**. Resultado: `doctor` reportaba `manifest-integrity` y `sdlc upgrade` abortaba con «Manifest corrupto o editado manualmente» sin que nadie hubiera tocado el archivo — es decir, ese repo no podía recibir **ninguna** corrección, incluida esta. Ahora se compara y se escribe sobre contenido normalizado a LF (se sigue aceptando el hash crudo, así que ningún checksum ya escrito deja de validar) y una edición real del manifiesto se sigue detectando. Medido en `manga-translator-mvp`: `doctor` pasa de `error` a `drift` y `upgrade --dry-run` pasa de abortar a listar sus 7 conflictos por la vía documentada (`--accept-managed`).
+
+- **Declarar un probe no disponible quitaba un bloqueo y dejaba el mismo con otro nombre.** Los gates salían `not-applicable`, pero `phase-gate` seguía exigiendo `quality_metrics` en la evidencia (`quality-metrics-absent`): pedir la medición que se acaba de declarar imposible. Un gate cuya métrica depende de un probe no disponible ya no cuenta como medición propia prometida, y `phase-gate` publica `quality.notApplicable` con su motivo. Verificado sobre una copia del consumidor: F8 pasa de `blocked` a `ok` declarando el probe `coverage` no disponible.
+
+- **`quality-gate` publicaba sus hallazgos bajo una clave distinta que `phase-gate`** (`surfaceFindings` frente a `findings`), así que quien leía `findings` veía un `blocked` sin ninguna razón a la vista. Ahora van bajo las dos.
 
 ### Fixed — continuidad y gate humano
 

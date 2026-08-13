@@ -528,4 +528,57 @@ assert.ok(
 );
 assert.equal(emptyGate.status, "blocked");
 
+// --- 11. lo declarado no medible no se exige medido -------------------------
+// Cerrando el caso real del consumidor: declarar el probe `coverage` no
+// disponible quitaba `quality-gate-not-measured` pero dejaba
+// `quality-metrics-absent` — el mismo bloqueo con otro nombre. Un gate que ya
+// se adjudica `not-applicable` no puede seguir exigiendo la medicion que
+// acaba de declararse imposible.
+{
+  const contractPath = path.join(baselineTarget, "quality-contract.yaml");
+  const contract = YAML.parse(fs.readFileSync(contractPath, "utf8"));
+  contract.probes = [
+    {
+      id: "coverage",
+      command: "validate:coverage",
+      emits: "coverage/coverage-summary.json",
+      format: "istanbul-summary",
+      timeout_ms: 60000,
+      when_absent: "warn",
+      unavailable: { reason: "el repo no tiene runner de tests; montarlo es un slice propio" }
+    }
+  ];
+  contract.gates = [
+    {
+      id: "F8.changed-lines-coverage",
+      phase: "F8",
+      metric: "coverage.changed_lines_pct",
+      op: "gte",
+      mode: "block",
+      threshold: 80,
+      provenance: "decision-de-equipo"
+    }
+  ];
+  fs.writeFileSync(contractPath, YAML.stringify(contract), "utf8");
+
+  const naGate = JSON.parse(
+    runCli(["phase-gate", "--target", baselineTarget, "--phase", "F8", "--slice", "slice-vacia", "--json"]).stdout
+  );
+  assert.ok(
+    !naGate.blockers.includes("quality-metrics-absent"),
+    `no se puede exigir medicion de lo declarado no medible: ${JSON.stringify(naGate.blockers)}`
+  );
+  assert.ok(
+    !naGate.blockers.some((blocker) => blocker.startsWith("quality-gate-not-measured")),
+    JSON.stringify(naGate.blockers)
+  );
+  assert.deepEqual(
+    (naGate.quality?.notApplicable ?? []).map((entry) => entry.id),
+    ["F8.changed-lines-coverage"],
+    "y tiene que verse, con su motivo, en la salida del gate"
+  );
+}
+
+console.log("quality-gate no-aplicable e2e: PASS");
+
 console.log("quality-gate e2e: PASS");

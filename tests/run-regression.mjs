@@ -134,6 +134,38 @@ run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json",
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
 
+// El manifiesto se versiona, y en Windows con `core.autocrlf=true` git lo
+// entrega en CRLF al hacer checkout. El checksum se comparaba sobre bytes
+// crudos, asi que el hash cambiaba sin que nadie tocara el archivo: `doctor`
+// daba `manifest-integrity` y `upgrade` quedaba bloqueado PARA SIEMPRE en ese
+// repo — es decir, el consumidor no podia recibir ninguna correccion. Medido en
+// manga-translator-mvp, donde impedia entregarle 1.8.3.
+{
+  const manifestPath = path.join(greenfield, ".sdlc", "install-manifest.json");
+  const lf = fs.readFileSync(manifestPath, "utf8");
+  fs.writeFileSync(manifestPath, lf.replace(/\n/g, "\r\n"), "utf8");
+
+  const doctorCrlf = JSON.parse(run(["doctor", "--target", greenfield, "--json"]));
+  assert.ok(
+    !doctorCrlf.findings.some((finding) => finding.code === "manifest-integrity"),
+    "CRLF en el manifiesto no puede leerse como manipulacion"
+  );
+  const upgradeCrlf = JSON.parse(runAllowingFailure(["upgrade", "--target", greenfield, "--dry-run", "--json"]));
+  assert.notEqual(upgradeCrlf.status, "error", JSON.stringify(upgradeCrlf));
+
+  // Una edicion REAL del manifiesto sigue detectandose: la normalizacion cubre
+  // los finales de linea, no el contenido.
+  const manipulado = fs.readFileSync(manifestPath, "utf8").replace(/"manifestVersion": 1/, '"manifestVersion": 99');
+  fs.writeFileSync(manifestPath, manipulado, "utf8");
+  const doctorManipulado = JSON.parse(runAllowingFailure(["doctor", "--target", greenfield, "--json"]));
+  assert.ok(
+    doctorManipulado.findings.some((finding) => finding.code === "manifest-integrity"),
+    "una edicion real del manifiesto tiene que seguir bloqueando"
+  );
+
+  fs.writeFileSync(manifestPath, lf, "utf8");
+}
+
 const phaseGateF0 = JSON.parse(run(["phase-gate", "--target", greenfield, "--phase", "F0", "--slice", "harness-bootstrap", "--json"]));
 assert.equal(phaseGateF0.status, "ok");
 
