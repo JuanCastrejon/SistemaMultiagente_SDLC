@@ -201,8 +201,8 @@ function inspect() {
         `hay ${stale.length} proceso(s) de Codex arrancados ANTES del ultimo login (${stale
           .map((p) => `${p.name}#${p.pid} ${p.startedAt}`)
           .join(", ")}). Siguen con la credencial anterior en memoria: quien hable con ellos vera un error de token ` +
-        "que no se puede refrescar, aunque una llamada nueva funcione. Cerrarlos o reiniciar la app de Codex antes " +
-        "de delegar.",
+        "que no se puede refrescar, aunque una llamada nueva funcione. CERRAR Y REABRIR la app de Codex; matar los " +
+        "procesos a mano deja al puente sin su sesion compartida y el siguiente trabajo se cuelga sin escribir log.",
       session
     };
   }

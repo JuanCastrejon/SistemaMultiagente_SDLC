@@ -60,8 +60,17 @@ que nadie podia saber contra que cuenta estaba hablando.
    credencial anterior. Los clientes que hablan con ese demonio fallan mientras
    una llamada nueva funciona, porque esta abre proceso propio. El preflight lo
    detecta comparando el arranque de cada proceso contra la fecha de
-   `auth.json`, y la salida trae el PID. Se resuelve cerrandolos o reiniciando
-   la app de Codex.
+   `auth.json`, y la salida trae el PID.
+
+   **La reparacion es cerrar y reabrir la app de Codex, NO matar los procesos.**
+   Medido a la mala: matarlos arregla la credencial y deja al puente sin su
+   sesion compartida, con lo que los dos trabajos siguientes se quedaron
+   colgados en `Starting Codex task thread` sin escribir una linea mas de log,
+   30 y 10 minutos, hasta cancelarlos. Reiniciar la app levanta el runtime
+   entero; matar procesos sueltos lo deja huerfano.
+
+   Si hay que salir del paso con el puente ya roto, `codex exec` directo
+   funciona: abre proceso propio y no depende del runtime compartido.
 
 ## Racionalizaciones
 
@@ -85,6 +94,9 @@ que nadie podia saber contra que cuenta estaba hablando.
 - Un turno que se corta a mitad y se reintenta sin volver a comprobar la sesion.
 - Un script que intenta `codex login` de forma automatica: autenticarse es un
   acto de la persona, no de un agente.
+- Matar procesos de Codex con un trabajo en vuelo, o para "limpiar" antes de
+  delegar. Rompe la sesion compartida del puente y el sintoma siguiente —un
+  trabajo colgado en `starting` sin log— no se parece en nada a la causa.
 - Cualquier salida que imprima tokens. El preflight muestra cuenta, plan,
   vencimiento y los ultimos seis caracteres del `account_id`; nada mas.
 
