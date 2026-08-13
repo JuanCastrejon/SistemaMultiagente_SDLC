@@ -125,7 +125,23 @@ function resolveMemoryConfig(target) {
   // Un vaultRoot relativo se resuelve contra el repo destino, no contra el cwd
   // del proceso: al invocar el CLI desde otro directorio, path.resolve() a secas
   // producia rutas inexistentes y un warning vault-missing enganoso.
-  const expandedVault = rawVault && !String(rawVault).includes("{{") ? expandEnv(String(rawVault)) : null;
+  const expandedRaw = rawVault && !String(rawVault).includes("{{") ? expandEnv(String(rawVault)) : null;
+
+  // `expandEnv` devuelve el placeholder LITERAL cuando la variable no existe
+  // en el entorno (`${MEMORY_WORKSPACE}` sigue siendo `${MEMORY_WORKSPACE}`), y
+  // nadie lo comprobaba despues. El config que genera `install` trae justamente
+  // esos marcadores a proposito —`validate:no-personal-paths` impide poner una
+  // ruta real ahi— asi que en un repo recien instalado el vault "resolvia" a un
+  // directorio llamado `${MEMORY_WORKSPACE}`.
+  //
+  // Reproducido: `sdlc save` creaba
+  // `<repo>/${MEMORY_WORKSPACE}/vault/<slug>/checkpoints/...`. El usuario cree
+  // que su checkpoint esta en el vault y esta en un directorio basura dentro del
+  // repo. Un marcador sin resolver tiene que BLOQUEAR el uso de ese valor, no
+  // viajar como si fuera una ruta.
+  const unresolvedPlaceholder = expandedRaw && /\$\{[^}]+\}|%[^%]+%/.test(expandedRaw) ? expandedRaw : null;
+  const expandedVault = unresolvedPlaceholder ? null : expandedRaw;
+
   const vaultRoot = expandedVault
     ? (path.isAbsolute(expandedVault) ? expandedVault : path.resolve(target, expandedVault))
     : path.join(target, ".sdlc", "vault");
@@ -134,6 +150,18 @@ function resolveMemoryConfig(target) {
     config,
     projectSlug,
     vaultRoot,
+    // Se reporta la degradacion en vez de ocurrir en silencio: quien lea el
+    // payload tiene que poder saber que su vault NO esta configurado y que el
+    // checkpoint fue a parar al fallback local.
+    ...(unresolvedPlaceholder
+      ? {
+          vaultUnresolved: {
+            declared: unresolvedPlaceholder,
+            reason: "el vault declarado contiene un marcador sin resolver; se usa .sdlc/vault local",
+            hint: "definir la variable de entorno, o poner una ruta real en scripts/obsidian-memory.config.local.json"
+          }
+        }
+      : {}),
     projectRoot: path.join(vaultRoot, projectSlug),
     checkpointsDir: path.join(vaultRoot, projectSlug, "checkpoints"),
     syncLogsDir: path.join(vaultRoot, projectSlug, "logs", "sync"),
@@ -352,6 +380,73 @@ export function commandResume(options) {
   return { exitCode: EXIT_OK, payload: result };
 }
 
+/**
+ * Datos FACTUALES para el checkpoint. Todo lo de aqui sale del repo, no de un
+ * modelo: commits desde el checkpoint anterior, HEAD, archivos sin commitear y
+ * que fases tienen evidencia escrita.
+ *
+ * Es la mitad que el CLI SI puede automatizar. La otra —por que se hizo, que se
+ * descarto, donde mirar para seguir— la escribe el agente, y el checkpoint la
+ * pide con huecos explicitos en vez de omitirla.
+ */
+function collectCheckpointContext(target, memory) {
+  const context = { supersedes: null, commits: [], commitCount: null, head: null, uncommitted: null, evidencePhases: [] };
+
+  // Checkpoint anterior = el ultimo por nombre (llevan timestamp por delante).
+  try {
+    const previous = fs
+      .readdirSync(memory.checkpointsDir)
+      .filter((name) => name.endsWith(".md"))
+      .sort();
+    if (previous.length > 0) context.supersedes = previous[previous.length - 1];
+  } catch {
+    // sin checkpoints todavia: primer save del repo
+  }
+
+  const head = runCommand("git", ["rev-parse", "--short", "HEAD"], target, 5000);
+  if (head.ok) context.head = head.stdout.trim();
+
+  const status = runCommand("git", ["status", "--porcelain"], target, 5000);
+  if (status.ok) context.uncommitted = status.stdout.split("\n").filter((line) => line.trim()).length;
+
+  // Commits desde el anterior: se acota por FECHA del checkpoint previo, que es
+  // lo unico que se puede derivar de su nombre sin guardar un sha aparte.
+  if (context.supersedes) {
+    const stamp = context.supersedes.slice(0, 12);
+    if (/^\d{12}$/.test(stamp)) {
+      // La `Z` final NO es cosmetica. El nombre del checkpoint sale de
+      // `toISOString()`, que es UTC; `git log --since` sin zona interpreta la
+      // cadena en hora LOCAL. En UTC-5 eso apuntaba cinco horas al futuro y la
+      // seccion de commits salia vacia SIEMPRE — una seccion decorativa, que es
+      // peor que no tenerla porque parece que no hubo trabajo.
+      const since = `${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T${stamp.slice(8, 10)}:${stamp.slice(10, 12)}:00Z`;
+      // `--oneline`, no `--format=%h %s`: ese formato lleva `%` y un espacio, y
+      // `assertShellSafeToken` los rechaza por la mitigacion de inyeccion en
+      // cmd.exe. `--oneline` produce exactamente lo mismo sin metacaracteres.
+      const log = runCommand("git", ["log", `--since=${since}`, "--oneline", "--no-merges"], target, 5000);
+      if (log.ok) {
+        context.commits = log.stdout.split("\n").map((line) => line.trim()).filter(Boolean).slice(0, 40);
+        context.commitCount = context.commits.length;
+      }
+    }
+  }
+
+  try {
+    const evidenceRoot = path.join(target, ".github", "agent-state", "evidence");
+    for (const slice of fs.readdirSync(evidenceRoot)) {
+      const phases = fs
+        .readdirSync(path.join(evidenceRoot, slice))
+        .filter((name) => name.endsWith(".yaml"))
+        .map((name) => name.replace(/\.yaml$/, ""));
+      if (phases.length > 0) context.evidencePhases.push(`${slice}: ${phases.sort().join(", ")}`);
+    }
+  } catch {
+    // sin evidencia todavia
+  }
+
+  return context;
+}
+
 export function commandSave(options) {
   const target = path.resolve(options.target ?? process.cwd());
   const event = options.event ?? "manual";
@@ -367,6 +462,7 @@ export function commandSave(options) {
   const sliceSlug = runtime.state.sliceId === "unknown" ? "unknown" : runtime.state.sliceId.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const checkpointPath = path.join(memory.checkpointsDir, `${timestamp}-slice-${sliceSlug}.md`);
   const diffStat = runCommand("git", ["diff", "--stat"], target, 5000);
+  const enriched = collectCheckpointContext(target, memory);
   const content = [
     "---",
     "generated_by: sdlc-save",
@@ -376,9 +472,75 @@ export function commandSave(options) {
     `phase: ${runtime.state.phase}`,
     `branch: ${runtime.git.branch ?? "unknown"}`,
     "promotion_status: draft-local",
+    ...(enriched.supersedes ? [`supersedes: ${enriched.supersedes}`] : []),
+    ...(enriched.commitCount !== null ? [`commits_since_previous: ${enriched.commitCount}`] : []),
     "---",
     "",
     `# Checkpoint ${runtime.state.sliceId}`,
+    "",
+    // Estas dos secciones el CLI NO las puede llenar: no tiene modelo ni sabe
+    // por que se tomo una decision. Se dejan como huecos EXPLICITOS en vez de
+    // omitirlas, porque un checkpoint sin el porque no se puede retomar sin la
+    // conversacion — que es justamente lo que un checkpoint existe para evitar.
+    "<!-- ===================================================================",
+    "     SECCIONES NARRATIVAS: las llena el AGENTE, no el CLI.",
+    "",
+    "     El objetivo es que quien retome NO necesite la conversacion. Si para",
+    "     entender una decision hay que volver al chat, el checkpoint fallo.",
+    "     Estructura tomada de los checkpoints enriquecidos ya en uso",
+    "     (.github/agent-state/checkpoint-context.md en los repos consumidores).",
+    "     ================================================================== -->",
+    "",
+    "## Alcance y gobernanza",
+    "",
+    "<!-- AGENTE: bajo que reglas se trabajo y, sobre todo, QUE NO SE HIZO:",
+    "     sin tests / sin commit / sin PR / excepcion declarada por el usuario.",
+    "     Que queda sin commitear y pendiente de revision humana.",
+    "     Si hubo manejo de secretos o alguno se filtro en la transcripcion,",
+    "     decirlo aqui con la recomendacion de rotarlo. -->",
+    "_(pendiente de redactar)_",
+    "",
+    "## Skills y fuentes usadas",
+    "",
+    "<!-- AGENTE: que skills, docs, ADRs o repos externos se consultaron. Sin",
+    "     esto no se puede auditar de donde salio una decision. -->",
+    "_(pendiente de redactar)_",
+    "",
+    "## Decisiones y trabajo realizado",
+    "",
+    "<!-- AGENTE: el POR QUE de cada decision, no solo el que. Incluir lo que se",
+    "     DESCARTO y la razon: sin eso, quien retome vuelve a proponerlo.",
+    "     Si hubo un hallazgo raiz que explica el resto, va primero. -->",
+    "_(pendiente de redactar)_",
+    "",
+    "## Verificacion",
+    "",
+    "<!-- AGENTE: como se comprobo, con el comando y su salida real. Distinguir",
+    "     lo verificado de lo supuesto. -->",
+    "_(pendiente de redactar)_",
+    "",
+    "## Pendientes y siguiente accion",
+    "",
+    "<!-- AGENTE: cada pendiente con archivo/comando concreto por donde empezar.",
+    "     'Falta X' sin decir donde mirar obliga a re-investigar lo ya",
+    "     investigado. Separar lo que espera DECISION DEL USUARIO de lo que",
+    "     solo espera trabajo. -->",
+    "_(pendiente de redactar)_",
+    "",
+    "## Commits desde el checkpoint anterior",
+    "",
+    enriched.commits.length > 0
+      ? ["```text", ...enriched.commits, "```"].join("\n")
+      : "_(ninguno, o sin checkpoint previo con el que comparar)_",
+    "",
+    "## Estado verificable",
+    "",
+    `- Fase: **${runtime.state.phase}** · slice: **${runtime.state.sliceId}**`,
+    `- Rama: \`${runtime.git.branch ?? "unknown"}\`${enriched.head ? ` · HEAD \`${enriched.head}\`` : ""}`,
+    ...(enriched.uncommitted !== null ? [`- Archivos sin commitear: **${enriched.uncommitted}**`] : []),
+    ...(enriched.evidencePhases.length > 0 ? [`- Evidencia escrita: ${enriched.evidencePhases.join(", ")}`] : []),
+    `- Vault: \`${memory.vaultRoot}\`${memory.vaultUnresolved ? " ⚠️ **sin configurar** (fallback local)" : ""}`,
+    ...(memory.vaultUnresolved ? [`  - ${memory.vaultUnresolved.hint}`] : []),
     "",
     "## Runtime",
     "",
