@@ -21,10 +21,18 @@
 // sesion) y descarta todo lo demas. Tampoco intenta renovar ni cerrar sesion:
 // autenticarse es un acto de la persona, no de un script de gobernanza.
 //
-// Salidas: 0 sesion utilizable · 2 accion requerida (sin sesion, token vencido,
-// plan sin cuota util) · 1 error al leer.
+// Salidas: 0 sesion utilizable (con o sin aviso) · 2 accion requerida (sin
+// sesion o token vencido) · 1 error al leer.
+//
+// El plan AVISA pero no bloquea, y la distincion importa: este preflight ve el
+// plan, no la cuota que queda. Una cuenta `free` recien estrenada tiene su
+// cuota intacta; una `pro` puede estar agotada. Tratar el plan como si fuera
+// cuota daba un falso bloqueo -- medido contra una cuenta nueva que si podia
+// trabajar -- y un preflight que se equivoca al bloquear es un preflight que se
+// aprende a ignorar, que es justo lo que este framework rechaza en sus gates.
 // ---------------------------------------------------------------------------
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +42,38 @@ const EXIT_ERROR = 1;
 const EXIT_ACTION_REQUIRED = 2;
 
 const json = process.argv.includes("--json");
+const probe = process.argv.includes("--probe");
+
+// El unico modo de fallo que NINGUNA comprobacion local detecta: la credencial
+// esta en disco, sin vencer, y el servidor la rechaza igual porque se inicio
+// sesion con otra cuenta desde otro sitio. Medido: `codex login status` decia
+// "Logged in using ChatGPT" y salia 0, y la llamada real devolvia "Your access
+// token could not be refreshed because you have since logged out or signed in
+// to another account".
+//
+// Por eso `--probe` es OPT-IN y no el comportamiento por defecto: la unica
+// forma de saberlo es gastar una llamada de verdad, y un preflight que cobra
+// cuota cada vez que alguien lo ejecuta es un preflight que se deja de
+// ejecutar. Se usa antes de un turno largo, no antes de cada mensaje.
+function probeCredential() {
+  // Prompt de UNA palabra a proposito: en Windows `codex` es un `.cmd` y hay
+  // que pasar por shell, que parte el argumento en espacios. Una palabra evita
+  // el quoting y ademas es la llamada mas barata posible.
+  const result = spawnSync("codex", ["exec", "--skip-git-repo-check", "ok"], {
+    encoding: "utf8",
+    timeout: 90_000,
+    shell: process.platform === "win32"
+  });
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  if (result.status === 0) return { ok: true };
+  const rechazada = /could not be refreshed|sign in again|logged out|unauthor|401/i.test(output);
+  const cuota = /usage limit|rate limit|quota/i.test(output);
+  return {
+    ok: false,
+    code: rechazada ? "codex-session-rechazada" : cuota ? "codex-cuota-agotada" : "codex-probe-fallido",
+    detail: output.trim().split("\n").slice(0, 3).join(" ").slice(0, 300)
+  };
+}
 
 // `CODEX_HOME` manda si esta definido: es lo que usa el propio CLI para mover
 // su estado fuera del home, y un preflight que mire otro sitio estaria
@@ -52,10 +92,10 @@ function decodeJwtPayload(token) {
   }
 }
 
-// Los planes sin cuota util para una sesion de trabajo. `free` es el que
-// rompio la ronda de debate: responde a las primeras llamadas y corta a mitad
-// de turno, que es peor que negarse desde el principio.
-const PLANS_SIN_CUOTA = new Set(["free", "unknown", ""]);
+// Planes cuya cuota se agota antes y conviene mirar dos veces antes de un
+// turno largo. NO es una lista de planes inservibles: una cuenta `free` recien
+// creada trabaja perfectamente hasta agotarse.
+const PLANES_CON_CUOTA_CORTA = new Set(["free", "unknown", ""]);
 
 function inspect() {
   const authPath = path.join(codexHome(), "auth.json");
@@ -101,14 +141,15 @@ function inspect() {
     };
   }
 
-  if (PLANS_SIN_CUOTA.has(String(plan ?? "").toLowerCase())) {
+  if (PLANES_CON_CUOTA_CORTA.has(String(plan ?? "").toLowerCase())) {
     return {
-      status: "action-required",
-      code: "codex-plan-sin-cuota",
+      status: "warning",
+      code: "codex-plan-cuota-corta",
       detail:
         `la cuenta activa es ${email ?? "(desconocida)"} con plan '${plan ?? "desconocido"}'. ` +
-        "Un turno largo puede cortarse a mitad y perderse el trabajo del turno. " +
-        "Verificar que esta es la cuenta que se pretende usar; si no lo es, `codex login` con la correcta.",
+        "Este preflight ve el plan, NO la cuota restante: si la cuenta esta estrenada trabaja sin problema, " +
+        "y si viene usada un turno largo puede cortarse a mitad. Confirmar que es la cuenta que se pretende " +
+        "usar; si no lo es, `codex login` con la correcta.",
       session
     };
   }
@@ -117,6 +158,21 @@ function inspect() {
 }
 
 const result = inspect();
+
+// El probe solo tiene sentido si la inspeccion local no encontro ya un
+// bloqueo: si no hay sesion o el token vencio, gastar una llamada no aporta.
+if (probe && result.status !== "action-required" && result.status !== "error") {
+  const live = probeCredential();
+  result.probe = live;
+  if (!live.ok) {
+    result.status = "action-required";
+    result.code = live.code;
+    result.detail =
+      live.code === "codex-session-rechazada"
+        ? `el servidor rechaza la credencial de ${result.session?.email ?? "esta cuenta"}: se inicio sesion con otra cuenta en otro sitio. Volver a ejecutar \`codex login\`. (${live.detail})`
+        : `la llamada de prueba fallo: ${live.detail}`;
+  }
+}
 
 if (json) {
   console.log(JSON.stringify(result, null, 2));
@@ -132,7 +188,11 @@ if (json) {
     console.log(`  CODEX_HOME  : ${s.codexHome}`);
   }
   console.log(`  estado      : ${result.status}${result.code ? ` (${result.code})` : ""}`);
-  if (result.status !== "ok") console.log(`  accion      : ${result.detail}`);
+  if (result.status !== "ok") console.log(`  ${result.status === "warning" ? "aviso " : "accion"}      : ${result.detail}`);
 }
 
-process.exit(result.status === "ok" ? EXIT_OK : result.status === "error" ? EXIT_ERROR : EXIT_ACTION_REQUIRED);
+// `warning` sale 0: avisa sin bloquear. Solo la ausencia de sesion y el token
+// vencido impiden delegar de verdad.
+const exitCode =
+  result.status === "error" ? EXIT_ERROR : result.status === "action-required" ? EXIT_ACTION_REQUIRED : EXIT_OK;
+process.exit(exitCode);

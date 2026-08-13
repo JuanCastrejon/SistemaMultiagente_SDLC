@@ -16,8 +16,14 @@ despues de cualquier `codex login` o cambio de cuenta.
 node scripts/codex-session-check.mjs
 ```
 
-`--json` para consumirlo desde otro script. Salidas: `0` sesion utilizable,
-`2` accion requerida, `1` error de lectura.
+`--json` para consumirlo desde otro script. Salidas: `0` sesion utilizable —con
+aviso o sin el—, `2` accion requerida (sin sesion o token vencido), `1` error de
+lectura.
+
+Lo que este preflight VE es el plan; lo que NO ve es la cuota que queda. Una
+cuenta `free` recien estrenada trabaja sin problema y una de pago puede estar
+agotada, asi que el plan avisa y nunca bloquea: un preflight que se equivoca al
+bloquear es un preflight que se aprende a ignorar.
 
 ## Por que existe
 
@@ -52,6 +58,10 @@ que nadie podia saber contra que cuenta estaba hablando.
   muchas choca igual.
 - *"Si falla, reintento y ya."* El reintento no recupera el razonamiento del
   turno perdido, y en un debate multi-ronda pierde tambien el hilo.
+- *"Sale aviso por el plan, luego no puedo trabajar."* Al reves: el aviso dice
+  que hay que mirar, no que este agotada. Confundir plan con cuota restante
+  bloquea sesiones perfectamente utiles — paso la primera vez que corrio esta
+  comprobacion, contra una cuenta nueva con su cuota intacta.
 
 ## Senales de alarma
 
