@@ -97,6 +97,55 @@ function decodeJwtPayload(token) {
 // creada trabaja perfectamente hasta agotarse.
 const PLANES_CON_CUOTA_CORTA = new Set(["free", "unknown", ""]);
 
+// Tercer modo de fallo, y el mas dificil de ver: un proceso de Codex que
+// arranco ANTES del ultimo login sigue con la credencial vieja en memoria. Los
+// clientes que hablan con ese demonio —el puente de plugin, por ejemplo—
+// fallan con "Your access token could not be refreshed... signed in to another
+// account", mientras un `codex exec` recien lanzado funciona perfectamente,
+// porque abre proceso propio. Medido: dos procesos de las 15:38 y las 16:43
+// contra un `auth.json` reescrito a las 17:18.
+//
+// Es barato de detectar y no exige red: basta comparar el arranque de cada
+// proceso contra la fecha del credencial. Best-effort — si el sistema no deja
+// listar procesos, se calla en vez de inventar un diagnostico.
+function staleProcesses(authMtimeMs) {
+  try {
+    if (process.platform === "win32") {
+      const ps = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-Command",
+          "Get-Process | Where-Object { $_.ProcessName -match 'codex' } | Select-Object Id,ProcessName,@{n='Start';e={$_.StartTime.ToUniversalTime().ToString('o')}} | ConvertTo-Json -Compress"
+        ],
+        { encoding: "utf8", timeout: 15_000 }
+      );
+      if (ps.status !== 0 || !ps.stdout.trim()) return [];
+      const parsed = JSON.parse(ps.stdout);
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      return list
+        .filter((entry) => entry?.Start && Date.parse(entry.Start) < authMtimeMs)
+        .map((entry) => ({ pid: entry.Id, name: entry.ProcessName, startedAt: entry.Start }));
+    }
+    const ps = spawnSync("ps", ["-eo", "pid,lstart,comm"], { encoding: "utf8", timeout: 15_000 });
+    if (ps.status !== 0) return [];
+    return ps.stdout
+      .split("\n")
+      .filter((line) => /codex/i.test(line))
+      .map((line) => {
+        const match = /^\s*(\d+)\s+(.{24})\s+(.*)$/.exec(line);
+        if (!match) return null;
+        const started = Date.parse(match[2]);
+        return Number.isNaN(started) || started >= authMtimeMs
+          ? null
+          : { pid: Number(match[1]), name: match[3].trim(), startedAt: new Date(started).toISOString() };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function inspect() {
   const authPath = path.join(codexHome(), "auth.json");
   if (!fs.existsSync(authPath)) {
@@ -137,6 +186,23 @@ function inspect() {
       status: "action-required",
       code: "codex-session-expired",
       detail: `la sesion de ${email ?? "(cuenta desconocida)"} vencio el ${session.expiresAt}. Renovar con \`codex login\` antes de delegar.`,
+      session
+    };
+  }
+
+  const authMtimeMs = fs.statSync(authPath).mtimeMs;
+  const stale = staleProcesses(authMtimeMs);
+  if (stale.length > 0) {
+    session.staleProcesses = stale;
+    return {
+      status: "action-required",
+      code: "codex-proceso-con-credencial-vieja",
+      detail:
+        `hay ${stale.length} proceso(s) de Codex arrancados ANTES del ultimo login (${stale
+          .map((p) => `${p.name}#${p.pid} ${p.startedAt}`)
+          .join(", ")}). Siguen con la credencial anterior en memoria: quien hable con ellos vera un error de token ` +
+        "que no se puede refrescar, aunque una llamada nueva funcione. Cerrarlos o reiniciar la app de Codex antes " +
+        "de delegar.",
       session
     };
   }

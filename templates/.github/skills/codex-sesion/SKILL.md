@@ -47,6 +47,22 @@ que nadie podia saber contra que cuenta estaba hablando.
 5. Si un turno se corta igualmente, volver a ejecutar el preflight antes de
    reintentar: el corte pudo cambiar el estado de la sesion.
 
+## Los tres modos de fallo que esto cubre
+
+1. **Sesion de otra cuenta.** La terminal sigue autenticada con la anterior
+   aunque creas que cambiaste. Se ve en `cuenta` y en `account_id`.
+2. **Credencial rechazada por el servidor.** Esta en disco y sin vencer, pero
+   se inicio sesion con otra cuenta desde otro sitio. NO se ve en local:
+   `codex login status` responde "Logged in using ChatGPT" y sale `0`. Solo lo
+   detecta `--probe`, que gasta una llamada minima.
+3. **Proceso con la credencial vieja en memoria.** Un `codex` o un
+   `codex-code-mode-host` arrancado ANTES del ultimo login sigue usando la
+   credencial anterior. Los clientes que hablan con ese demonio fallan mientras
+   una llamada nueva funciona, porque esta abre proceso propio. El preflight lo
+   detecta comparando el arranque de cada proceso contra la fecha de
+   `auth.json`, y la salida trae el PID. Se resuelve cerrandolos o reiniciando
+   la app de Codex.
+
 ## Racionalizaciones
 
 - *"Acabo de hacer login, seguro que es la cuenta nueva."* El caso que motivo
