@@ -22,9 +22,35 @@ Los defectos de este bloque salieron de **operar** el framework en el consumidor
 
 - **`tools-doctor` comprueba la preparación para firmar.** Antes, un consumidor descubría que no podía atestar nada en el momento en que un gate humano se lo pedía, con la fase ya bloqueada: en `manga-translator-mvp` no existía `governance.maintainers` y ningún commit de la historia estaba firmado. El probe `commit-signing` cruza maintainers declarados, `user.signingkey`, `gpg.format` y —en SSH— que `gpg.ssh.allowedSignersFile` esté configurado y exista, y explica qué forma de firmante espera cada backend. Los hallazgos de `tools-doctor` ahora arrastran el `detail` del propio probe: el inventario describe la herramienta en general y no puede decir qué le falta a **este** repo.
 
+### Fixed — árbitro de calidad
+
+- **Las superficies se declaran dos veces y nada las cruzaba.** `.sdlc/config.json` y `quality-contract.yaml` mantienen listas separadas; el contrato se genera desde el config al instalar y después divergen en silencio. Como el árbitro y la firma leen **solo el contrato**, corregir las superficies fantasma del config dejó el KPI sin cumplir y la firma hueca igual. Nuevo hallazgo `surface-declaration-divergent` con las superficies que están en un archivo y no en el otro — `warning`, por la misma escalera de adopción que los probes sin `command_sha256`.
+
+- **`sdlc status` era ciego a todos los slices menos uno.** `current_slice`/`current_phase` son un puntero único y el árbitro lo lee para decidir qué evalúa; con tres slices en vuelo se evaluaba uno y los demás no aparecían en ningún tablero. `phase-status.yaml` admite ahora un mapa `slices:` y `status` adjudica el phase-gate de cada uno. Aditivo: el puntero se conserva —los workflows que lo grepean siguen funcionando—, un archivo sin el mapa se comporta igual que antes, y el veredicto `ready` sigue saliendo del puntero. `validate-active-slices` cruza todos los slices declarados contra `openspec/changes/`, no solo el apuntado.
+
+### Fixed — instalación
+
+- **El instalador dejaba configuración falsa que parecía configuración real.** `surfaces: [apps/api, apps/web]` y cinco `<BACKEND_STACK>`: en un repo con otro layout eso no es un ejemplo, es configuración activa que hace vacuo todo gate y firma el árbol vacío. Ahora `install` escribe `surfaces: []` y `stack` en `null`, y el estado a medio configurar se ve desde el primer minuto (`config-surfaces-empty`, `config-stack-placeholder`, `quality-contract-surfaces-empty`, y `validate-surface-traceability` deja de dar verde con cero superficies). Se generan desde `config.surfaces` los dos artefactos que traían el mismo ejemplo fijo: `.github/agents/surface-traceability.json` y la superficie de las fichas `api-agent`/`web-agent`, que se resolvía por índice (`{{surfaces.0.path}}`).
+
+- **`sdlc adopt` no tenía camino para un repo sin `package.json`.** Respondía «exige un package.json existente: no es un scaffold» y ahí acababa la pista. Sigue sin ser un scaffold por defecto, pero ahora existe `--bootstrap-package-json` y, sin la bandera, el error dice el comando exacto.
+
+### Added — qué se mide y qué no
+
+- **Un probe puede declararse no disponible, con motivo escrito.** `quality-gate` salía exit 2 con `violations: 0`: no suspendía por calidad insuficiente, suspendía por **no poder evaluar**, y un rojo permanente que no distingue las dos cosas enseña a ignorar la señal. Con `unavailable: { reason }` en un probe, todos los gates que dependen de sus métricas salen `not-applicable` en un bucket propio que no entra en el status. Tres contenciones para que no sea una puerta trasera: sin `reason` no hay exención, si la métrica aparece igual manda el número medido y se avisa de que la declaración sobra, y los gates de otras familias siguen bloqueando. `quality-docs` documenta la exención con su motivo.
+
+### Fixed — continuidad y gate humano
+
+- **Un checkpoint sin redactar se presentaba como continuidad válida.** Los 12 checkpoints del vault de `manga-translator-mvp`, el más reciente incluido, tenían las cinco secciones narrativas en `_(pendiente de redactar)_`. `save` devuelve ahora `narrative: { complete, pending }` y `resume` reporta el estado del último checkpoint. La señal se calcula leyendo el **cuerpo**, no un campo de frontmatter: un campo que declara «completo» es tan fácil de escribir como la sección misma.
+
+- **El gate humano declarativo no exigía nada.** `human_gate_signoff` con un `approved_by` suelto es texto que el propio agente escribe, y `phase-gate` lo aceptaba con un aviso solo si faltaba `review_id`. Ahora la evidencia declara `signature_class` (`attestation` / `platform-review` / `declarative`, inferida si falta) y, cuando declara `attestation_commit`, **`phase-gate` re-verifica la firma de verdad**: recomputa el sujeto sobre las superficies del contrato en ese commit y comprueba firmante y trailer. Una atestación declarada que no verifica bloquea (`human-gate-attestation-invalid`), declararse `attestation` sin commit también (`human-gate-attestation-commit-missing`), y lo declarativo se nombra como tal (`human-gate-signoff-declarative`) en vez de confundirse con una revisión a la que solo le falta el identificador.
+
+- **`npm test` fallaba en cualquier máquina con `VAULT_PATH` configurado** —la de cualquier usuario real del framework—: el caso del fallback de vault heredaba el entorno del desarrollador en vez de construir el suyo.
+
 ### Breaking
 
 - El `tree_hash` del sujeto de firma cambia de formato (object id de git por blob, en lugar de sha256 del contenido en disco). Las atestaciones emitidas con versiones anteriores no verifican; hay que volver a firmar. `computeTreeHash` (frescura de evidencia de calidad, P7) **no** cambia.
+- `install` deja de escribir superficies y stack de ejemplo. Un repo recién instalado sale en **error** en `doctor` hasta que se declaren las superficies reales. Los consumidores existentes no cambian: su configuración ya está en disco.
+- `.github/agents/surface-traceability.json` se genera desde `config.surfaces` y cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; un consumidor que lo consuma a mano debe revisarlo.
 
 ## [1.8.2] — 2026-08-09
 

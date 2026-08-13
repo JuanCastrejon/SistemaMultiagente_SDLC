@@ -476,7 +476,65 @@ const humanGateUnverifiable = JSON.parse(
   run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
 );
 assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
-assert.ok(humanGateUnverifiable.warnings.includes("human-gate-signoff-unverifiable"));
+// Un `approved_by` suelto es una DECLARACION: texto que el propio agente puede
+// escribir. Se nombra como tal, en vez de confundirla con una revision de
+// plataforma a la que solo le falta el identificador.
+assert.ok(
+  humanGateUnverifiable.warnings.includes("human-gate-signoff-declarative"),
+  JSON.stringify(humanGateUnverifiable.warnings)
+);
+assert.equal(humanGateUnverifiable.evidence.signatureClass, "declarative");
+
+// Una atestacion DECLARADA que no verifica es peor que ninguna: afirma una
+// garantia que no existe, asi que bloquea en vez de avisar.
+writeEvidence(
+  greenfield,
+  "slice-hg3",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg3",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien",
+    "  signature_class: attestation",
+    '  attestation_commit: "0000000000000000000000000000000000000000"'
+  ].join("\n")
+);
+const atestacionFalsa = JSON.parse(
+  runAllowingFailure(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg3", "--json"])
+);
+assert.ok(
+  atestacionFalsa.blockers.some((blocker) => blocker.startsWith("human-gate-attestation-invalid")),
+  JSON.stringify(atestacionFalsa.blockers)
+);
+
+// Y declararse `attestation` sin commit que verificar tampoco cuela.
+writeEvidence(
+  greenfield,
+  "slice-hg4",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg4",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien",
+    "  signature_class: attestation"
+  ].join("\n")
+);
+const atestacionSinCommit = JSON.parse(
+  runAllowingFailure(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg4", "--json"])
+);
+assert.ok(atestacionSinCommit.blockers.includes("human-gate-attestation-commit-missing"), JSON.stringify(atestacionSinCommit.blockers));
 
 // tools-doctor detecta scripts de gate que resuelven @latest en cada corrida.
 const floatingRepo = makeRepo("floating-tooling");

@@ -8,6 +8,8 @@ import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
+import { computeTreeHashAtRef } from "./evidence-writer.js";
+import { verifySignoff } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -295,8 +297,31 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
           evidenceBlockers.push("human-gate-signoff-missing");
-        } else if (!signoff.review_id) {
-          evidenceWarnings.push("human-gate-signoff-unverifiable");
+        } else {
+          // Hay DOS clases de firma y valen cosas distintas: una atestacion es
+          // un commit firmado que se puede volver a verificar, y una
+          // declaracion es texto que el propio agente escribe. Antes se
+          // trataban igual salvo por un aviso si faltaba `review_id`, asi que
+          // el gate humano "pasaba" con una linea de YAML.
+          const attestationCommit = signoff.attestation_commit ?? null;
+          const declaredClass =
+            signoff.signature_class ?? (attestationCommit ? "attestation" : signoff.review_id ? "platform-review" : "declarative");
+          evidence.signatureClass = declaredClass;
+
+          if (attestationCommit) {
+            const verification = verifyEvidenceAttestation(target, { slice, phase: phase.id, commitSha: attestationCommit });
+            evidence.attestation = verification;
+            // Una atestacion declarada que NO verifica es peor que no declarar
+            // ninguna: afirma una garantia que no existe.
+            if (!verification.ok) evidenceBlockers.push(`human-gate-attestation-invalid:${verification.code}`);
+            else if (verification.fresh === false) evidenceWarnings.push("human-gate-attestation-stale");
+          } else if (declaredClass === "attestation") {
+            evidenceBlockers.push("human-gate-attestation-commit-missing");
+          } else if (!signoff.review_id) {
+            evidenceWarnings.push("human-gate-signoff-declarative");
+          } else {
+            evidenceWarnings.push("human-gate-signoff-unverifiable");
+          }
         }
       }
     }
@@ -848,6 +873,41 @@ export function commandGovernanceCheck(options) {
       findings
     }
   };
+}
+
+/**
+ * Re-verifica la atestacion que la evidencia DECLARA, en vez de creerle.
+ *
+ * El sujeto se recomputa aqui —arbol de las superficies del contrato, leido en
+ * el commit firmado— igual que en `sdlc signoff --verify`: la evidencia aporta
+ * el sha del commit y nada mas. Cualquier otro dato que trajera declarado seria
+ * exactamente el hueco que la atestacion cierra.
+ */
+function verifyEvidenceAttestation(target, { slice, phase, commitSha }) {
+  const loaded = loadQualityContract(target);
+  if (!loaded.ok) {
+    return { ok: false, code: "quality-contract-missing", detail: "sin quality-contract.yaml no hay superficies con las que recomputar el sujeto" };
+  }
+  let maintainers = [];
+  try {
+    maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
+  } catch {
+    maintainers = [];
+  }
+  if (maintainers.length === 0) {
+    return { ok: false, code: "governance-maintainers-missing", detail: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida" };
+  }
+  const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
+  const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+  const current = computeTreeHashAtRef(target, surfacePaths, "HEAD");
+  return verifySignoff({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers,
+    currentTreeHash: current.ok ? current.hash : null
+  });
 }
 
 /**
