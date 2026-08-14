@@ -138,3 +138,68 @@ console.log("paridad de hash de arbol: PASS");
 }
 
 console.log("pool: excepcion aislada, tope y orden: PASS");
+
+// --- 5. stderr tambien tiene tope ------------------------------------------
+// `maxBuffer` en Node se aplica a stdout O stderr. Limitar solo el primero
+// dejaba que un hijo ruidoso por stderr devolviera `ok:true` mientras
+// `spawnSync` fallaba con ENOBUFS: las dos vias divergian otra vez, y la
+// acumulacion sin tope era via de agotar memoria.
+{
+  const script = path.join(tempRoot, "ruidoso.mjs");
+  fs.writeFileSync(script, "process.stderr.write('e'.repeat(2 * 1024 * 1024));", "utf8");
+
+  const sync = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  const async_ = await spawnCapture(process.execPath, [script]);
+
+  assert.notEqual(sync.status, 0, "spawnSync falla por maxBuffer de stderr");
+  assert.equal(async_.ok, false, "la via async tiene que fallar igual");
+  assert.equal(async_.overflow, true);
+  assert.match(async_.stderr, /stderr/, "el motivo dice por que stream se desbordo");
+}
+
+console.log("tope de stderr: PASS");
+
+// --- 6. un hijo que ignora SIGTERM no cuelga la promesa --------------------
+// `kill()` manda SIGTERM y no garantiza nada. Si `spawnCapture` esperara a
+// `close` para resolver, un hijo que lo ignore dejaria la promesa colgada para
+// siempre — y con ella el hueco del pool.
+{
+  const script = path.join(tempRoot, "terco.mjs");
+  fs.writeFileSync(
+    script,
+    [
+      "process.on('SIGTERM', () => {});",
+      "process.stdout.write('x'.repeat(2 * 1024 * 1024));",
+      // Se queda vivo a proposito despues de desbordar.
+      "setTimeout(() => {}, 60000);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const t0 = Date.now();
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 200 });
+  const transcurrido = Date.now() - t0;
+
+  assert.equal(resultado.ok, false);
+  assert.equal(resultado.overflow, true);
+  assert.ok(transcurrido < 10_000, `tiene que resolver sin esperar al hijo: tardo ${transcurrido} ms`);
+}
+
+console.log("hijo que ignora SIGTERM: PASS");
+
+// --- 7. el orden no depende del locale de la maquina -----------------------
+// `localeCompare` sin locale explicito usa el ICU del sistema: ["z","ä"] sale
+// en un orden en ingles y en otro en sueco. Si el orden es contractual, no
+// puede depender de la configuracion regional de quien corre el comando.
+{
+  const nombres = ["z-slice", "ä-slice", "a-slice", "Z-slice"];
+  const porBytes = [...nombres].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
+
+  assert.deepEqual(porBytes, ["Z-slice", "a-slice", "z-slice", "ä-slice"], "orden por bytes UTF-8, estable en cualquier maquina");
+  // Y se deja constancia de por que no vale el otro: en al menos un locale
+  // comun el resultado difiere del orden por bytes.
+  const porLocale = [...nombres].sort((a, b) => a.localeCompare(b));
+  assert.notDeepEqual(porLocale, porBytes, "localeCompare NO coincide con el orden por bytes: por eso no se usa");
+}
+
+console.log("orden independiente del locale: PASS");

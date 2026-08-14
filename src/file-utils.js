@@ -64,44 +64,76 @@ export function sha256Text(value) {
  *    distintos por cada camino. Dos verificadores que no coinciden son peores
  *    que uno solo.
  */
-export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024 } = {}) {
+export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd });
     const out = [];
     const err = [];
-    let size = 0;
+    let outSize = 0;
+    let errSize = 0;
     let overflow = false;
+    let settled = false;
+    let killTimer = null;
+
+    // Un solo punto de resolucion. `error` y `close` pueden dispararse los dos
+    // —en un fallo de spawn, `close` llega DESPUES de `error`—, y sin esta
+    // guarda el segundo pisaba el estado del primero: en particular, un `error`
+    // tras marcar desbordamiento reportaba `overflow: false`.
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      resolve(result);
+    };
+
+    // `maxBuffer` en Node se aplica a stdout **o** stderr, no solo al primero.
+    // Limitar unicamente stdout dejaba dos agujeros medidos: un hijo que escribe
+    // 2 MiB por stderr devolvia `ok: true` mientras `spawnSync` fallaba con
+    // ENOBUFS —o sea, las dos vias volvian a divergir—, y esa acumulacion sin
+    // tope era ademas via de agotar memoria con cuatro capturas en vuelo.
+    const trip = (stream) => {
+      if (overflow) return;
+      overflow = true;
+      // Se resuelve YA, sin esperar a `close`. `kill()` manda SIGTERM y no
+      // garantiza nada: un hijo puede ignorarlo, o un descendiente puede
+      // mantener el pipe abierto, y entonces `close` no llega nunca y la
+      // promesa —y con ella el hueco del pool— se queda colgada para siempre.
+      child.kill();
+      killTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* el hijo ya se fue */
+        }
+      }, killGraceMs);
+      killTimer.unref?.();
+      settle({
+        ok: false,
+        stdout: "",
+        stderr: `la salida (${stream}) de ${command} supero maxBuffer (${maxBuffer} bytes)`,
+        overflow: true
+      });
+    };
 
     child.stdout.on("data", (chunk) => {
-      size += chunk.length;
-      if (size > maxBuffer) {
-        if (!overflow) {
-          overflow = true;
-          child.kill();
-        }
-        return;
-      }
+      outSize += chunk.length;
+      if (outSize > maxBuffer) return trip("stdout");
       out.push(chunk);
     });
-    child.stderr.on("data", (chunk) => err.push(chunk));
-    child.on("error", (error) => resolve({ ok: false, stdout: "", stderr: error.message, overflow: false }));
-    child.on("close", (code) => {
-      if (overflow) {
-        resolve({
-          ok: false,
-          stdout: "",
-          stderr: `la salida de ${command} supero maxBuffer (${maxBuffer} bytes)`,
-          overflow: true
-        });
-        return;
-      }
-      resolve({
+    child.stderr.on("data", (chunk) => {
+      errSize += chunk.length;
+      if (errSize > maxBuffer) return trip("stderr");
+      err.push(chunk);
+    });
+    child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
+    child.on("close", (code) =>
+      settle({
         ok: code === 0,
         stdout: Buffer.concat(out).toString("utf8"),
         stderr: Buffer.concat(err).toString("utf8"),
         overflow: false
-      });
-    });
+      })
+    );
   });
 }
 

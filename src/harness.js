@@ -996,7 +996,22 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
 
   const surfacePaths = (memo.contract.contract.surfaces ?? []).map((surface) => surface.path);
   const treeAt = (ref) => {
-    if (!memo.trees.has(ref)) memo.trees.set(ref, computeTreeHashAtRefAsync(target, surfacePaths, ref));
+    if (!memo.trees.has(ref)) {
+      // El `.catch` es defensa barata en el borde: si el primitivo llegara a
+      // rechazar, una promesa rechazada guardada en cache envenenaria a todos
+      // los consumidores de esa pasada. Se convierte a resultado tipado, que es
+      // lo que el resto del codigo sabe manejar.
+      memo.trees.set(
+        ref,
+        computeTreeHashAtRefAsync(target, surfacePaths, ref).catch((error) => ({
+          ok: false,
+          hash: null,
+          files: 0,
+          code: "tree-ref-unreadable",
+          detail: error?.message ?? String(error)
+        }))
+      );
+    }
     return memo.trees.get(ref);
   };
 
@@ -1006,7 +1021,9 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
   // `merge-base` leia el HEAD vivo: la entrada dejaba de ser un hecho inmutable,
   // que es la unica cosa que esta cache tiene permitido guardar.
   if (memo.headOid === undefined) {
-    memo.headOid = gitAsync(["rev-parse", "HEAD^{commit}"], target).then((result) => (result.ok ? result.stdout : null));
+    memo.headOid = gitAsync(["rev-parse", "HEAD^{commit}"], target)
+      .then((result) => (result.ok ? result.stdout : null))
+      .catch(() => null);
   }
   const headRef = (await memo.headOid) ?? "HEAD";
 
@@ -1086,17 +1103,20 @@ export async function auditAttestations(target) {
   // Primero se recoge QUE hay que verificar —lectura de YAML, barata y
   // secuencial— y despues se verifica en paralelo. Mezclarlo daria un orden de
   // hallazgos dependiente de quien termine antes.
-  // Se ordena explicitamente: `readdirSync` no garantiza orden entre sistemas de
-  // archivos, y dos corridas sobre el mismo repo tienen que producir el mismo
-  // informe. Prometer "orden de lectura" sin fijarlo era prometer nada.
+  // Se ordena explicitamente y POR BYTES: `readdirSync` no garantiza orden entre
+  // sistemas de archivos, y dos corridas sobre el mismo repo tienen que producir
+  // el mismo informe. `localeCompare` no sirve para esto — sin locale explicito
+  // depende del ICU de la maquina, y `["z","a-con-dieresis"]` sale en un orden
+  // en ingles y en otro en sueco. Un orden contractual no puede depender de la
+  // configuracion regional de quien corre el comando.
   const pendientes = [];
   const sliceEntries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => Buffer.compare(Buffer.from(a.name, "utf8"), Buffer.from(b.name, "utf8")));
   for (const sliceEntry of sliceEntries) {
     const sliceDir = path.join(root, sliceEntry.name);
-    for (const file of fs.readdirSync(sliceDir).sort((a, b) => a.localeCompare(b))) {
+    for (const file of fs.readdirSync(sliceDir).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) {
       if (!file.endsWith(".yaml")) continue;
       const phase = file.replace(/\.yaml$/, "");
       const read = readEvidenceFile(path.join(sliceDir, file));

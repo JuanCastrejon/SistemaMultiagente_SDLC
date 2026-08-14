@@ -1478,7 +1478,11 @@ function commandHelp() {
   };
 }
 
-export function run(argv) {
+// `run` es SIEMPRE asincrona aunque casi todos los comandos sean sincronos.
+// Devolver "objeto o Promise segun el comando" es un contrato que rompe en
+// silencio a cualquier consumidor programatico el dia que un comando mas se
+// vuelve async — y ya paso con `doctor` y `upgrade`.
+export async function run(argv) {
   const parsed = parseArgs(argv);
   // `--version` se parsea como opcion booleana, no como subcomando, asi que caia
   // en la ayuda con exit 0 sin decir nunca la version.
