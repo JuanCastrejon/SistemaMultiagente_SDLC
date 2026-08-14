@@ -55,7 +55,48 @@ jobs:
         run: |
           node ./bin/sdlc.js init --target ./tmp-consumer --mode ${{ matrix.mode }} --project-name "Regression ${{ matrix.mode }}" --json
 
-      - name: Doctor
+      # Desde 2.0.0 el instalador NO escribe superficies de ejemplo: escribirlas
+      # era configuracion activa disfrazada de plantilla, y de ahi salian gates
+      # vacuos y firmas sobre el arbol vacio. La consecuencia buscada es que un
+      # repo recien instalado salga en ERROR hasta que alguien declare las
+      # superficies reales -- incluido este.
+      #
+      # Se afirma ese error ANTES de configurar, en vez de saltarselo: si algun
+      # dia `doctor` dejara de exigirlo, esta regresion tiene que enterarse.
+      - name: Doctor sin configurar (tiene que fallar)
+        shell: bash
+        run: |
+          if node ./bin/sdlc.js doctor --target ./tmp-consumer --json > /tmp/doctor-sin-config.json 2>&1; then
+            echo "FALLO: doctor deberia salir != 0 con las superficies sin declarar"
+            cat /tmp/doctor-sin-config.json
+            exit 1
+          fi
+          grep -q "config-surfaces-empty" /tmp/doctor-sin-config.json || {
+            echo "FALLO: doctor fallo, pero no por config-surfaces-empty"
+            cat /tmp/doctor-sin-config.json
+            exit 1
+          }
+          echo "OK: doctor exige declarar superficies, como debe"
+
+      # Lo que hace un consumidor de verdad: declarar su superficie y regenerar
+      # el contrato desde el config.
+      - name: Declarar una superficie real
+        shell: bash
+        run: |
+          mkdir -p ./tmp-consumer/src
+          echo "export const x = 1;" > ./tmp-consumer/src/index.js
+          node -e "
+            const fs = require('fs');
+            const p = './tmp-consumer/.sdlc/config.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            // `owner` es obligatorio en el schema; `tier` sale del enum
+            // core|standard|shell. Una superficie mal formada haria fallar
+            // doctor por config-schema y ocultaria lo que esta regresion mide.
+            c.surfaces = [{ id: 'src', path: 'src', owner: 'regression', tier: 'standard' }];
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+          "
+
+      - name: Doctor ya configurado
         run: |
           node ./bin/sdlc.js doctor --target ./tmp-consumer --json
 

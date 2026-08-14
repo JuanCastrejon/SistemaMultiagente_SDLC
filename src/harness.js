@@ -1046,6 +1046,25 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
 // GPG/SSH. Medido, cuatro basta para bajar el orden de magnitud.
 export const AUDIT_CONCURRENCY = 4;
 
+/**
+ * Comparador de orden contractual: BYTES UTF-8, nunca `localeCompare`.
+ *
+ * Sin locale explicito, `localeCompare` depende del ICU de la maquina y
+ * `["z", "a-con-dieresis"]` sale en un orden en ingles y en otro en sueco. Un
+ * informe de auditoria que cambia de orden segun quien lo corra no se puede
+ * comparar entre corridas.
+ *
+ * Vive EXPORTADO y no en linea a proposito. La ronda 11 de revision adversarial
+ * mostro que, con el comparador incrustado, quitarlo del todo dejaba la suite
+ * verde: `readdirSync` habia devuelto ese orden por casualidad en esa maquina,
+ * asi que el caso comprobaba una salida ACCIDENTAL del sistema de archivos y no
+ * que el criterio se aplicara. Aislado, se puede probar contra una entrada
+ * deliberadamente desordenada.
+ */
+export function compareByUtf8Bytes(a, b) {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
+
 export async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
   const results = new Array(items.length);
   let next = 0;
@@ -1113,10 +1132,10 @@ export async function auditAttestations(target) {
   const sliceEntries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .sort((a, b) => Buffer.compare(Buffer.from(a.name, "utf8"), Buffer.from(b.name, "utf8")));
+    .sort((a, b) => compareByUtf8Bytes(a.name, b.name));
   for (const sliceEntry of sliceEntries) {
     const sliceDir = path.join(root, sliceEntry.name);
-    for (const file of fs.readdirSync(sliceDir).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) {
+    for (const file of fs.readdirSync(sliceDir).sort(compareByUtf8Bytes)) {
       if (!file.endsWith(".yaml")) continue;
       const phase = file.replace(/\.yaml$/, "");
       const read = readEvidenceFile(path.join(sliceDir, file));

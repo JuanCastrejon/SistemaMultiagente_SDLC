@@ -8,6 +8,38 @@ primero, porque bloquea al resto.
 
 ---
 
+## Ronda 11 — ¿queda deuda para una 2.0.1? Ya no
+
+Registro en `.codex-out/ronda-11/hallazgos.md`. La ronda murió por cuota tras
+entregar **6 hallazgos, todos ejecutados**; el contrato incremental los salvó.
+
+- [x] ~~SERIO — la matriz de regresión quedaba ROJA tras el `install` de
+      2.0.0.~~ Reproducido: `init` sale 0 pero `doctor` sale **1** con
+      `config-surfaces-empty`, porque desde 2.0.0 el instalador ya no escribe
+      superficies de ejemplo. **El propio control de release del repo estaba
+      roto por el cambio.** El workflow ahora (a) **afirma** ese error antes de
+      configurar —si algún día `doctor` dejara de exigirlo, la regresión se
+      entera— y (b) declara una superficie real, que es lo que hace un
+      consumidor. Verificado en WSL de punta a punta.
+- [x] ~~Los cinco MENORES «cerrados» seguían teniendo variantes vivas.~~ Codex
+      confirmó que mis cinco mutantes mueren, y encontró **cinco variantes
+      nuevas que pasaban**. Todas cerradas, y todas verificadas volviendo a
+      aplicar **su** mutación exacta: **5 muertos, 0 sobreviven**.
+      - **NFD parcial:** normalizar solo `e`+U+0301 no tocaba el vector de la
+        eñe. Ahora hay cuatro vectores NFD independientes y se comprueba cada
+        uno por separado — una normalización parcial sobrevive a una comparación
+        global si el resto coincide.
+      - **`runPool` degradado a 2:** el caso del default solo exigía
+        `1 < máximo <= 4`. Ahora afirma `=== AUDIT_CONCURRENCY`.
+      - **Detalle del `ls-tree` = solo el ref:** satisfacía un `includes(...)`
+        sin explicar nada. Ahora se exige **igualdad exacta** con la vía
+        síncrona.
+      - **`trip` retrasado un 40 % de la gracia:** una cota relativa sola dejaba
+        pasar 800 ms de bloqueo del pool. Ahora hay **cota absoluta** además.
+      - **Sin comparador de orden:** el caso verificaba una salida *accidental*
+        de `readdirSync`. El comparador se extrajo a `compareByUtf8Bytes`,
+        exportado, y se prueba contra una entrada deliberadamente desordenada.
+
 ## Ronda 10 — un BLOQUEANTE más, cerrado
 
 Registro en `.codex-out/ronda-10/hallazgos.md`.

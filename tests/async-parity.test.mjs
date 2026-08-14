@@ -89,10 +89,24 @@ const vigilanteGlobal = setTimeout(() => {
   // (NFD) se normalizaria en la via async y no en la sincrona -- y entonces la
   // auditoria y el gate juzgarian distinto al mismo firmante.
   //
-  // "ñ" tiene dos formas: NFC (U+00F1, un code point) y NFD (n + U+0303). Se
-  // ven igual y NO son la misma cadena.
-  const nfd = "Nũñez"; // "Nuñnñez" descompuesto, a proposito
-  assert.notEqual(nfd, nfd.normalize("NFC"), "el caso de prueba tiene que estar de verdad en NFD");
+  // VARIOS vectores independientes, no solo la eñe. La ronda 11 mostro que con
+  // uno solo, una normalizacion PARCIAL -- por ejemplo sustituir unicamente
+  // "e" + U+0301 -- pasaba desapercibida, porque no tocaba el vector del caso.
+  //
+  // Se escriben con escapes \u y no con el caracter ya compuesto: un literal
+  // NFD en el fuente es fragil, porque cualquier editor o herramienta que
+  // normalice el archivo lo convertiria a NFC y el caso dejaria de probar lo
+  // que dice probar.
+  const vectoresNfd = [
+    "Nũñez".normalize("NFD"), // n + tilde combinante
+    "José".normalize("NFD"), // e + acento agudo
+    "Ärger".normalize("NFD"), // A + dieresis
+    "çedilla".normalize("NFD") // c + cedilla
+  ];
+  for (const v of vectoresNfd) {
+    assert.notEqual(v, v.normalize("NFC"), `el vector ${JSON.stringify(v)} tiene que estar de verdad en NFD`);
+  }
+  const nfd = vectoresNfd.join(" ");
 
   const script = path.join(tempRoot, "nfd.mjs");
   fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(nfd)});`, "utf8");
@@ -102,7 +116,11 @@ const vigilanteGlobal = setTimeout(() => {
 
   assert.equal(async_.stdout, sync.stdout, "async y sync tienen que entregar los MISMOS bytes");
   assert.equal(async_.stdout, nfd, "y tienen que entregarlo LITERAL: normalizar aqui cambiaria el sujeto de una firma");
-  assert.notEqual(async_.stdout, nfd.normalize("NFC"), "si esto falla, alguien metio una normalizacion en el camino");
+  // Y cada vector POR SEPARADO: una normalizacion parcial sobrevive a una
+  // comparacion global si el resto de la cadena coincide.
+  for (const v of vectoresNfd) {
+    assert.ok(async_.stdout.includes(v), `${JSON.stringify(v)} tiene que llegar sin normalizar`);
+  }
 }
 
 console.log("paridad utf-8 entre chunks: PASS");
@@ -162,11 +180,18 @@ console.log("paridad de limite de salida: PASS");
   // detalle es lo unico que le dice a quien opera POR QUE no se pudo leer la
   // referencia: si las dos vias explican distinto el mismo fallo, `doctor` y
   // el phase-gate dan diagnosticos que no se pueden contrastar.
+  // IGUALDAD EXACTA, no "que mencione el ref". La ronda 11 mostro que devolver
+  // simplemente `detail: ref` satisfacia un `includes(...)` y perdia el
+  // diagnostico real de git -- que es justo lo que permite operar. Si las dos
+  // vias explican distinto el mismo fallo, sus veredictos no se pueden
+  // contrastar.
   assert.ok(asyncMal.detail, "la via async tiene que traer un detalle, no solo un codigo");
-  assert.ok(
-    asyncMal.detail.includes("no-existe") || asyncMal.detail === syncMal.detail,
-    `el detalle async tiene que nombrar el ref o coincidir con el sincrono.\n  sync : ${JSON.stringify(syncMal.detail)}\n  async: ${JSON.stringify(asyncMal.detail)}`
+  assert.equal(
+    asyncMal.detail,
+    syncMal.detail,
+    `el detalle tiene que ser EL MISMO por las dos vias.\n  sync : ${JSON.stringify(syncMal.detail)}\n  async: ${JSON.stringify(asyncMal.detail)}`
   );
+  assert.notEqual(asyncMal.detail, "no-existe", "y no puede ser una repeticion del ref: eso no explica nada");
 }
 
 console.log("paridad de hash de arbol: PASS");
@@ -207,8 +232,15 @@ console.log("paridad de hash de arbol: PASS");
     "los resultados conservan el orden de entrada"
   );
 
-  assert.ok(maximoSimultaneo <= AUDIT_CONCURRENCY, `nunca mas de ${AUDIT_CONCURRENCY} a la vez: hubo ${maximoSimultaneo}`);
-  assert.ok(maximoSimultaneo > 1, "y de verdad concurre: con 1 no habria paralelismo");
+  // EXACTO, no un rango. La ronda 11 mostro que `1 < maximo <= 4` dejaba pasar
+  // `Math.min(2, concurrency, …)`: la auditoria se degradaba de cuatro a dos
+  // atestaciones en paralelo SIN ninguna señal. Con 12 items y trabajo
+  // solapado, el default tiene que alcanzar su tope declarado.
+  assert.equal(
+    maximoSimultaneo,
+    AUDIT_CONCURRENCY,
+    `por defecto tienen que correr EXACTAMENTE ${AUDIT_CONCURRENCY} a la vez, y hubo ${maximoSimultaneo}`
+  );
 
   // MENOR de la ronda 8: sustituir `Math.min(concurrency, …)` por
   // `Math.min(4, …)` dejaba la suite verde. `runPool` es exportada y recibe la
@@ -367,9 +399,17 @@ console.log("corte exacto, sin margen: PASS");
 
   assert.equal(resultado.ok, false);
   assert.equal(resultado.overflow, true);
+  // DOS cotas, y la absoluta es la que muerde. La ronda 11 mostro que una
+  // relativa sola (`< gracia / 2`) dejaba pasar un retraso del 40 % de la
+  // gracia -- 800 ms de bloqueo del pool con la gracia por defecto. "De
+  // inmediato" no es "menos de la mitad de lo que tarde en matarlo".
+  assert.ok(
+    transcurrido < 400,
+    `tiene que resolver de INMEDIATO, sin esperar al hijo ni a la escalada: tardo ${transcurrido} ms`
+  );
   assert.ok(
     transcurrido < gracia / 2,
-    `tiene que resolver de INMEDIATO, no esperar al hijo ni a la escalada: tardo ${transcurrido} ms con una gracia de ${gracia} ms`
+    `y muy por debajo de la gracia (${gracia} ms), no proporcional a ella: tardo ${transcurrido} ms`
   );
 }
 
@@ -471,6 +511,25 @@ console.log(
   // se puede satisfacer con el comparador equivocado el dia que alguien cambie
   // el conjunto de nombres.
   assert.notDeepEqual([...slices].sort(), orden, "el orden de UTF-16 es OTRO: por eso el codigo compara bytes");
+
+  // Y el COMPARADOR, aparte y contra una entrada deliberadamente desordenada.
+  // Lo anterior comprueba la SALIDA de `auditAttestations`, que en una maquina
+  // donde `readdirSync` ya devuelva el orden correcto pasaria aunque nadie
+  // ordenara nada -- la ronda 11 lo demostro quitando el comparador y viendo la
+  // suite en verde. Esto prueba el criterio, no la casualidad.
+  const { compareByUtf8Bytes } = await import("../src/harness.js");
+  const desordenado = ["\u{1F600}-z", "a", "！", "Z", "ñ", "A"];
+  const ordenado = [...desordenado].sort(compareByUtf8Bytes);
+  const esperadoPorBytes = [...desordenado].sort((x, y) =>
+    Buffer.compare(Buffer.from(x, "utf8"), Buffer.from(y, "utf8"))
+  );
+  assert.deepEqual(ordenado, esperadoPorBytes, "el comparador tiene que ordenar por bytes UTF-8");
+  assert.notDeepEqual(ordenado, [...desordenado].sort(), "y NO como el orden por defecto de JavaScript (UTF-16)");
+  assert.notDeepEqual(
+    ordenado,
+    [...desordenado].sort((x, y) => x.localeCompare(y)),
+    "ni como `localeCompare`, que depende del ICU de la maquina"
+  );
 }
 
 console.log("orden de hallazgos por bytes: PASS");
