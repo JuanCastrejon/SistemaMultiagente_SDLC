@@ -191,6 +191,8 @@ sdlc change-close --change <slug> --integration-branch develop
 
 Con un solo maintainer, GitHub prohíbe auto-aprobar un PR propio: `platform-review` es insatisfacible, así que la firma se verifica por **commit firmado** en vez de por review de plataforma (`governance.threatModel: single-maintainer`).
 
+> Desde 2.0.0 el sujeto se ancla al **commit firmado** y `--create --record` enlaza la firma con la evidencia de su fase. Ver [Firma humana: emitir, enlazar y auditar](#firma-humana-emitir-enlazar-y-auditar).
+
 ### Documentación generada, no escrita
 
 ```powershell
@@ -221,6 +223,174 @@ sdlc red-proof-verify --slice <id> --report reports/red-proof.json --format vite
 Todo escenario en `status: red` exige que el reporte declare `outcome: assertion-failed`: un error colateral (import roto, `throw` arbitrario) no da crédito, porque demuestra que algo se rompió, no que el escenario esté bien especificado.
 
 Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`, `proofStrength: "heuristic"`, `limitations`). No consume aún procedencia de CI, así que adjudica un reporte que produce el propio evaluado: `ok` significa «no se detectó trampa», nunca «el rojo quedó demostrado». Ningún workflow lo invoca por defecto.
+
+## Qué cambia en 2.0.0
+
+Tres rupturas, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+
+| Ruptura | Qué implica al actualizar |
+| --- | --- |
+| El sujeto de la firma cambia de formato | Las atestaciones anteriores **no verifican**. Hay que volver a firmar (`sdlc signoff … --create --record`). `doctor` y `upgrade` las nombran una por una. |
+| `install` deja de escribir superficies y stack de ejemplo | Un repo recién instalado sale en **error** en `doctor` hasta declarar sus superficies reales. Es deliberado: ver abajo. |
+| `.github/agents/surface-traceability.json` se genera desde `config.surfaces` | Cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; revísalo si lo consumes a mano. |
+
+### El instalador ya no finge configuración
+
+Hasta 1.8.2, `install` escribía superficies de ejemplo (`apps/api`, `apps/web`) y cinco `<BACKEND_STACK>`. En un repo con otro layout **eso no era un ejemplo: era configuración activa**, con dos consecuencias que tardaron semanas en verse en un consumidor real:
+
+- todos los gates sobre esas superficies eran vacuos (`surface-path-unresolved`), y
+- el sujeto de la firma humana se calculaba sobre el **árbol vacío**, así que una atestación resultaba criptográficamente válida y semánticamente hueca: atestaba la nada.
+
+Ahora `install` escribe `surfaces: []` y `stack` en `null`, y el estado a medio configurar se ve desde el primer minuto. **El framework no sabe nada del repo donde cae**: instala las bases y quien instala remata la configuración. Esa es la diferencia entre un repo sin configurar y uno que *parece* configurado.
+
+## Configuración después de instalar
+
+Cinco cosas que el instalador **no puede adivinar** y sin las cuales el árbitro no mide nada. `sdlc doctor` las reclama todas.
+
+### 1. Superficies reales
+
+```jsonc
+// .sdlc/config.json
+"surfaces": [
+  { "id": "extension", "path": ".", "owner": "web-agent", "tier": "core", "hasUi": true }
+]
+```
+
+`id` es identidad persistente y `path` tiene que existir en disco. Ojo con esto: las superficies se declaran **dos veces** —aquí y en `quality-contract.yaml`— y el árbitro y la firma leen **solo el contrato**. Corregir una sola de las dos no arregla nada, y por eso `checkSurfaces` reporta `surface-declaration-divergent` cuando divergen.
+
+### 2. Stack real, o `null`
+
+`null` significa «este proyecto no tiene esa superficie» y es un valor legítimo. Lo que no se admite es un placeholder sin sustituir: `doctor` reporta `config-stack-placeholder` como error.
+
+### 3. Qué se puede medir y qué no
+
+Aquí es donde la mayoría de repos se atascan, y el framework tiene una respuesta explícita. Los umbrales por tier que trae el contrato de fábrica:
+
+| Gate | Fase | Métrica | core | standard | shell | Modo inicial |
+| --- | --- | --- | --- | --- | --- | --- |
+| `F8.changed-lines-coverage` | F8 | cobertura de **líneas cambiadas** | **90 %** | **80 %** | **0 %** | `ratchet` |
+| `F9.mutation-survivors` | F9 | mutantes supervivientes | 0 | 0 | 0 | `observe` |
+| `F9.no-coverage-mutants` | F9 | mutantes sin cobertura | 0 | 0 | 0 | `observe` |
+| `F10.dependency-violations` | F10 | violaciones de dependencias | 0 | 0 | 0 | `ratchet` |
+| `F10.dependency-cycles` | F10 | ciclos de dependencias | 0 | 0 | 0 | `ratchet` |
+
+La cobertura es de **líneas cambiadas**, no del repo entero: un repo con 12 % histórico no queda bloqueado, pero lo que toque hoy sí responde por sí mismo. Y `min_denominator` decide si un gate juzga o es vacuo — «0 violaciones» y «0 violaciones sobre ≥10 módulos escaneados» son controles distintos.
+
+**Si tu repo no puede medir alguno de esos, declara el probe no disponible con motivo escrito:**
+
+```yaml
+# quality-contract.yaml
+probes:
+  - id: coverage
+    command: validate:coverage
+    unavailable:
+      reason: sin runner de tests; montarlo es un slice propio, no un ajuste
+      since: "2026-08-13"
+```
+
+Con eso, **todos** los gates que dependen de sus métricas salen `not-applicable` con ese motivo, en un bucket propio que no entra en el veredicto. La distinción es el punto entero: *no medido* e *incumplido* son cosas distintas, y un check rojo permanente que las confunde enseña a ignorar la señal. Tres contenciones para que no sea una puerta trasera:
+
+- sin `reason` escrito **no hay exención** y el gate se sigue adjudicando;
+- si la métrica aparece de todas formas, **manda el número medido** y se avisa de que la declaración sobra;
+- los gates de otras familias siguen bloqueando: la exención no se propaga.
+
+### 4. Preparación de firma
+
+```powershell
+sdlc tools-doctor --json   # el probe `commit-signing` dice qué falta
+```
+
+Comprueba `governance.maintainers`, `user.signingkey`, `gpg.format` y —con SSH— que `gpg.ssh.allowedSignersFile` exista. Antes, un consumidor descubría que no podía atestar nada **en el momento en que un gate humano se lo pedía**, con la fase ya bloqueada.
+
+Dos detalles que cuestan una tarde si nadie los dice:
+
+- **`%GS` no tiene el mismo formato en GPG y en SSH.** Con GPG es el UID completo (`Nombre <email>`); con `gpg.format=ssh` es el **principal** de `allowed_signers`, normalmente el email solo. Se aceptan las dos formas, y el error muestra el `%GS` realmente observado.
+- **Autorizar por email no autoriza una clave.** Con SSH, `allowed_signers` ya ata identidad a clave; con GPG, `%GS` es el UID que la propia clave declara, así que cualquiera puede fabricar una con tu email. Declara `fingerprint` y manda sobre el nombre:
+
+```jsonc
+"governance": {
+  "maintainers": [
+    { "signer": "juan@example.com", "fingerprint": "SHA256:…", "role": "human-review" }
+  ]
+}
+```
+
+El resultado de la verificación trae `identityBinding: "fingerprint" | "principal"` para que se sepa cuál de las dos garantías hay delante.
+
+### 5. Estado por slice
+
+`phase-status.yaml` admite un mapa `slices:` además del puntero global. Con varios slices en vuelo, el puntero solo describe uno y el árbitro quedaba ciego a los demás:
+
+```yaml
+current_slice: "slice-en-curso"   # lo que lee el workflow
+current_phase: "F8"
+
+slices:                            # lo que `sdlc status` adjudica entero
+  slice-en-curso:  { phase: "F8" }
+  otro-slice:      { phase: "F4" }
+```
+
+Es aditivo: un `phase-status.yaml` sin el mapa se comporta exactamente como antes.
+
+## Firma humana: emitir, enlazar y auditar
+
+```powershell
+# Firma y ENLAZA con la evidencia de la fase en un solo paso
+sdlc signoff --slice <id> --phase <F> --create --record
+
+# Enlazar un commit que ya existe y ya está firmado (si el enlace falló antes)
+sdlc signoff --slice <id> --phase <F> --record --commit <sha>
+
+# Verificar, exigiendo además que el árbol aprobado siga siendo el actual
+sdlc signoff --slice <id> --phase <F> --verify --commit <sha> --require-fresh
+```
+
+Cuatro propiedades que conviene entender antes de usarlo:
+
+- **El sujeto se ancla al commit firmado, no al working tree.** Antes caducaba con el commit siguiente, así que no servía como registro de que una fase se aprobó. Que el árbol se haya movido después es otra pregunta: se responde con `fresh: false` y `--require-fresh`.
+- **`--record` verifica antes de escribir.** Si la firma no verifica, no escribe nada. `approved_by` se deriva del firmante que reporta git, nunca de una opción, y la referencia previa se conserva en `history`.
+- **Firmar el vacío es error duro.** Si ninguna superficie resuelve a archivos, `signoff-empty-subject`.
+- **No se firma con el árbol sucio.** El commit de atestación es vacío y firmaría el árbol de `HEAD`, no lo que tienes delante (`--allow-dirty` para saltarlo a sabiendas).
+
+### Auditoría de atestaciones
+
+`doctor` y `upgrade` re-verifican **todas** las atestaciones declaradas, no solo la de la fase en curso. Una firma que dejó de valer se descubría al llegar a su gate humano, con el trabajo ya hecho.
+
+| Veredicto | Qué significa | Efecto |
+| --- | --- | --- |
+| `invalid` | la firma existe y no vale | error en `doctor`, `action-required` en `upgrade` |
+| `unverifiable` | no hay con qué comprobarla (clon superficial, commit ausente) | aviso, pero **nunca** produce éxito |
+| `valid` | verificada | — |
+
+Un clon superficial no es culpa de nadie, así que su remedio no es «vuelve a firmar» sino traer la historia que falta — y el hallazgo lo dice. En cambio un repo sin maintainers **sí** es error: es configuración local que desactiva el verificador entero.
+
+**Coste medido** (superficie de 200 archivos, firmas válidas, mediana de tres corridas):
+
+| Atestaciones | En serie | Con pool de 4 |
+| --- | --- | --- |
+| 1 | 524 ms | 314 ms |
+| 5 | 2 490 ms | 616 ms |
+| 20 | 9 693 ms | 1 703 ms |
+| marginal | ~485 ms | **~67 ms** |
+
+El recorrido de la evidencia sin firmas cuesta ~30 ms: lo caro son los procesos de git, no leer YAML.
+
+## Puente de Codex — preflight obligatorio
+
+Si delegas trabajo a Codex (ver `AGENTS.md`), ejecuta esto antes:
+
+```powershell
+node scripts/codex-session-check.mjs           # cuenta, plan, vencimiento
+node scripts/codex-session-check.mjs --probe   # además, una llamada real
+```
+
+Cubre tres modos de fallo que no se parecen entre sí y ninguno se ve hasta que algo se rompe a mitad de trabajo:
+
+1. **Sesión de otra cuenta** — la terminal sigue con la anterior aunque creas que cambiaste.
+2. **Credencial rechazada por el servidor** — está en disco y sin vencer, pero se inició sesión con otra cuenta desde otro sitio. `codex login status` responde «Logged in using ChatGPT» y sale `0` mientras la llamada real falla. Solo `--probe` lo detecta, y por eso es opt-in: gasta cuota.
+3. **Proceso con la credencial vieja en memoria** — un `codex` arrancado antes del último login. Se detecta comparando su arranque con la fecha de `auth.json`, y **la reparación es cerrar y reabrir la app**, no matar procesos: matarlos deja al puente sin su sesión compartida y el siguiente trabajo se cuelga sin escribir log.
+
+El preflight no imprime tokens ni el `account_id` completo, y el plan **avisa pero no bloquea**: ve el plan, no la cuota restante.
 
 ## Modos
 
