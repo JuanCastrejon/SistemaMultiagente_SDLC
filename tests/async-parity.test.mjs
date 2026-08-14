@@ -386,14 +386,19 @@ console.log("validacion de maxBuffer: PASS");
     "TREE_HASH_MAX_BUFFER tiene que ser DEFAULT_BUDGET_BYTES / AUDIT_CONCURRENCY exacto"
   );
 
-  // Y que el sitio de produccion de verdad use la cuota, no el presupuesto
-  // entero: una prueba de comportamiento no protege un `import` que alguien
-  // cambia por el nombre equivocado.
+  // LAS DOS vias tienen que declarar el MISMO tope. La ronda 6 encontro que
+  // bajar solo la asincrona a presupuesto/4 no arreglaba la divergencia: la
+  // volvia determinista. Un `ls-tree` de entre 64 y 256 MiB pasaba por la via
+  // sincrona y fallaba SIEMPRE por la asincrona. Se comprueba leyendo el
+  // codigo porque el desacuerdo esta en las DECLARACIONES, y montar un arbol
+  // real de 64 MiB en una prueba costaria minutos.
   const fuente = fs.readFileSync(new URL("../src/evidence-writer.js", import.meta.url), "utf8");
-  assert.match(
-    fuente,
-    /computeTreeHashAtRefAsync[\s\S]*?maxBuffer:\s*TREE_HASH_MAX_BUFFER/,
-    "la via async tiene que pasar TREE_HASH_MAX_BUFFER, no el presupuesto global entero"
+  const topes = [...fuente.matchAll(/maxBuffer:\s*([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
+  assert.ok(topes.length >= 2, `se esperaban las dos vias del hash de arbol declarando tope, y se vieron ${topes.length}`);
+  assert.deepEqual(
+    [...new Set(topes)],
+    ["TREE_HASH_MAX_BUFFER"],
+    `las dos vias tienen que declarar EL MISMO tope y ser TREE_HASH_MAX_BUFFER; se vio ${JSON.stringify(topes)}`
   );
 
   const dir = fs.mkdtempSync(path.join(tempRoot, "paridad-pool-"));
@@ -454,13 +459,24 @@ if (process.platform !== "win32") {
     script,
     [
       "import { spawn } from 'node:child_process';",
+      "import fs from 'node:fs';",
       // El nieto ignora SIGTERM y deja constancia de su PID.
       `const codigoNieto = ${JSON.stringify(codigoNieto)};`,
       "spawn(process.execPath, ['-e', codigoNieto], { stdio: 'ignore' });",
-      // El lider desborda de inmediato. El SIGTERM que `killTree` manda al
-      // GRUPO llega tambien al lider (sin handler propio: muere) y al nieto
-      // (con handler propio: lo ignora) casi al mismo tiempo.
-      "process.stdout.write('x'.repeat(2 * 1024 * 1024));"
+      // El lider NO desborda hasta que el nieto esta LISTO. Desbordar de
+      // inmediato -- como hacia la primera version de esta prueba -- mandaba
+      // el SIGTERM del grupo mientras el nieto todavia arrancaba Node y AUN NO
+      // habia registrado su handler: moria por el SIGTERM por defecto y el
+      // escenario no se montaba. En Windows la prueba se salta, asi que el
+      // defecto solo se vio al ejercitarla de verdad en POSIX.
+      `const PIDFILE = ${JSON.stringify(pidFile)};`,
+      "const listo = setInterval(() => {",
+      "  if (!fs.existsSync(PIDFILE)) return;",
+      "  clearInterval(listo);",
+      // Ahora si: el SIGTERM del grupo llega al lider (sin handler propio:
+      // muere) y al nieto (con handler propio: lo ignora).
+      "  process.stdout.write('x'.repeat(2 * 1024 * 1024));",
+      "}, 10);"
     ].join("\n"),
     "utf8"
   );
@@ -544,11 +560,16 @@ console.log("createCaptureBudget rechaza totales invalidos: PASS");
     "utf8"
   );
 
-  // 24 MiB de presupuesto: 16 MiB se van en las dos reservas iniciales (8 MiB
-  // cada una), dejando 8 MiB de holgura -- exactamente lo que las dos
-  // capturas necesitan crecer (2 MiB cada una) si el crecimiento es exacto.
-  // Con el redondeo viejo, la primera en crecer ya pide sus 8 MiB de bloque y
-  // agota la holgura entera; a la segunda no le queda nada.
+  // Aritmetica exacta (la ronda 6 corrigio la primera version de este
+  // comentario, que redondeaba y no cuadraba):
+  //   - cada captura escribe 34 x 307 200 = 10 444 800 B;
+  //   - reserva inicial 8 388 608 B (8 MiB), asi que crece 2 056 192 B;
+  //   - las dos juntas necesitan crecer 4 112 384 B;
+  //   - presupuesto 25 165 824 B (24 MiB) - 16 777 216 B de reservas
+  //     iniciales = 8 388 608 B de holgura.
+  // Con crecimiento exacto sobran 4 276 224 B y las dos caben. Con el redondeo
+  // viejo, la PRIMERA en crecer pide un bloque de 8 388 608 B y se lleva la
+  // holgura entera; a la segunda no le queda nada y corta por "presupuesto".
   for (let intento = 1; intento <= 3; intento += 1) {
     const budget = createCaptureBudget(24 * 1024 * 1024);
     const resultados = await Promise.all(
@@ -671,4 +692,84 @@ console.log(
   process.platform === "win32"
     ? "limpieza de hijos detached: SKIP (Windows no detacha, no hay grupos POSIX que limpiar)"
     : "limpieza de hijos detached: PASS"
+);
+
+// --- 18. la ventana entre el corte y la muerte real sigue cubierta ---------
+// BLOQUEANTE de la ronda 6, encontrado por las dos voces por separado. `trip()`
+// resuelve la promesa DE INMEDIATO y deja al hijo vivo durante toda la ventana
+// de `killGraceMs` -- justo el caso en que ya consta que resistio el SIGTERM.
+// La primera version daba de baja al hijo del registro de limpieza dentro de
+// `settle()`, o sea al resolver: un Ctrl-C en esa ventana no lo encontraba,
+// `process.exit()` mataba Node, el temporizador (unref) no llegaba a correr y
+// el grupo quedaba huerfano. El test 17 no lo cubre porque ahi la captura
+// NUNCA corta.
+//
+// POSIX unicamente: en Windows no se detacha y no hay registro que consultar.
+if (process.platform !== "win32") {
+  const { killAllActiveChildren } = await import("../src/file-utils.js");
+
+  const dir = fs.mkdtempSync(path.join(tempRoot, "ventana-"));
+  const pidFile = path.join(dir, "nieto.pid");
+  const script = path.join(dir, "padre.mjs");
+  const codigoNieto = `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  fs.writeFileSync(
+    script,
+    [
+      "import { spawn } from 'node:child_process';",
+      "import fs from 'node:fs';",
+      `const codigoNieto = ${JSON.stringify(codigoNieto)};`,
+      "spawn(process.execPath, ['-e', codigoNieto], { stdio: 'ignore' });",
+      `const PIDFILE = ${JSON.stringify(pidFile)};`,
+      "const listo = setInterval(() => {",
+      "  if (!fs.existsSync(PIDFILE)) return;",
+      "  clearInterval(listo);",
+      "  process.stdout.write('x'.repeat(2 * 1024 * 1024));",
+      "}, 10);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  // `killGraceMs` largo A PROPOSITO: deja la ventana abierta de sobra para
+  // actuar dentro de ella. Si la limpieza dependiera del temporizador y no del
+  // registro, este test no podria distinguir una cosa de la otra.
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 30_000 });
+  assert.equal(resultado.overflow, true, "la captura corto, que es lo que abre la ventana");
+
+  assert.ok(fs.existsSync(pidFile), "el nieto llego a escribir su pid antes del corte");
+  const nietoPid = Number(fs.readFileSync(pidFile, "utf8"));
+
+  const vive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.ok(vive(nietoPid), "el nieto sigue vivo tras el corte: ignoro el SIGTERM, que es el escenario");
+
+  // Esto es lo que haria el handler de Ctrl-C. Con la version vieja el hijo ya
+  // no estaba en el registro y esta llamada no hacia NADA.
+  killAllActiveChildren();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const sigueVivo = vive(nietoPid);
+  if (sigueVivo) {
+    try {
+      process.kill(nietoPid, "SIGKILL");
+    } catch {
+      /* limpieza best-effort */
+    }
+  }
+  assert.equal(
+    sigueVivo,
+    false,
+    "el nieto tiene que morir: el hijo sigue en el registro durante toda la ventana entre el corte y su muerte real"
+  );
+}
+
+console.log(
+  process.platform === "win32"
+    ? "ventana entre corte y muerte real: SKIP (Windows no detacha)"
+    : "ventana entre corte y muerte real: PASS"
 );

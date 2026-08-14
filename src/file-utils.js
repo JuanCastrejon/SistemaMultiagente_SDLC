@@ -63,17 +63,33 @@ export function sha256Text(value) {
 export const DEFAULT_BUDGET_BYTES = 256 * 1024 * 1024;
 const INITIAL_RESERVE_BYTES = 8 * 1024 * 1024;
 
-// Techo por captura para quien lo usa en POOL (la auditoria de atestaciones:
-// AUDIT_CONCURRENCY llamadas en vuelo a la vez, harness.js). Pasar aqui el
-// presupuesto GLOBAL entero -- lo que hacia evidence-writer.js antes de esta
-// correccion -- deja que UNA llamada del pool reclame TODO el presupuesto
-// para si misma: con cuatro en vuelo, el camino async podia cortar por
-// "presupuesto" en una entrada donde el camino sincrono (que nunca compite:
-// `spawnSync` bloquea el hilo, jamas hay dos a la vez) siempre tenia exito.
-// El MISMO arbol, dos veredictos, decidido por quien gano la carrera de
-// memoria -- justo lo que este modulo existe para evitar. Repartido entre las
-// llamadas concurrentes esperadas, cada una tiene una cuota FIJA: el tope por
-// llamada baja, pero deja de depender de una carrera.
+// Techo por llamada del hash de arbol. Lo usan LAS DOS vias, la sincrona y la
+// asincrona, y esa es toda la idea: mientras el numero sea el mismo, las dos
+// aceptan y rechazan exactamente las mismas entradas.
+//
+// Historia, porque el numero solo no lo explica y ya nos equivocamos dos veces:
+//
+//  1. Las dos vias declaraban 256 MiB, que ademas era el presupuesto GLOBAL
+//     entero. La sincrona nunca compite (`spawnSync` bloquea el hilo, jamas hay
+//     dos a la vez) y siempre lo tenia disponible; la asincrona corre en el
+//     pool de la auditoria (AUDIT_CONCURRENCY en vuelo), asi que UNA podia
+//     reclamarlo entero y dejar sin nada a las otras tres. Mismo arbol, dos
+//     veredictos, decididos por quien ganara la carrera de memoria.
+//  2. Se bajo SOLO la asincrona a presupuesto/4. Eso quito la carrera, pero
+//     dejo una divergencia peor por ser silenciosa y estable: un `ls-tree` de
+//     entre 64 y 256 MiB pasaba por la via sincrona y fallaba por la
+//     asincrona, SIEMPRE. Cambiar una divergencia aleatoria por una
+//     determinista no es arreglarla.
+//
+// Ahora el tope es uno solo y las dos vias lo comparten. Se dimensiona por el
+// caso peor de la asincrona (AUDIT_CONCURRENCY capturas reteniendo su tope a
+// la vez sin superar el presupuesto global), y la sincrona lo adopta aunque no
+// lo necesite: capacidad de sobra en una via no vale lo que cuesta que las dos
+// discrepen.
+//
+// Cuanto es en la practica: `git ls-tree -r -z` gasta ~94 bytes por entrada
+// (medido sobre este repo: 37 402 bytes / 399 archivos), asi que 64 MiB dan
+// para ~715 000 archivos en un solo arbol. Chromium ronda los 400 000.
 //
 // El "4" es AUDIT_CONCURRENCY (harness.js); vive duplicado aqui porque
 // harness.js importa de evidence-writer.js, que importaria de aqui: cerrar el
@@ -334,6 +350,12 @@ function installSignalCleanupOnce() {
     killAllActiveChildren();
     process.exit(143);
   });
+  // Red de seguridad para la salida NORMAL. El temporizador de escalada esta
+  // `unref`-ado a proposito (no debe retrasar la salida del CLI), asi que si
+  // el proceso termina antes de que venza la gracia, ese SIGKILL no llega a
+  // correr y el grupo quedaria huerfano. `process.kill` es sincrono, que es lo
+  // unico que un handler de `exit` puede hacer.
+  process.on("exit", killAllActiveChildren);
 }
 
 function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget }) {
@@ -365,16 +387,16 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
     const settle = (result) => {
       if (settled) return;
       settled = true;
-      activeChildren.delete(child); // no-op si nunca se registro (Windows)
       resolve(result);
     };
 
-    const cancelWatchdog = () => {
-      if (killTimer) {
-        clearTimeout(killTimer);
-        killTimer = null;
-      }
-    };
+    // Sale del registro de limpieza SOLO cuando consta que el hijo murio
+    // (`close`) o que nunca arranco (`error`). NO al resolver la promesa:
+    // `trip()` resuelve de inmediato y deja al hijo vivo durante toda la
+    // ventana de `killGraceMs` -- justo el caso en que ya sabemos que
+    // resistio el SIGTERM. Darlo de baja ahi lo dejaba fuera del alcance de
+    // `killAllActiveChildren`, y un Ctrl-C en esa ventana orfanaba el grupo.
+    const desregistrar = () => activeChildren.delete(child);
 
     const trip = (motivo, detalle) => {
       if (overflow) return;
@@ -382,17 +404,31 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       // Se resuelve YA, sin esperar a `close`: matar no garantiza que el hijo
       // muera, y esperarlo dejaria la promesa —y el hueco del pool— colgada.
       killTree(child);
+      // Este temporizador NO SE CANCELA NUNCA, ni por `exit` ni por `close`.
+      // Las dos rondas anteriores se equivocaron aqui, cada una a su manera:
+      //   - cancelar con `exit` mira solo al LIDER, y `killTree` mato al GRUPO;
+      //   - cancelar con `close` parecia la correccion, y no lo era: `close`
+      //     dispara en cuanto se cierran los pipes DEL LIDER, cosa que ocurre
+      //     al morir el lider si ningun descendiente los heredo (un nieto
+      //     lanzado con `stdio: 'ignore'` es el caso normal). Reproducido en
+      //     POSIX: el nieto seguia vivo a t=1025 ms con `killGraceMs` de 300,
+      //     y un `kill(-pgid, SIGKILL)` a mano lo mataba sin problema.
+      // Ningun evento del lider prueba que el GRUPO este vacio, asi que la
+      // escalada corre siempre. Forzar un grupo ya vacio es inofensivo (ESRCH,
+      // capturado en `killTreeForce`).
+      //
+      // RIESGO ACEPTADO, no resuelto: si el grupo SI murio limpio y el SO
+      // recicla ese pgid dentro de la ventana de gracia, este SIGKILL cae
+      // sobre un grupo ajeno. Para que ocurra, el SO tiene que dar la vuelta
+      // al espacio de PIDs entero en menos de `killGraceMs` (2 s por defecto)
+      // y aterrizar justo en este numero. Se acepta porque la alternativa
+      // -no escalar- deja descendientes de git/GPG vivos indefinidamente, que
+      // es un fallo seguro y frecuente frente a uno improbable. Cerrarlo de
+      // verdad pide una contencion del SO (cgroup, job object), no un pgid.
       killTimer = setTimeout(() => {
         killTimer = null;
-        // SIEMPRE se escala, sin mirar si el LIDER sigue vivo. Ronda 5 de
-        // revision adversarial: `child.exitCode`/`signalCode` solo hablan del
-        // lider, y `killTree` mato al GRUPO -- un nieto que hereda el grupo y
-        // ignora SIGTERM sobrevive a su padre. Comprobar solo al lider dejaba
-        // la escalada sin disparar justo cuando mas falta hacia. Forzar un
-        // grupo ya vacio es inofensivo (ESRCH, capturado en `killTreeForce`);
-        // la ventana de pgid reciclado que esto abre se acepta a cambio de no
-        // dejar descendientes vivos.
         killTreeForce(child);
+        desregistrar();
       }, killGraceMs);
       killTimer.unref?.();
       settle({ ok: false, stdout: "", stderr: detalle, overflow: true, reason: motivo });
@@ -447,15 +483,16 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       err.push(chunk);
     });
 
-    child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
-    // Solo `close` cancela el watchdog. `exit` unicamente dice que el LIDER
-    // murio -- no que el grupo este vacio -- y cancelar ahi era el defecto:
-    // dejaba sin disparar la escalada a SIGKILL cuando un nieto sobrevivia a
-    // su padre (ronda 5 de revision adversarial). `close` tampoco es prueba
-    // perfecta (puede no llegar si un descendiente retiene el pipe), pero
-    // entonces el watchdog SI debe seguir armado, que es lo correcto.
+    child.on("error", (error) => {
+      desregistrar(); // nunca arranco: no hay grupo que limpiar
+      settle({ ok: false, stdout: "", stderr: error.message, overflow });
+    });
+    // `close` da de baja al lider del registro de limpieza, pero NO cancela la
+    // escalada: cierra los pipes DEL LIDER, y eso no dice nada del resto del
+    // grupo (ver el comentario del temporizador en `trip`). Si hubo corte, el
+    // SIGKILL al grupo corre igual al vencer la gracia.
     child.on("close", (code) => {
-      cancelWatchdog();
+      if (!killTimer) desregistrar();
       settle({
         ok: code === 0,
         stdout: decodeCapture(out),

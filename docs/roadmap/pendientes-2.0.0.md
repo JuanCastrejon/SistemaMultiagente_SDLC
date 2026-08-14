@@ -1,6 +1,6 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (30 commits sobre `develop`).
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (31 commits sobre `develop`).
 `npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
@@ -63,12 +63,14 @@ partir sin dejar hueco explotable, así que van juntas.
       + `split` asignan memoria extra que nadie contabiliza, y la reserva se
       libera antes de que `hashLsTree` termine. El pico real de RSS sigue sin
       acotar.
-- [x] ~~El test POSIX del watchdog no demuestra el SIGKILL.~~ Resuelto en la
-      ronda 5 (`fix(async): dos bloqueantes...`): el caso nuevo de
-      `tests/async-parity.test.mjs` escribe el PID de un nieto que ignora
-      SIGTERM, espera `killGraceMs + margen` y comprueba que ya no existe. Solo
-      cubre el escenario del nieto (POSIX); el caso viejo (test 6, lider suelto)
-      sigue sin ejercitar la escalada en Windows por la misma razón de siempre.
+- [x] ~~El test POSIX del watchdog no demuestra el SIGKILL.~~ Resuelto, pero en
+      la **ronda 6**, no en la 5 como se anotó primero. Lo que la ronda 5 dejó
+      escrito era falso por partida doble: el test no llegaba a montar el
+      escenario (el nieto moría mientras Node arrancaba, antes de registrar su
+      handler) y el fix tampoco funcionaba (`close` cancelaba la escalada). Las
+      dos cosas solo se vieron al ejercitar la suite **de verdad en POSIX**,
+      bajo WSL. Ahora el nieto sobrevive al SIGTERM, la escalada lo mata, y la
+      mutación que revierte el fix hace fallar la prueba.
 - [x] ~~Cuatro hallazgos SERIOS/MENORES de la ronda 5.~~ Resueltos
       (`fix(async): los cuatro SERIOS/MENORES...`): listener de `error` en los
       dos `spawn("taskkill", ...)` (antes tumbaba Node entero con un ENOENT sin
@@ -77,9 +79,30 @@ partir sin dejar hueco explotable, así que van juntas.
       proceso original de Node; `ensureBudget` pide el delta exacto en vez de
       redondear a bloques de 8 MiB; `createCaptureBudget` rechaza total
       inválido (`NaN`/negativo) en la creación en vez de dejar la cola
-      bloqueada para siempre. El de Ctrl-C/detached no se pudo ejercitar por
-      mutación en esta máquina (Windows, sin grupos POSIX) — mismo límite que
-      ya tenían los tests del watchdog y del árbol de procesos.
+      bloqueada para siempre. El de Ctrl-C/detached quedó **a medias** hasta la
+      ronda 6: el hijo salía del registro al resolver la promesa, así que un
+      Ctrl-C en la ventana entre el corte y su muerte real no lo encontraba.
+- [x] ~~Los tests POSIX no se pueden ejercitar en esta máquina.~~ Sí se puede:
+      Node instalado en WSL (sin sudo, tarball oficial al home) y la suite
+      corriendo sobre una copia nativa del repo. **Merece la pena montarlo en
+      CI**: los dos bloqueantes de la ronda 6 solo aparecieron ahí, y uno de
+      ellos habría roto CI en Linux en el primer push.
+- [ ] **`file-utils` se apropia de SIGINT/SIGTERM del proceso entero** (MENOR de
+      la ronda 6). Tras la primera captura POSIX quedan listeners permanentes
+      que llaman `process.exit()`. `harness.js` y `signoff.js` también son
+      módulos importables: un integrador que instale su propia limpieza puede
+      perder el control del ciclo de vida, y `process.exit()` trunca escrituras
+      asíncronas pendientes. La política de salida debería vivir en el punto de
+      entrada del CLI (`src/cli.js`), con el módulo limpiando y dejando decidir
+      a quien llama. Se deja abierto a propósito: moverlo es un cambio de
+      arquitectura, no un parche, y no bloquea la publicación.
+- [ ] **El SIGKILL al grupo usa un pgid que pudo reciclarse** (SERIO de la ronda
+      6, riesgo aceptado y documentado en el código). Si el grupo murió limpio y
+      el SO da la vuelta al espacio de PIDs dentro de `killGraceMs`, la escalada
+      cae sobre un grupo ajeno. Cerrarlo de verdad pide una contención del SO
+      (cgroup, job object), no un pgid. Se acepta porque no escalar deja
+      descendientes de git/GPG vivos indefinidamente: fallo frecuente y seguro
+      frente a uno improbable.
 - [ ] **`run()` cambió de contrato** (devolvía objeto o Promise según comando;
       ahora siempre Promise). El binario está cubierto por `await`, pero es
       cambio de API que merece nota de migración si alguien lo consume.
