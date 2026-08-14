@@ -19,7 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { decodeCapture, spawnCapture } from "../src/file-utils.js";
+import { createCaptureBudget, decodeCapture, spawnCapture } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
@@ -267,10 +267,100 @@ console.log(
   const porBytes = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
   assert.deepEqual(orden, porBytes, "los hallazgos salen en orden de bytes UTF-8");
 
-  // Y se deja constancia de que el otro criterio daria OTRO orden: si alguien
-  // revierte a localeCompare por parecer mas natural, este caso lo caza.
-  const porLocale = [...slices].sort((a, b) => a.localeCompare(b));
-  assert.notDeepEqual(porLocale, porBytes, "localeCompare da otro orden: por eso el codigo no lo usa");
+  // El orden esperado se escribe LITERAL, no derivado de otra ordenacion: si se
+  // compara contra `localeCompare`, el propio test pasa a depender del locale
+  // que intenta descartar.
+  assert.deepEqual(orden, ["Z-slice", "a-slice", "ñ-slice"], "orden por bytes UTF-8, escrito a mano");
 }
 
 console.log("orden de hallazgos por bytes: PASS");
+
+// --- 8. la fuga de presupuesto tras un corte -------------------------------
+// Tras `trip()` la promesa resuelve y el `finally` devuelve la reserva, pero los
+// listeners SIGUEN vivos hasta que el hijo cierre. Un chunk tardio del otro
+// stream volvia a crecer el ledger y descontaba presupuesto que ya nadie iba a
+// devolver: fuga PERMANENTE, y la cola esperando para siempre. Se prueba con un
+// presupuesto pequeño inyectado, sin generar cientos de MiB.
+{
+  const budget = createCaptureBudget(4 * 1024 * 1024);
+  const antes = budget.availableBytes();
+
+  const script = path.join(tempRoot, "tardio.mjs");
+  fs.writeFileSync(
+    script,
+    [
+      // Desborda por stdout y DESPUES sigue escribiendo por stderr.
+      "process.stdout.write('x'.repeat(300 * 1024));",
+      "let n = 0;",
+      "const t = setInterval(() => { process.stderr.write('e'.repeat(64 * 1024)); if (++n > 20) { clearInterval(t); } }, 5);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 128 * 1024, killGraceMs: 200, budget });
+  assert.equal(resultado.ok, false);
+  assert.equal(resultado.overflow, true);
+
+  // Se da tiempo a que lleguen los chunks tardios que antes provocaban la fuga.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  assert.equal(budget.availableBytes(), antes, "el presupuesto vuelve INTACTO: ni un byte perdido tras el corte");
+  assert.equal(budget.waiting(), 0, "y nadie se queda esperando en la cola");
+}
+
+console.log("sin fuga de presupuesto tras corte: PASS");
+
+// --- 9. el motivo del corte no miente --------------------------------------
+{
+  const budget = createCaptureBudget(64 * 1024);
+  const script = path.join(tempRoot, "mediano.mjs");
+  fs.writeFileSync(script, "process.stdout.write('y'.repeat(2 * 1024 * 1024));", "utf8");
+
+  // maxBuffer holgado: lo que se agota es el presupuesto GLOBAL, y el mensaje
+  // tiene que decir eso y no acusar a maxBuffer.
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024 * 1024, killGraceMs: 200, budget });
+  assert.equal(resultado.ok, false);
+  assert.equal(resultado.reason, "presupuesto");
+  assert.match(resultado.stderr, /presupuesto global/);
+}
+
+console.log("motivo del corte correcto: PASS");
+
+// --- 10. sin barging: quien llega despues no se cuela ----------------------
+// Permitir que una captura pequeña adquiriera presupuesto habiendo alguien en
+// cola dejaba a la cabeza en inanicion indefinida bajo trafico continuo.
+{
+  const budget = createCaptureBudget(10 * 1024 * 1024);
+  const primera = budget.acquire(8 * 1024 * 1024);
+  assert.equal(primera.wait, null, "la primera cabe");
+
+  const segunda = budget.acquire(8 * 1024 * 1024);
+  assert.ok(segunda.wait, "la segunda no cabe y espera");
+
+  const tercera = budget.acquire(1024);
+  assert.ok(tercera.wait, "la tercera cabria por tamaño, pero hay cola: no se cuela");
+
+  budget.release(primera.need);
+  await segunda.wait;
+  budget.release(segunda.need);
+  await tercera.wait;
+  budget.release(tercera.need);
+  assert.equal(budget.availableBytes(), budget.total, "todo devuelto");
+}
+
+console.log("cola sin barging: PASS");
+
+// --- 11. maxBuffer invalido se rechaza antes de tocar nada -----------------
+{
+  const budget = createCaptureBudget(1024 * 1024);
+  for (const malo of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    await assert.rejects(
+      () => spawnCapture(process.execPath, ["-e", "0"], { maxBuffer: malo, budget }),
+      /maxBuffer/,
+      `${malo} tiene que rechazarse`
+    );
+  }
+  assert.equal(budget.availableBytes(), budget.total, "un rechazo no puede descuadrar el contador");
+}
+
+console.log("validacion de maxBuffer: PASS");

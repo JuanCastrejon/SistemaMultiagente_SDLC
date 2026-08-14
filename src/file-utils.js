@@ -46,96 +46,83 @@ export function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-/**
- * Lanza un proceso y captura su salida SIN bloquear el hilo, con la misma
- * semantica que `spawnSync`: acumula BUFFERS y decodifica una sola vez al
- * cerrar, y aplica un limite de tamaño explicito.
- *
- * Las dos cosas son correcciones de defectos medidos, no precaucion:
- *
- *  - Concatenar `stdout += chunk` decodifica cada trozo por separado, asi que un
- *    caracter UTF-8 partido entre dos chunks se convierte en `?`. Reproducido
- *    con `A` acentuada: la via sincrona la conserva y la concatenacion async
- *    devolvia dos caracteres de reemplazo. En este framework eso llega hasta el
- *    firmante (`%GS`) y el mensaje del commit (`%B`), asi que la auditoria podia
- *    rechazar a un maintainer con tilde que el gate aceptaba.
- *  - `spawnSync` trae `maxBuffer` de 1 MiB por defecto y falla con `ENOBUFS` al
- *    excederlo; sin limite en la via async, la misma entrada daba resultados
- *    distintos por cada camino. Dos verificadores que no coinciden son peores
- *    que uno solo.
- */
-// Presupuesto GLOBAL de captura, en bytes. El tope por captura evita que UNA
-// salida crezca sin fin, pero no protege al proceso: cuatro `ls-tree` de 256
-// MiB cada uno son 1 GiB solo en stdout, y `Buffer.concat` + `toString` +
-// `split` multiplican el pico real por encima de eso. Cada captura reserva su
-// maximo declarado antes de arrancar, asi que un `ls-tree` grande corre solo
-// mientras los comandos de 1 MiB siguen concurriendo entre si.
-const CAPTURE_BUDGET_BYTES = 256 * 1024 * 1024;
-let availableBudget = CAPTURE_BUDGET_BYTES;
-const budgetQueue = [];
-
-// Reserva INICIAL por captura. Reservar el maximo declarado por adelantado era
-// correcto de memoria y desastroso de rendimiento: con presupuesto de 256 MiB y
-// un `ls-tree` que declara 256 MiB, solo UNO podia correr a la vez y el pool
-// quedaba serializado justo en su parte cara. Medido: el coste marginal por
-// atestacion subio de 67 a 99 ms.
+// ---------------------------------------------------------------------------
+// Presupuesto de memoria para capturas concurrentes.
 //
-// La memoria no se consume al declarar el tope, se consume cuando llegan los
-// bytes. Asi que se reserva poco y se crece bajo demanda: en el caso normal
-// —arboles de unos pocos MiB— todas las capturas caben a la vez.
+// El tope por captura evita que UNA salida crezca sin fin; no protege al
+// proceso. Cuatro `ls-tree` de 256 MiB son 1 GiB solo en chunks retenidos, y
+// `Buffer.concat` + `toString` + `split` multiplican el pico. Este presupuesto
+// acota los chunks RETENIDOS, que es lo unico que este modulo controla — el
+// transitorio de decodificacion queda fuera y esta declarado como limite.
+//
+// Se reserva poco y se crece bajo demanda: reservar el maximo declarado por
+// adelantado acotaba igual la memoria pero serializaba el pool en su parte
+// cara. Medido: el coste marginal por atestacion pasaba de 67 a 99 ms.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_BUDGET_BYTES = 256 * 1024 * 1024;
 const INITIAL_RESERVE_BYTES = 8 * 1024 * 1024;
 
-function acquireBudget(bytes) {
-  // Una peticion mayor que el presupuesto entero esperaria para siempre: se
-  // acota al total, de modo que corre sola pero corre.
-  const need = Math.min(bytes, INITIAL_RESERVE_BYTES, CAPTURE_BUDGET_BYTES);
-  if (availableBudget >= need) {
-    availableBudget -= need;
-    return { need, wait: null };
-  }
-  let release;
-  const wait = new Promise((resolve) => {
-    release = resolve;
-  });
-  budgetQueue.push({ need, grant: release });
-  return { need, wait };
-}
-
 /**
- * Amplia la reserva de una captura que crecio mas de lo previsto. No espera: si
- * el presupuesto global esta agotado devuelve `false` y quien llama corta la
- * captura. Esperar aqui seria peor — el proceso hijo seguiria escribiendo
- * mientras nadie drena, y esto existe justamente para acotar memoria.
+ * Crea un presupuesto aislado. Existe para poder probarlo con cifras pequeñas
+ * sin generar cientos de MiB, y para que dos usos concurrentes puedan no
+ * compartir techo cuando eso importe.
  */
-function growBudget(extra) {
-  if (availableBudget < extra) return false;
-  availableBudget -= extra;
-  return true;
+export function createCaptureBudget(totalBytes = DEFAULT_BUDGET_BYTES) {
+  let available = totalBytes;
+  const queue = [];
+
+  const drain = () => {
+    while (queue.length > 0 && available >= queue[0].need) {
+      const next = queue.shift();
+      available -= next.need;
+      next.grant();
+    }
+  };
+
+  return {
+    total: totalBytes,
+    // Reserva inicial. SIN barging: si ya hay alguien esperando, el que llega
+    // se pone a la cola aunque quepa. Permitir colarse dejaba a la cabeza de la
+    // cola en inanicion indefinida bajo trafico continuo de capturas pequeñas.
+    acquire(bytes) {
+      const need = Math.max(0, Math.min(bytes, INITIAL_RESERVE_BYTES, totalBytes));
+      if (queue.length === 0 && available >= need) {
+        available -= need;
+        return { need, wait: null };
+      }
+      let grant;
+      const wait = new Promise((resolve) => {
+        grant = resolve;
+      });
+      queue.push({ need, grant });
+      return { need, wait };
+    },
+    // Crecimiento bajo demanda. NO espera: el hijo ya esta escribiendo y nadie
+    // drenaria mientras tanto, que es justo lo que este tope existe para
+    // impedir. Tampoco respeta la cola, porque bloquear aqui a quien ya tiene
+    // memoria reservada mientras espera a quien espera memoria es un abrazo
+    // mortal de manual.
+    grow(extra) {
+      if (available < extra) return false;
+      available -= extra;
+      return true;
+    },
+    release(bytes) {
+      available += bytes;
+      drain();
+    },
+    // Solo para pruebas y diagnostico.
+    availableBytes() {
+      return available;
+    },
+    waiting() {
+      return queue.length;
+    }
+  };
 }
 
-function releaseBudget(need) {
-  availableBudget += need;
-  // FIFO a proposito: sin orden, una peticion grande podria quedarse esperando
-  // indefinidamente mientras pasan las pequeñas.
-  while (budgetQueue.length > 0 && availableBudget >= budgetQueue[0].need) {
-    const next = budgetQueue.shift();
-    availableBudget -= next.need;
-    next.grant();
-  }
-}
-
-export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
-  const reservation = acquireBudget(maxBuffer);
-  if (reservation.wait) await reservation.wait;
-  // La reserva CRECE con la captura; al final se devuelve lo que de verdad se
-  // llego a reservar, no lo que se pidio al empezar.
-  const ledger = { reserved: reservation.need };
-  try {
-    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger });
-  } finally {
-    releaseBudget(ledger.reserved);
-  }
-}
+const globalBudget = createCaptureBudget();
 
 /**
  * Decodifica los trozos capturados como UN solo buffer.
@@ -149,9 +136,109 @@ export function decodeCapture(chunks) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger }) {
+/**
+ * Lanza un proceso y captura su salida SIN bloquear el hilo, con la misma
+ * semantica que `spawnSync`: acumula BUFFERS y decodifica una sola vez al
+ * cerrar, y aplica un limite de tamaño explicito.
+ *
+ * Las dos cosas son correcciones de defectos medidos, no precaucion:
+ *
+ *  - Concatenar `stdout += chunk` decodifica cada trozo por separado, asi que un
+ *    caracter UTF-8 partido entre dos chunks se convierte en reemplazo. En este
+ *    framework eso llega hasta el firmante (`%GS`) y el mensaje del commit
+ *    (`%B`), asi que la auditoria podia rechazar a un maintainer con tilde que
+ *    el gate aceptaba.
+ *  - `spawnSync` trae `maxBuffer` de 1 MiB por defecto y falla con `ENOBUFS` al
+ *    excederlo; sin limite en la via async, la misma entrada daba resultados
+ *    distintos por cada camino. Dos verificadores que no coinciden son peores
+ *    que uno solo.
+ *
+ * LIMITE CONOCIDO: al desbordar se termina el ARBOL de procesos (grupo en POSIX,
+ * `taskkill /T` en Windows), pero si un nieto sobrevive y hereda los pipes, el
+ * proceso padre puede tardar en salir. No se promete lo contrario.
+ */
+export async function spawnCapture(
+  command,
+  args,
+  { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000, budget = globalBudget } = {}
+) {
+  // Un `maxBuffer` no finito o negativo dejaba una entrada de cola imposible de
+  // satisfacer, o descuadraba el contador. Se valida antes de tocar nada.
+  if (!Number.isFinite(maxBuffer) || maxBuffer < 0) {
+    throw new TypeError(`maxBuffer tiene que ser un numero finito >= 0, y llego ${maxBuffer}`);
+  }
+
+  const reservation = budget.acquire(maxBuffer);
+  if (reservation.wait) await reservation.wait;
+  // La reserva CRECE con la captura; al final se devuelve lo que de verdad se
+  // llego a reservar, no lo que se pidio al empezar.
+  const ledger = { reserved: reservation.need };
+  try {
+    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget });
+  } finally {
+    budget.release(ledger.reserved);
+    // Se congela para que un chunk tardio —los listeners siguen vivos tras un
+    // corte— no pueda descontar presupuesto que ya nadie va a devolver. Esa
+    // fuga vaciaba el presupuesto global de forma permanente y dejaba la cola
+    // esperando para siempre.
+    ledger.closed = true;
+  }
+}
+
+// Terminar el ARBOL, no solo el hijo. `child.kill()` no alcanza a los nietos, y
+// un nieto que herede los pipes puede retrasar la salida del proceso padre
+// mucho despues de que la promesa haya resuelto.
+function killTree(child) {
+  if (process.platform === "win32") {
+    // En Windows no hay grupos de procesos POSIX; `taskkill /T` recorre el
+    // arbol. Se lanza y se olvida: es limpieza, no camino critico.
+    try {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+    } catch {
+      /* si taskkill no esta, queda el kill directo de abajo */
+    }
+  } else {
+    // `detached: true` puso al hijo en su propio grupo; el negativo mata al
+    // grupo entero.
+    try {
+      process.kill(-child.pid, "SIGTERM");
+      return;
+    } catch {
+      /* el grupo ya no existe: se cae al kill directo */
+    }
+  }
+  try {
+    child.kill();
+  } catch {
+    /* ya se fue */
+  }
+}
+
+function killTreeForce(child) {
+  if (process.platform === "win32") {
+    try {
+      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+    } catch {
+      /* nada mas que hacer */
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* ya se fue */
+    }
+  }
+}
+
+function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget }) {
   return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd });
+    // `detached` en POSIX crea grupo de procesos propio, que es lo que permite
+    // matar a los nietos. En Windows no aplica y se usa `taskkill /T`.
+    const child = spawn(command, args, { cwd, detached: process.platform !== "win32" });
     const out = [];
     const err = [];
     let outSize = 0;
@@ -162,13 +249,12 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger }) 
 
     // Un solo punto de resolucion. `error` y `close` pueden dispararse los dos
     // —en un fallo de spawn, `close` llega DESPUES de `error`—, y sin esta
-    // guarda el segundo pisaba el estado del primero: en particular, un `error`
-    // tras marcar desbordamiento reportaba `overflow: false`.
-    // `settle` resuelve la promesa, pero NO cancela el watchdog: eso era un
-    // defecto real — `trip()` armaba el temporizador y `settle()` lo cancelaba
-    // acto seguido, asi que el SIGKILL nunca llegaba a ejecutarse. En Windows
-    // no se notaba porque SIGTERM ya termina a la fuerza; en POSIX el hijo
-    // sobrevivia. El watchdog solo se cancela cuando el hijo REALMENTE murio.
+    // guarda el segundo pisaba el estado del primero.
+    //
+    // `settle` NO cancela el watchdog: eso era un defecto real — `trip()`
+    // armaba el temporizador y `settle()` lo cancelaba acto seguido, asi que el
+    // SIGKILL nunca llegaba a ejecutarse. El watchdog solo se cancela cuando
+    // consta que el hijo murio.
     const settle = (result) => {
       if (settled) return;
       settled = true;
@@ -182,70 +268,67 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger }) 
       }
     };
 
-    // `maxBuffer` en Node se aplica a stdout **o** stderr, no solo al primero.
-    // Limitar unicamente stdout dejaba dos agujeros medidos: un hijo que escribe
-    // 2 MiB por stderr devolvia `ok: true` mientras `spawnSync` fallaba con
-    // ENOBUFS —o sea, las dos vias volvian a divergir—, y esa acumulacion sin
-    // tope era ademas via de agotar memoria con cuatro capturas en vuelo.
-    const trip = (stream) => {
+    const trip = (motivo, detalle) => {
       if (overflow) return;
       overflow = true;
-      // Se resuelve YA, sin esperar a `close`. `kill()` manda SIGTERM y no
-      // garantiza nada: un hijo puede ignorarlo, o un descendiente puede
-      // mantener el pipe abierto, y entonces `close` no llega nunca y la
-      // promesa —y con ella el hueco del pool— se queda colgada para siempre.
-      child.kill();
+      // Se resuelve YA, sin esperar a `close`: matar no garantiza que el hijo
+      // muera, y esperarlo dejaria la promesa —y el hueco del pool— colgada.
+      killTree(child);
       killTimer = setTimeout(() => {
         killTimer = null;
-        // `child.killed` no sirve: dice que se mando la señal, no que muriera.
-        // `exitCode`/`signalCode` en null significa que sigue vivo, y solo
-        // entonces se escala. Asi se estrecha la ventana en la que el PID pudo
-        // reciclarse — no se elimina, porque la API de Node es por PID.
-        if (child.exitCode === null && child.signalCode === null) {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            /* el hijo ya se fue entre la comprobacion y la señal */
-          }
-        }
+        // `child.killed` solo dice que se mando la señal. `exitCode`/
+        // `signalCode` en null significa que sigue vivo, y solo entonces se
+        // escala: asi se estrecha la ventana de PID reciclado.
+        if (child.exitCode === null && child.signalCode === null) killTreeForce(child);
       }, killGraceMs);
       killTimer.unref?.();
-      settle({
-        ok: false,
-        stdout: "",
-        stderr: `la salida (${stream}) de ${command} supero maxBuffer (${maxBuffer} bytes)`,
-        overflow: true
-      });
+      settle({ ok: false, stdout: "", stderr: detalle, overflow: true, reason: motivo });
     };
 
-    // El presupuesto global se pide EN BLOQUES conforme la salida crece. Pedir
-    // el maximo declarado por adelantado acotaba la memoria pero serializaba el
-    // pool en su parte cara; pedirlo bajo demanda deja convivir a las capturas
-    // normales, que son pequeñas, y solo estorba a las que de verdad crecen.
+    // El presupuesto global se pide EN BLOQUES conforme la salida crece.
     const ensureBudget = (usados) => {
       if (usados <= ledger.reserved) return true;
       const extra = Math.max(usados - ledger.reserved, INITIAL_RESERVE_BYTES);
-      if (!growBudget(extra)) return false;
+      if (!budget.grow(extra)) return false;
       ledger.reserved += extra;
       return true;
     };
 
+    // Tras un corte los listeners SIGUEN vivos hasta que el hijo cierre. Todo
+    // lo que llegue despues se descarta sin tocar contadores: si no, un chunk
+    // tardio del otro stream crecia el ledger despues de que el `finally` ya
+    // hubiera devuelto la reserva, y ese presupuesto se perdia para siempre.
+    const acepta = () => !settled && !overflow && !ledger.closed;
+
     child.stdout.on("data", (chunk) => {
+      if (!acepta()) return;
       outSize += chunk.length;
-      if (outSize > maxBuffer) return trip("stdout");
-      if (!ensureBudget(outSize + errSize)) return trip("presupuesto global");
+      if (outSize > maxBuffer) {
+        return trip("maxBuffer", `la salida (stdout) de ${command} supero maxBuffer (${maxBuffer} bytes)`);
+      }
+      if (!ensureBudget(outSize + errSize)) {
+        // El motivo es OTRO y se dice: culpar a `maxBuffer` cuando lo que se
+        // agoto fue la capacidad global manda a mirar donde no es.
+        return trip("presupuesto", `la captura de ${command} se corto: presupuesto global de memoria agotado`);
+      }
       out.push(chunk);
     });
+
     child.stderr.on("data", (chunk) => {
+      if (!acepta()) return;
       errSize += chunk.length;
-      if (errSize > maxBuffer) return trip("stderr");
-      if (!ensureBudget(outSize + errSize)) return trip("presupuesto global");
+      if (errSize > maxBuffer) {
+        return trip("maxBuffer", `la salida (stderr) de ${command} supero maxBuffer (${maxBuffer} bytes)`);
+      }
+      if (!ensureBudget(outSize + errSize)) {
+        return trip("presupuesto", `la captura de ${command} se corto: presupuesto global de memoria agotado`);
+      }
       err.push(chunk);
     });
+
     child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
     // `exit` y `close` son el unico momento en que consta que el hijo murio, y
-    // por tanto el unico en que el watchdog sobra. Cancelarlo antes deja vivo
-    // justo al proceso que se pretendia matar.
+    // por tanto el unico en que el watchdog sobra.
     child.on("exit", cancelWatchdog);
     child.on("close", (code) => {
       cancelWatchdog();
