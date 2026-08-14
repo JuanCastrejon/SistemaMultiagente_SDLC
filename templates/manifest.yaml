@@ -9,6 +9,11 @@
 #   modes  : opcional, lista de modes permitidos. Ausente = todos.
 version: 1
 templates:
+  # `.gitignore` ANIDADO dentro de .sdlc/, en vez de tocar el del consumidor:
+  # asi el vault queda fuera del control de versiones sin que el framework
+  # tenga que editar un archivo que el repo destino ya gestiona a su manera.
+  - source: .sdlc/gitignore.tpl
+    target: .sdlc/.gitignore
   - source: AGENTS.md
     target: AGENTS.md
   - source: indice-operativo.md
