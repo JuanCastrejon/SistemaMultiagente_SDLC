@@ -89,10 +89,21 @@ Al final, ademas, entrega el resumen completo como respuesta normal.
 `;
 
 let comando;
+// El prompt SIEMPRE viaja por stdin, nunca como argumento. Dos motivos, y el
+// segundo es de seguridad:
+//  - en Windows hace falta `shell: true` para lanzar el shim `codex.cmd`
+//    (Node bloquea ejecutar .cmd sin shell), y meter un prompt de miles de
+//    caracteres con comillas, backticks y saltos de linea en una linea de shell
+//    es una via de inyeccion evidente;
+//  - `codex exec -` lee de stdin justamente para esto.
+let promptPorStdin;
+
 if (esResume) {
   const sessionId = args[1];
-  const promptExtra = args[3] ?? "Continua exactamente donde te quedaste. Antes de nada, LEE el archivo de hallazgos que ya escribiste para no repetir trabajo ni volver a reportar lo mismo.";
-  comando = ["exec", "resume", sessionId, "--skip-git-repo-check", "-o", rutaFinal, promptExtra];
+  promptPorStdin =
+    args[3] ??
+    "Continua exactamente donde te quedaste. Antes de nada, LEE el archivo de hallazgos que ya escribiste para no repetir trabajo ni volver a reportar lo mismo.";
+  comando = ["exec", "resume", sessionId, "--skip-git-repo-check", "-o", rutaFinal, "-"];
   console.log(`Reanudando sesion ${sessionId}`);
 } else {
   const rutaPrompt = args[0];
@@ -100,14 +111,33 @@ if (esResume) {
     console.error(`No existe el prompt: ${rutaPrompt}`);
     process.exit(2);
   }
-  const prompt = CONTRATO + fs.readFileSync(rutaPrompt, "utf8");
-  const rutaCombinada = path.join(dirSalida, "prompt-enviado.md");
-  fs.writeFileSync(rutaCombinada, prompt, "utf8");
+  promptPorStdin = CONTRATO + fs.readFileSync(rutaPrompt, "utf8");
+  fs.writeFileSync(path.join(dirSalida, "prompt-enviado.md"), promptPorStdin, "utf8");
   fs.writeFileSync(rutaHallazgos, `# Hallazgos (se anexan en vivo)\n\nPrompt: ${rutaPrompt}\n\n`, "utf8");
-  comando = ["exec", "--skip-git-repo-check", "-c", 'model_reasoning_effort="xhigh"', "-o", rutaFinal, prompt];
+  comando = ["exec", "--skip-git-repo-check", "-c", 'model_reasoning_effort="xhigh"', "-o", rutaFinal, "-"];
 }
 
-const hijo = spawn("codex", comando, { stdio: ["ignore", "pipe", "pipe"] });
+const hijo = spawn("codex", comando, {
+  stdio: ["pipe", "pipe", "pipe"],
+  // Ver arriba: solo por el shim `.cmd`. Ningun dato del prompt llega al shell.
+  shell: process.platform === "win32"
+});
+
+// Sin este listener, un fallo al lanzar (ENOENT del shim, PATH recortado) llega
+// ASINCRONO: el proceso muere volcando el objeto de error y `close` no dispara,
+// asi que el runner terminaba en 0 sin haber revisado nada. Fue exactamente lo
+// que paso en el primer intento de la ronda 9.
+hijo.on("error", (error) => {
+  console.error(`\nNo se pudo lanzar codex: ${error.message}`);
+  console.error(`Comprueba que \`codex\` esta en PATH (\`codex --version\`).`);
+  process.exit(1);
+});
+
+hijo.stdin.on("error", () => {
+  /* si el hijo murio antes de leer, el 'error' de arriba ya lo reporta */
+});
+hijo.stdin.end(promptPorStdin, "utf8");
+
 const logEventos = fs.createWriteStream(rutaEventos, { flags: "a" });
 
 let sessionId = esResume ? args[1] : null;
