@@ -22,7 +22,7 @@
 // autenticarse es un acto de la persona, no de un script de gobernanza.
 //
 // Salidas: 0 sesion utilizable (con o sin aviso) · 2 accion requerida (sin
-// sesion o token vencido) · 1 error al leer.
+// sesion, o proceso con la credencial vieja) · 1 error al leer.
 //
 // El plan AVISA pero no bloquea, y la distincion importa: este preflight ve el
 // plan, no la cuota que queda. Una cuenta `free` recien estrenada tiene su
@@ -181,11 +181,20 @@ function inspect() {
     codexHome: codexHome()
   };
 
+  // El token vencido AVISA, no bloquea. El CLI lo refresca solo en la siguiente
+  // llamada, sin que nadie tenga que volver a autenticarse: medido en una misma
+  // sesion, `exp` paso de 22:57 a 23:18 sin ningun `codex login` de por medio.
+  // Tratarlo como bloqueo mandaba al usuario a re-loguear una sesion que estaba
+  // perfectamente viva — el segundo falso bloqueo de este mismo script, por la
+  // misma causa que el primero: confundir lo que se ve en disco con lo que de
+  // verdad ocurre al llamar.
   if (expired) {
     return {
-      status: "action-required",
-      code: "codex-session-expired",
-      detail: `la sesion de ${email ?? "(cuenta desconocida)"} vencio el ${session.expiresAt}. Renovar con \`codex login\` antes de delegar.`,
+      status: "warning",
+      code: "codex-token-vencido",
+      detail:
+        `el token de ${email ?? "(cuenta desconocida)"} vencio el ${session.expiresAt}; el CLI lo renueva solo en la ` +
+        "proxima llamada. Solo si esa llamada falla hace falta `codex login`, y `--probe` lo comprueba sin adivinar.",
       session
     };
   }
@@ -226,7 +235,7 @@ function inspect() {
 const result = inspect();
 
 // El probe solo tiene sentido si la inspeccion local no encontro ya un
-// bloqueo: si no hay sesion o el token vencio, gastar una llamada no aporta.
+// bloqueo: sin sesion, gastar una llamada no aporta nada.
 if (probe && result.status !== "action-required" && result.status !== "error") {
   const live = probeCredential();
   result.probe = live;

@@ -17,8 +17,8 @@ node scripts/codex-session-check.mjs
 ```
 
 `--json` para consumirlo desde otro script. Salidas: `0` sesion utilizable —con
-aviso o sin el—, `2` accion requerida (sin sesion o token vencido), `1` error de
-lectura.
+aviso o sin el—, `2` accion requerida (sin sesion, o proceso con la credencial
+vieja), `1` error de lectura.
 
 Lo que este preflight VE es el plan; lo que NO ve es la cuota que queda. Una
 cuenta `free` recien estrenada trabaja sin problema y una de pago puede estar
@@ -87,6 +87,11 @@ que nadie podia saber contra que cuenta estaba hablando.
   que hay que mirar, no que este agotada. Confundir plan con cuota restante
   bloquea sesiones perfectamente utiles — paso la primera vez que corrio esta
   comprobacion, contra una cuenta nueva con su cuota intacta.
+- *"El token vencio, hay que volver a hacer login."* Casi nunca. El CLI lo
+  renueva solo en la proxima llamada: medido en una misma sesion, `exp` paso de
+  22:57 a 23:18 sin ningun login de por medio. Este preflight lee la fecha en
+  disco, no el estado real de la credencial; mandar a re-loguear por un `exp`
+  pasado fue el segundo falso bloqueo de este script.
 
 ## Senales de alarma
 
