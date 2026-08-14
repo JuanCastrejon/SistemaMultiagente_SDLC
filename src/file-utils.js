@@ -504,7 +504,13 @@ export function listFiles(root, options = {}) {
   // para inspeccionarlo, y hacerlo produce falsos positivos (ej.
   // validate-no-personal-paths) puramente por desarrollo local, invisibles en
   // CI porque un checkout fresco nunca tiene `.sdlc/`.
-  const ignored = options.ignored ?? new Set([".git", "node_modules", ".turbo", "dist", "coverage", ".sdlc"]);
+  //
+  // `.codex-out` es exactamente la misma categoria: transcripciones y hallazgos
+  // de las revisiones adversariales (`scripts/codex-review.mjs`). Estan
+  // gitignoradas y llenas de rutas absolutas de la maquina, asi que escanearlas
+  // hace fallar `validate-no-personal-paths` por desarrollo local.
+  const ignored =
+    options.ignored ?? new Set([".git", "node_modules", ".turbo", "dist", "coverage", ".sdlc", ".codex-out"]);
   const results = [];
 
   function walk(current) {
