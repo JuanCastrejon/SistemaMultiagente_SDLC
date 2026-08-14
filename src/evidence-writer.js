@@ -165,6 +165,64 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
   return { ok: true, hash: sha256Text(parts.join("\n")), files: parts.length, code: null, detail: null };
 }
 
+/**
+ * Enlaza una atestacion ya verificada con la evidencia de su fase.
+ *
+ * Por que el CLI puede escribir esto y NO puede escribir `quality_metrics`: son
+ * cosas distintas. `quality_metrics` contiene los valores que el gate juzga, asi
+ * que redactarlos a mano es fabricar el veredicto. `attestation_commit` es un
+ * PUNTERO no autoritativo: `phase-gate` toma ese sha y reconstruye desde git el
+ * arbol, la ancestria, la firma criptografica, el estado `%G?`, el firmante
+ * permitido y el trailer con el sujeto. Cambiar el YAML a mano no puede encender
+ * el gate; lo unico que hace es decir donde mirar.
+ *
+ * Dos condiciones que no son negociables, y por eso viven aqui y no en quien
+ * llama:
+ *  - `approved_by` se DERIVA del firmante que git reporta (`%GS`), nunca se
+ *    acepta como opcion del usuario. Si lo eligiera quien firma, volveria a ser
+ *    texto libre.
+ *  - la referencia anterior se conserva en `history`. Re-firmar no borra a quien
+ *    aprobo antes.
+ *
+ * Quien llama debe haber verificado el commit ANTES: esta funcion escribe, no
+ * juzga.
+ */
+export function recordAttestation({ target, slice, phase, commitSha, signer, now = new Date() }) {
+  const absolute = evidencePath(target, slice, phase);
+  const raw = readTextIfExists(absolute);
+  if (!raw) {
+    return {
+      ok: false,
+      code: "evidence-missing",
+      detail: `no existe ${path.relative(target, absolute)}: la atestacion no puede enlazarse a una fase sin evidencia escrita`
+    };
+  }
+
+  let document;
+  try {
+    document = YAML.parse(raw) ?? {};
+  } catch (error) {
+    return { ok: false, code: "evidence-unparseable", detail: `${path.relative(target, absolute)} no es YAML legible: ${error.message}` };
+  }
+
+  const previous = document.human_gate_signoff;
+  if (previous && previous.attestation_commit !== commitSha) {
+    document.history = Array.isArray(document.history) ? document.history : [];
+    document.history.push({ replaced_at: now.toISOString(), human_gate_signoff: previous });
+  }
+
+  document.human_gate_signoff = {
+    required: true,
+    approved_by: signer,
+    approved_at: now.toISOString(),
+    signature_class: "attestation",
+    attestation_commit: commitSha
+  };
+
+  writeText(absolute, YAML.stringify(document));
+  return { ok: true, code: null, path: absolute, replacedPrevious: Boolean(previous && previous.attestation_commit !== commitSha) };
+}
+
 export function evidencePath(target, slice, phase) {
   return path.join(target, ".github", "agent-state", "evidence", slice, `${phase}.yaml`);
 }

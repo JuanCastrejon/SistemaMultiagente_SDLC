@@ -926,6 +926,63 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }) {
   });
 }
 
+// Codigos que significan "no se pudo comprobar", no "la firma es mala". Un clon
+// superficial no trae el commit atestado, y un repo sin contrato o sin
+// maintainers no tiene con que recomputar el sujeto. Tratarlos como firma
+// invalida produciria falsos positivos justo en los entornos donde menos se
+// pueden diagnosticar (CI con `fetch-depth: 1`, por ejemplo).
+const ATTESTATION_UNKNOWN = new Set([
+  "tree-ref-unreadable",
+  "quality-contract-missing",
+  "governance-maintainers-missing",
+  "signoff-commit-not-found"
+]);
+
+/**
+ * Recorre la evidencia escrita y re-verifica TODA atestacion declarada.
+ *
+ * Existe porque una atestacion rota se descubria tarde: al llegar al gate humano
+ * de esa fase, con el trabajo ya hecho. Tras una actualizacion que cambia el
+ * formato del sujeto, "tarde" puede ser semanas despues. `doctor` y `upgrade`
+ * la usan para que el descubrimiento ocurra cuando todavia es barato.
+ *
+ * No intenta atribuir la causa: un `subject-mismatch` puede venir de una
+ * actualizacion del framework o de un cambio posterior del contrato, y el sujeto
+ * no guarda la lista historica de superficies con la que se emitio.
+ */
+export function auditAttestations(target) {
+  const root = path.join(target, ".github", "agent-state", "evidence");
+  const result = { checked: 0, findings: [] };
+  if (!pathExists(root)) return result;
+
+  for (const sliceEntry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!sliceEntry.isDirectory()) continue;
+    const sliceDir = path.join(root, sliceEntry.name);
+    for (const file of fs.readdirSync(sliceDir)) {
+      if (!file.endsWith(".yaml")) continue;
+      const phase = file.replace(/\.yaml$/, "");
+      const read = readEvidenceFile(path.join(sliceDir, file));
+      const commitSha = read.ok ? read.evidence?.human_gate_signoff?.attestation_commit ?? null : null;
+      if (!commitSha) continue;
+
+      result.checked += 1;
+      const verification = verifyEvidenceAttestation(target, { slice: sliceEntry.name, phase, commitSha });
+      if (verification.ok) continue;
+
+      result.findings.push({
+        level: ATTESTATION_UNKNOWN.has(verification.code) ? "warning" : "error",
+        code: `attestation-${verification.code}`,
+        slice: sliceEntry.name,
+        phase,
+        commit: commitSha,
+        detail: verification.detail ?? null,
+        hint: `sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record`
+      });
+    }
+  }
+  return result;
+}
+
 /**
  * Lee `.github/agent-state/phase-status.yaml`.
  *

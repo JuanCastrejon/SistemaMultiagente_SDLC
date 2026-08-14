@@ -22,6 +22,14 @@ Los defectos de esta versión salieron de **operar** el framework en el consumid
 
 - **Se podía firmar algo distinto de lo revisado.** El commit de atestación es vacío, así que su árbol es el de `HEAD`: con cambios sin commitear en las superficies, la firma aprobaba el árbol de `HEAD` y no lo que el humano tenía delante. Ahora se bloquea con `signoff-worktree-dirty` y la lista exacta de lo que estorba, salvo `--allow-dirty` explícito.
 
+### Added — la reparación deja de ser un texto en la migración
+
+- **Toda atestación declarada se re-verifica en `doctor` y en `upgrade`.** Una firma que dejó de valer se descubría al llegar al gate humano de su fase, con el trabajo ya hecho; tras una actualización que cambia el formato del sujeto, eso puede ser semanas después. `doctor` la reporta como error persistente y `upgrade` termina en `action-required` con la lista y el comando exacto de reparación —después de escribir los archivos, porque son justamente los que hacen falta para poder re-firmar—. Un commit ausente o un clon superficial se reportan como **aviso**, no como firma inválida: "no se pudo comprobar" y "no vale" son cosas distintas, y confundirlas daría falsos positivos en cualquier CI con `fetch-depth: 1`.
+
+- **`sdlc signoff --create --record`.** La nota de migración decía «volver a firmar con `sdlc signoff --create`», y ese comando crea el commit pero **no toca la evidencia**: `attestation_commit` existía solo como campo leído, nada lo escribía. La reparación documentada dejaba la evidencia apuntando a la firma vieja, el gate seguía bloqueando y el usuario creía haberlo arreglado. Ahora `--record` enlaza la firma con la evidencia de su fase, pero **solo después de verificarla por la misma ruta que usará el gate**; si no verifica, no escribe nada y lo dice. `approved_by` se deriva del firmante que reporta git (`%GS`), nunca de una opción, y la referencia anterior se conserva en `history`: re-firmar no borra a quien aprobó antes.
+
+  Escribir ese puntero desde el CLI no es el mismo pecado que redactar `quality_metrics`: aquellos son los valores que el gate juzga, mientras que `attestation_commit` solo dice **dónde mirar** — `phase-gate` reconstruye desde git el árbol, la ancestría, la firma, el `%G?`, el firmante y el trailer.
+
 ### Added
 
 - **`tools-doctor` comprueba la preparación para firmar.** Antes, un consumidor descubría que no podía atestar nada en el momento en que un gate humano se lo pedía, con la fase ya bloqueada: en `manga-translator-mvp` no existía `governance.maintainers` y ningún commit de la historia estaba firmado. El probe `commit-signing` cruza maintainers declarados, `user.signingkey`, `gpg.format` y —en SSH— que `gpg.ssh.allowedSignersFile` esté configurado y exista, y explica qué forma de firmante espera cada backend. Los hallazgos de `tools-doctor` ahora arrastran el `detail` del propio probe: el inventario describe la herramienta en general y no puede decir qué le falta a **este** repo.
