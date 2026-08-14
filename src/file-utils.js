@@ -64,7 +64,66 @@ export function sha256Text(value) {
  *    distintos por cada camino. Dos verificadores que no coinciden son peores
  *    que uno solo.
  */
-export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
+// Presupuesto GLOBAL de captura, en bytes. El tope por captura evita que UNA
+// salida crezca sin fin, pero no protege al proceso: cuatro `ls-tree` de 256
+// MiB cada uno son 1 GiB solo en stdout, y `Buffer.concat` + `toString` +
+// `split` multiplican el pico real por encima de eso. Cada captura reserva su
+// maximo declarado antes de arrancar, asi que un `ls-tree` grande corre solo
+// mientras los comandos de 1 MiB siguen concurriendo entre si.
+const CAPTURE_BUDGET_BYTES = 256 * 1024 * 1024;
+let availableBudget = CAPTURE_BUDGET_BYTES;
+const budgetQueue = [];
+
+function acquireBudget(bytes) {
+  // Una peticion mayor que el presupuesto entero esperaria para siempre: se
+  // acota al total, de modo que corre sola pero corre.
+  const need = Math.min(bytes, CAPTURE_BUDGET_BYTES);
+  if (availableBudget >= need) {
+    availableBudget -= need;
+    return { need, wait: null };
+  }
+  let release;
+  const wait = new Promise((resolve) => {
+    release = resolve;
+  });
+  budgetQueue.push({ need, grant: release });
+  return { need, wait };
+}
+
+function releaseBudget(need) {
+  availableBudget += need;
+  // FIFO a proposito: sin orden, una peticion grande podria quedarse esperando
+  // indefinidamente mientras pasan las pequeñas.
+  while (budgetQueue.length > 0 && availableBudget >= budgetQueue[0].need) {
+    const next = budgetQueue.shift();
+    availableBudget -= next.need;
+    next.grant();
+  }
+}
+
+export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
+  const reservation = acquireBudget(maxBuffer);
+  if (reservation.wait) await reservation.wait;
+  try {
+    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
+  } finally {
+    releaseBudget(reservation.need);
+  }
+}
+
+/**
+ * Decodifica los trozos capturados como UN solo buffer.
+ *
+ * Existe como funcion propia para poder probarla con cortes elegidos: la prueba
+ * contra un proceso real depende de como el runtime trocee la salida, asi que
+ * como regresion no es fiable — una implementacion rota puede pasar si los
+ * cortes caen alineados.
+ */
+export function decodeCapture(chunks) {
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd });
     const out = [];
@@ -79,11 +138,22 @@ export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, kill
     // —en un fallo de spawn, `close` llega DESPUES de `error`—, y sin esta
     // guarda el segundo pisaba el estado del primero: en particular, un `error`
     // tras marcar desbordamiento reportaba `overflow: false`.
+    // `settle` resuelve la promesa, pero NO cancela el watchdog: eso era un
+    // defecto real — `trip()` armaba el temporizador y `settle()` lo cancelaba
+    // acto seguido, asi que el SIGKILL nunca llegaba a ejecutarse. En Windows
+    // no se notaba porque SIGTERM ya termina a la fuerza; en POSIX el hijo
+    // sobrevivia. El watchdog solo se cancela cuando el hijo REALMENTE murio.
     const settle = (result) => {
       if (settled) return;
       settled = true;
-      if (killTimer) clearTimeout(killTimer);
       resolve(result);
+    };
+
+    const cancelWatchdog = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
     };
 
     // `maxBuffer` en Node se aplica a stdout **o** stderr, no solo al primero.
@@ -100,10 +170,17 @@ export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, kill
       // promesa —y con ella el hueco del pool— se queda colgada para siempre.
       child.kill();
       killTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* el hijo ya se fue */
+        killTimer = null;
+        // `child.killed` no sirve: dice que se mando la señal, no que muriera.
+        // `exitCode`/`signalCode` en null significa que sigue vivo, y solo
+        // entonces se escala. Asi se estrecha la ventana en la que el PID pudo
+        // reciclarse — no se elimina, porque la API de Node es por PID.
+        if (child.exitCode === null && child.signalCode === null) {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* el hijo ya se fue entre la comprobacion y la señal */
+          }
         }
       }, killGraceMs);
       killTimer.unref?.();
@@ -126,14 +203,19 @@ export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, kill
       err.push(chunk);
     });
     child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
-    child.on("close", (code) =>
+    // `exit` y `close` son el unico momento en que consta que el hijo murio, y
+    // por tanto el unico en que el watchdog sobra. Cancelarlo antes deja vivo
+    // justo al proceso que se pretendia matar.
+    child.on("exit", cancelWatchdog);
+    child.on("close", (code) => {
+      cancelWatchdog();
       settle({
         ok: code === 0,
-        stdout: Buffer.concat(out).toString("utf8"),
-        stderr: Buffer.concat(err).toString("utf8"),
+        stdout: decodeCapture(out),
+        stderr: decodeCapture(err),
         overflow: false
-      })
-    );
+      });
+    });
   });
 }
 

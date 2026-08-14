@@ -18,19 +18,32 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnCapture } from "../src/file-utils.js";
+import YAML from "yaml";
+import { decodeCapture, spawnCapture } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
 
 // --- 1. UTF-8 partido entre chunks -----------------------------------------
-// El caso NO es decorativo y costo construirlo: con acentos de 2 bytes los
-// cortes del pipe caen en frontera de caracter por casualidad y el bug no
-// aparece. Con '€' —3 bytes— y un chunk de 64 KiB, 65536 no es multiplo de 3 y
-// el corte cae DENTRO del caracter. Medido contra la implementacion vieja
-// (`stdout += chunk`): 10 caracteres de reemplazo; con acumulacion de buffers,
-// cero. Sin este detalle el test pasaria igual con el codigo roto.
+// DOS pruebas, porque una sola no bastaba. La de proceso real depende de como
+// el runtime trocee la salida, asi que como prueba de REGRESION no es fiable:
+// una implementacion rota puede pasar si los cortes caen alineados. La
+// determinista ataca el helper puro con cortes elegidos a mano, y esa si falla
+// siempre con el codigo viejo.
 {
+  // Determinista: 'A' con tilde son dos bytes; se parten a proposito.
+  const acentuado = Buffer.from("Ángel — atestación", "utf8");
+  const trozos = [acentuado.subarray(0, 1), acentuado.subarray(1)];
+  assert.equal(decodeCapture(trozos), "Ángel — atestación", "decodificar una vez sobre el buffer completo conserva el caracter");
+  // Y asi es como fallaba: decodificando cada trozo por separado.
+  const ingenuo = trozos.map((t) => t.toString()).join("");
+  assert.notEqual(ingenuo, "Ángel — atestación", "la concatenacion de strings SI corrompe: es el bug que se arreglo");
+  assert.ok(ingenuo.includes("�"), "y deja caracteres de reemplazo");
+}
+
+{
+  // Proceso real: '€' son 3 bytes y 65536 no es multiplo de 3, asi que con
+  // chunks de 64 KiB el corte cae dentro del caracter.
   const script = path.join(tempRoot, "emit.mjs");
   fs.writeFileSync(script, "process.stdout.write('€'.repeat(120000));", "utf8");
 
@@ -40,7 +53,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
   assert.equal(async_.ok, true);
   assert.equal(async_.stdout, sync.stdout, "async y sync tienen que producir EXACTAMENTE el mismo texto");
   assert.equal(async_.stdout.length, 120000, "ni un caracter de mas ni de menos");
-  assert.ok(!async_.stdout.includes("�"), "ningun caracter de reemplazo: el UTF-8 no puede partirse");
+  assert.ok(!async_.stdout.includes("�"), "ningun caracter de reemplazo");
 }
 
 console.log("paridad utf-8 entre chunks: PASS");
@@ -185,21 +198,79 @@ console.log("tope de stderr: PASS");
   assert.ok(transcurrido < 10_000, `tiene que resolver sin esperar al hijo: tardo ${transcurrido} ms`);
 }
 
-console.log("hijo que ignora SIGTERM: PASS");
+// En Windows este caso NO prueba lo que su nombre dice: alli SIGTERM no es una
+// señal real y Node termina el proceso a la fuerza, asi que el hijo nunca llega
+// a ignorarla. Lo que si valida en ambas plataformas es que `spawnCapture`
+// resuelve sin esperar al hijo. La sobrevivencia al SIGTERM y la escalada a
+// SIGKILL solo se ejercitan de verdad en POSIX.
+console.log(
+  process.platform === "win32"
+    ? "resolucion sin esperar al hijo: PASS (en Windows SIGTERM no es evitable; la escalada no se ejercita)"
+    : "hijo que ignora SIGTERM: PASS"
+);
 
-// --- 7. el orden no depende del locale de la maquina -----------------------
-// `localeCompare` sin locale explicito usa el ICU del sistema: ["z","ä"] sale
-// en un orden en ingles y en otro en sueco. Si el orden es contractual, no
-// puede depender de la configuracion regional de quien corre el comando.
+// --- 7. el orden lo produce el CODIGO, no el test --------------------------
+// La version anterior de este caso ordenaba dos arrays locales y los comparaba:
+// habria pasado igual si `auditAttestations` volviera a usar `localeCompare`.
+// Un test que no ejercita el codigo no protege nada. Ahora se crea evidencia
+// real con nombres que ordenan DISTINTO por locale y por bytes, y se comprueba
+// el orden de los hallazgos que devuelve la funcion.
 {
-  const nombres = ["z-slice", "ä-slice", "a-slice", "Z-slice"];
-  const porBytes = [...nombres].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
+  const repo = path.join(tempRoot, "orden");
+  fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+  const git = (args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+  git(["init", "--quiet"]);
+  git(["config", "user.email", "orden@example.com"]);
+  git(["config", "user.name", "Orden"]);
+  fs.writeFileSync(path.join(repo, "src", "index.js"), "export const x = 1;\n", "utf8");
+  fs.writeFileSync(
+    path.join(repo, "quality-contract.yaml"),
+    "version: 1\nenforcement: observe\ntiers:\n  core:\n    description: t\nsurfaces:\n  - id: s\n    path: src\n    tier: core\nprobes: []\ngates: []\n",
+    "utf8"
+  );
+  fs.mkdirSync(path.join(repo, ".sdlc"), { recursive: true });
+  fs.writeFileSync(
+    path.join(repo, ".sdlc", "config.json"),
+    JSON.stringify({ schemaVersion: 1, project: { name: "O", slug: "o" }, surfaces: [], governance: { maintainers: [{ signer: "x@example.com" }] } }),
+    "utf8"
+  );
 
-  assert.deepEqual(porBytes, ["Z-slice", "a-slice", "z-slice", "ä-slice"], "orden por bytes UTF-8, estable en cualquier maquina");
-  // Y se deja constancia de por que no vale el otro: en al menos un locale
-  // comun el resultado difiere del orden por bytes.
-  const porLocale = [...nombres].sort((a, b) => a.localeCompare(b));
-  assert.notDeepEqual(porLocale, porBytes, "localeCompare NO coincide con el orden por bytes: por eso no se usa");
+  // "Z" y "a" ordenan al reves por bytes que por locale ingles, y la eñe
+  // desempata a la vez el caso no-ASCII.
+  const slices = ["a-slice", "Z-slice", "ñ-slice"];
+  for (const slice of slices) {
+    const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "F13.yaml"),
+      YAML.stringify({
+        phase: "F13",
+        slice,
+        agent_id: "t",
+        started_at: new Date(0).toISOString(),
+        outputs: [],
+        validators_run: [],
+        // Commit inexistente: da hallazgo sin necesitar firma real, que es lo
+        // que este caso quiere observar — el ORDEN, no la verificacion.
+        human_gate_signoff: { required: true, approved_by: "x", attestation_commit: "0".repeat(40) }
+      }),
+      "utf8"
+    );
+  }
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "base"]);
+
+  const { auditAttestations } = await import("../src/harness.js");
+  const resultado = await auditAttestations(repo);
+  const orden = resultado.findings.map((f) => f.slice);
+
+  const porBytes = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
+  assert.deepEqual(orden, porBytes, "los hallazgos salen en orden de bytes UTF-8");
+
+  // Y se deja constancia de que el otro criterio daria OTRO orden: si alguien
+  // revierte a localeCompare por parecer mas natural, este caso lo caza.
+  const porLocale = [...slices].sort((a, b) => a.localeCompare(b));
+  assert.notDeepEqual(porLocale, porBytes, "localeCompare da otro orden: por eso el codigo no lo usa");
 }
 
-console.log("orden independiente del locale: PASS");
+console.log("orden de hallazgos por bytes: PASS");
