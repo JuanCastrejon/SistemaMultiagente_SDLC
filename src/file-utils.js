@@ -121,55 +121,86 @@ function resolveTreeHashMaxBuffer() {
   const override = process.env.SDLC_TREE_HASH_MAX_BUFFER_BYTES;
   if (override === undefined) return Math.floor(CAPTURE_CEILING_BYTES / EXPECTED_CONCURRENCY);
   const parsed = Number(override);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  // `Number.isSafeInteger` y no `isFinite`: con `0.5` la version anterior pasaba
+  // la guarda (0.5 > 0) y luego `Math.floor` publicaba un tope de CERO bytes --
+  // un valor absurdo que hacia ilegible cualquier arbol. Lo encontro la ronda 9.
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new TypeError(
-      `SDLC_TREE_HASH_MAX_BUFFER_BYTES tiene que ser un numero finito > 0, y llego "${override}"`
+      `SDLC_TREE_HASH_MAX_BUFFER_BYTES tiene que ser un entero > 0, y llego "${override}"`
     );
   }
-  return Math.floor(parsed);
+  // No puede pasar del techo: si una sola captura no cabe en el presupuesto, su
+  // admision no se podria satisfacer NUNCA y colgaria a quien la pida.
+  if (parsed > CAPTURE_CEILING_BYTES) {
+    throw new TypeError(
+      `SDLC_TREE_HASH_MAX_BUFFER_BYTES (${parsed}) no puede superar el techo de captura (${CAPTURE_CEILING_BYTES})`
+    );
+  }
+  return parsed;
 }
 export const TREE_HASH_MAX_BUFFER = resolveTreeHashMaxBuffer();
 
-// Cuantas capturas pueden estar VIVAS a la vez, en todo el proceso. Es lo que
-// hace cumplir `CAPTURE_CEILING_BYTES` de verdad: sin esto, `spawnCapture` es
-// una funcion publica sin memoria de sus vecinas, y nada impide que un
-// consumidor (o dos auditorias solapadas) la llame mas veces de las que el
-// techo de diseño asume. Deliberadamente el mismo numero que
-// `EXPECTED_CONCURRENCY`: en el camino caliente (la auditoria, que ya limita a
-// AUDIT_CONCURRENCY en `runPool`) esta cola nunca llega a activarse -- solo
-// entra en juego cuando alguien se sale de ese camino.
-export const MAX_CONCURRENT_CAPTURES = EXPECTED_CONCURRENCY;
-
-let capturasEnVuelo = 0;
+// Presupuesto de admision, EN BYTES. Ronda 9 de revision adversarial: contar
+// capturas en vez de bytes no hacia cumplir el techo, porque el tope por
+// captura es configurable. Con el escape que el propio README documentaba
+// (128 MiB), cuatro cupos daban 512 MiB -- el doble del techo que ese mismo
+// commit afirmaba imponer. Medido: `potentialRetainedBytes: 536870912`.
+//
+// Ahora la admision reserva los bytes DECLARADOS de la captura. Sigue siendo
+// una decision que se toma UNA vez, ANTES de arrancar el hijo, y solo sobre el
+// tope declarado -- nunca sobre bytes ya recibidos. Esa es la linea que separa
+// esto del presupuesto que se quito en la ronda 7: aquel consultaba a mitad de
+// la escritura, con lo que dos llamadas identicas podian terminar distinto.
+// Aqui, una vez admitida, una captura se comporta igual sola que en cola.
+//
+// (La ronda 5 midio que "reservar el maximo por adelantado" costaba 67 -> 99 ms
+// por atestacion. Aquella medicion era con topes de 256 MiB, o sea el
+// presupuesto entero por captura: se serializaba por fuerza. Con los 64 MiB de
+// hoy caben cuatro a la vez y no se serializa nada; medido de nuevo mas abajo.)
+let bytesReservados = 0;
 const colaDeAdmision = [];
 
-// Semaforo FIFO de admision. A proposito NO mira `maxBuffer` ni bytes: solo
-// cuenta cuantas capturas estan vivas. Ver el comentario del bloque para por
-// que esa diferencia es la que evita repetir el bug de las rondas 5 y 6.
-function acquireCaptureSlot() {
-  if (capturasEnVuelo < MAX_CONCURRENT_CAPTURES) {
-    capturasEnVuelo += 1;
+// Cuantas capturas del tamaño por defecto del hash de arbol caben a la vez.
+// Se deriva, no se declara: si alguien sube el tope por captura, este numero
+// baja solo y el techo se sigue cumpliendo.
+export const MAX_CONCURRENT_CAPTURES = Math.max(1, Math.floor(CAPTURE_CEILING_BYTES / TREE_HASH_MAX_BUFFER));
+
+// Admision FIFO por bytes declarados. Estrictamente FIFO: si la cabeza no cabe,
+// nadie se cuela por detras aunque quepa. Permitir ese adelantamiento dejaba a
+// la cabeza en inanicion indefinida bajo trafico continuo de capturas pequeñas
+// -- ya nos paso en la ronda 4 con el presupuesto viejo.
+function acquireCaptureSlot(bytes) {
+  const necesita = Math.max(1, bytes); // una captura de 0 bytes tambien ocupa turno
+  if (colaDeAdmision.length === 0 && bytesReservados + necesita <= CAPTURE_CEILING_BYTES) {
+    bytesReservados += necesita;
     return Promise.resolve();
   }
   return new Promise((resolve) => {
-    colaDeAdmision.push(resolve);
+    colaDeAdmision.push({ necesita, resolve });
   });
 }
 
-function releaseCaptureSlot() {
-  const siguiente = colaDeAdmision.shift();
-  if (siguiente) {
-    // El cupo se entrega DIRECTO a quien sigue en la cola: `capturasEnVuelo` no
-    // cambia, porque el cupo nunca quedo libre de verdad.
-    siguiente();
-  } else {
-    capturasEnVuelo -= 1;
+function releaseCaptureSlot(bytes) {
+  bytesReservados -= Math.max(1, bytes);
+  drenarAdmision();
+}
+
+function drenarAdmision() {
+  // Solo la CABEZA. En cuanto una no cabe se para: es lo que hace que la cola
+  // sea FIFO de verdad y no una subasta que favorece a las capturas pequeñas.
+  while (colaDeAdmision.length > 0 && bytesReservados + colaDeAdmision[0].necesita <= CAPTURE_CEILING_BYTES) {
+    const siguiente = colaDeAdmision.shift();
+    bytesReservados += siguiente.necesita;
+    siguiente.resolve();
   }
 }
 
 // Solo para pruebas y diagnostico.
 export function captureQueueDepth() {
   return colaDeAdmision.length;
+}
+export function captureReservedBytes() {
+  return bytesReservados;
 }
 
 // Tope de la fase de gracia entre el SIGTERM al grupo y el SIGKILL. Existe
@@ -245,16 +276,26 @@ export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024
   if (!Number.isFinite(killGraceMs) || killGraceMs < 0 || killGraceMs > MAX_KILL_GRACE_MS) {
     throw new TypeError(`killGraceMs tiene que estar entre 0 y ${MAX_KILL_GRACE_MS} ms, y llego ${killGraceMs}`);
   }
-  // Se admite ANTES de arrancar el hijo, nunca durante: ver el bloque de
-  // comentarios sobre `MAX_CONCURRENT_CAPTURES`. Ronda 8 de revision
-  // adversarial: sin esto, cinco capturas de 63 MiB en paralelo median
-  // 497 MiB de pico de RSS, muy por encima del techo de diseño.
-  await acquireCaptureSlot();
-  try {
-    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
-  } finally {
-    releaseCaptureSlot();
+  // Un tope mayor que el techo no se podria admitir jamas: colgaria a quien lo
+  // pida en vez de fallar. Se rechaza aqui, con el numero delante.
+  if (maxBuffer > CAPTURE_CEILING_BYTES) {
+    throw new TypeError(
+      `maxBuffer (${maxBuffer}) no puede superar el techo de captura (${CAPTURE_CEILING_BYTES}): ninguna admision podria satisfacerlo`
+    );
   }
+  // Se admite ANTES de arrancar el hijo, nunca durante: ver el bloque de
+  // comentarios del presupuesto. Ronda 8: sin esto, cinco capturas de 63 MiB en
+  // paralelo median 497 MiB de pico de RSS.
+  //
+  // NO hay `finally` que libere aqui, y es deliberado. Ronda 9: `trip()` resuelve
+  // la promesa de inmediato y deja al hijo VIVO con sus buffers retenidos hasta
+  // que cierre; liberar al resolver admitia una segunda tanda mientras la
+  // primera seguia ocupando memoria de verdad (medido: ocho buffers a la vez).
+  // El cupo lo suelta `captureProcess` en el momento en que los buffers se
+  // sueltan de verdad. Es el MISMO error que ya se habia arreglado en la ronda 6
+  // para el registro de hijos y que aqui se repitio con el presupuesto.
+  await acquireCaptureSlot(maxBuffer);
+  return captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
 }
 
 // Terminar el ARBOL, no solo el hijo. `child.kill()` no alcanza a los nietos, y
@@ -418,9 +459,29 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
     // `killAllActiveChildren`, y un Ctrl-C en esa ventana orfanaba el grupo.
     const desregistrar = () => activeChildren.delete(child);
 
+    // Suelta los buffers Y el cupo del presupuesto, exactamente a la vez y una
+    // sola vez. Atarlos es el punto: el presupuesto mide MEMORIA RETENIDA, asi
+    // que devolverlo antes de soltar los buffers es mentir sobre lo que hay
+    // ocupado. Ronda 9 midio esa mentira -- se admitia una segunda tanda
+    // mientras la primera seguia reteniendo.
+    let liberado = false;
+    const liberarMemoria = () => {
+      if (liberado) return;
+      liberado = true;
+      out.length = 0;
+      err.length = 0;
+      releaseCaptureSlot(maxBuffer);
+    };
+
     const trip = (motivo, detalle) => {
       if (overflow) return;
       overflow = true;
+      // Los buffers acumulados NO se devuelven en un corte (`stdout: ""`), asi
+      // que se sueltan ya mismo en vez de esperar a `close`. Eso libera memoria
+      // de verdad y, con ella, el cupo: un hijo que resista el SIGTERM ya no
+      // bloquea el presupuesto durante toda la gracia, porque a partir de aqui
+      // `acepta()` es falso y no va a acumular nada mas.
+      liberarMemoria();
       // Se resuelve YA, sin esperar a `close`: matar no garantiza que el hijo
       // muera, y esperarlo dejaria la promesa —y el hueco del pool— colgada.
       killTree(child);
@@ -492,6 +553,7 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
 
     child.on("error", (error) => {
       desregistrar(); // nunca arranco: no hay grupo que limpiar
+      liberarMemoria();
       settle({ ok: false, stdout: "", stderr: error.message, overflow });
     });
     // `close` da de baja al lider del registro de limpieza, pero NO cancela la
@@ -500,12 +562,18 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
     // SIGKILL al grupo corre igual al vencer la gracia.
     child.on("close", (code) => {
       if (!killTimer) desregistrar();
-      settle({
+      // Se decodifica ANTES de soltar los buffers, obviamente; el cupo se
+      // devuelve justo despues, que es cuando la memoria deja de estar
+      // retenida de verdad. En el camino normal `close` es el primer momento
+      // en que eso es cierto.
+      const resultado = {
         ok: code === 0,
         stdout: decodeCapture(out),
         stderr: decodeCapture(err),
         overflow: false
-      });
+      };
+      liberarMemoria();
+      settle(resultado);
     });
   });
 }

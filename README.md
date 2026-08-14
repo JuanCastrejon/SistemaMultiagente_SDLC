@@ -374,12 +374,17 @@ El framework lanza procesos externos —`git` sobre todo— y captura su salida.
 | `TREE_HASH_MAX_BUFFER` | **64 MiB** | Tope por llamada del hash de árbol. Es `CAPTURE_CEILING_BYTES / 4` |
 | `AUDIT_CONCURRENCY` | 4 | Atestaciones verificadas a la vez (`src/harness.js`) |
 | `maxBuffer` (por llamada) | 1 MiB por defecto | Salida capturada de un proceso. **Un solo presupuesto entre `stdout` y `stderr`**, igual que `spawnSync` |
-| `MAX_CONCURRENT_CAPTURES` | 4 | Cuántas capturas pueden estar vivas a la vez, en todo el proceso |
+| `MAX_CONCURRENT_CAPTURES` | 4 (**derivado**) | `CAPTURE_CEILING_BYTES / TREE_HASH_MAX_BUFFER`. Si subes el tope por captura, baja solo |
 | `killGraceMs` | 2 s (máx. **5 s**) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
 
-**La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con `AUDIT_CONCURRENCY = 4` y 64 MiB por llamada, eso da exactamente el techo de 256 MiB. Si cambias uno, cambia el otro.
+**La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con 64 MiB por llamada y 4 en vuelo, eso da exactamente el techo de 256 MiB.
 
-`CAPTURE_CEILING_BYTES` **es un límite aplicado**, no solo de diseño: `spawnCapture` admite como máximo `MAX_CONCURRENT_CAPTURES` capturas a la vez, en cola FIFO. Antes de la ronda 8 de revisión adversarial no lo era —`spawnCapture` es pública y no tenía tope de concurrencia propio; medido: cinco capturas simultáneas de 63 MiB retenían 315 MiB con pico de 497 MiB de RSS—. La cola solo **admite** por conteo, nunca por contenido: eso es lo que evita que vuelva a romper la paridad sync/async como el presupuesto que se quitó en la ronda 7.
+`CAPTURE_CEILING_BYTES` **es un límite aplicado**, no solo de diseño. La admisión reserva los **bytes declarados** de cada captura y encola en FIFO estricto cuando no caben. Dos rondas hicieron falta para llegar aquí:
+
+- la ronda 8 encontró que no había ningún tope y cinco capturas de 63 MiB retenían 315 MiB (pico de 497 MiB de RSS);
+- la ronda 9 encontró que **contar capturas tampoco bastaba**, porque el tope por captura es configurable: con el escape de 128 MiB documentado más abajo, cuatro cupos daban **512 MiB**, el doble del techo. Por eso `MAX_CONCURRENT_CAPTURES` ahora se **deriva** en vez de declararse.
+
+La reserva se decide **una vez, antes de arrancar el proceso, y solo sobre el tope declarado** — nunca sobre bytes ya recibidos. Esa línea es la que separa esto del presupuesto que se quitó en la ronda 7: aquél consultaba a mitad de la escritura, y por eso dos llamadas idénticas podían terminar distinto. Y el cupo se devuelve **cuando los buffers se sueltan de verdad**, no cuando la promesa resuelve: en un corte por desbordamiento la promesa resuelve de inmediato mientras el hijo sigue vivo, y liberar ahí admitía una segunda tanda encima de la primera.
 
 **Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Esa media es de *este* repo; rutas más largas la suben y bajan el número de archivos que caben.
 
@@ -388,6 +393,8 @@ El framework lanza procesos externos —`git` sobre todo— y captura su salida.
 ```bash
 SDLC_TREE_HASH_MAX_BUFFER_BYTES=134217728 sdlc signoff --slice <id> --phase <F> --create --record
 ```
+
+**Subir el tope reduce la concurrencia, no el techo.** Con 128 MiB por captura solo caben **dos** a la vez en los 256 MiB; con 256 MiB, una. Es intencional: el techo de memoria manda sobre el paralelismo. La variable exige un **entero positivo** que no supere el techo — `0.5` o un valor gigante se rechazan al arrancar, con el número delante. (`0.5` llegaba antes a publicar un tope de **cero bytes**, que hacía ilegible cualquier árbol.)
 
 Si algún día se expone como flag o config, tendrá que seguir siendo **el mismo número en las dos vías** — es lo único que garantiza que acepten y rechacen las mismas entradas.
 

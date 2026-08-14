@@ -8,6 +8,45 @@ primero, porque bloquea al resto.
 
 ---
 
+## Ronda 9 — dos BLOQUEANTES en los arreglos de la ronda 8, cerrados
+
+Registro completo en `.codex-out/ronda-9/hallazgos.md`. La ronda se lanzó, murió
+por cuota a mitad y se **reanudó con otra cuenta** sin perder nada: el contrato
+incremental salvó 5 hallazgos antes de morir.
+
+- [x] ~~BLOQUEANTE — el escape documentado volvía falso el techo.~~ Con
+      `SDLC_TREE_HASH_MAX_BUFFER_BYTES=134217728` (**el ejemplo del propio
+      README**), cuatro cupos daban 512 MiB: el doble del techo que ese mismo
+      commit afirmaba imponer. Contar capturas no bastaba porque el tope por
+      captura es configurable. Ahora la admisión reserva **bytes declarados** y
+      `MAX_CONCURRENT_CAPTURES` se **deriva** del techo. Verificado: con 128 MiB
+      los cupos bajan solos a 2 → 256 MiB exactos.
+- [x] ~~BLOQUEANTE — el cupo se devolvía al resolver, no al morir la captura.~~
+      `trip()` resuelve de inmediato y deja al hijo vivo reteniendo buffers;
+      liberar ahí admitía una segunda tanda encima de la primera (medido: ocho
+      buffers a la vez). Ahora el cupo se suelta **cuando los buffers se sueltan
+      de verdad** — en un corte, los buffers se descartan en el acto porque no se
+      devuelven. **Es el mismo error que la ronda 6 ya había arreglado para el
+      registro de hijos, repetido con el presupuesto.**
+- [x] ~~SERIO — `0.5` en la variable publicaba un tope de cero bytes.~~ La guarda
+      validaba `0.5 > 0` y luego `Math.floor` lo dejaba en 0. Ahora exige entero
+      positivo que no supere el techo.
+- [x] ~~SERIO — el caso 19 no probaba el cupo exacto ni detectaba una liberación
+      que pierde la cuenta.~~ Aserciones **exactas** (`=== extra`,
+      `=== techo`, `=== 0` al drenar) y **segunda tanda**. Los dos mutantes que
+      Codex dejó vivos ahora mueren.
+- [x] ~~Un cuelgue de la suite era un build VERDE.~~ Descubierto mutando la
+      liberación: la suite se colgaba en el caso 7 y Node salía con **código 0**
+      con solo un warning (`Detected unsettled top-level await`). Ahora hay un
+      vigilante global que sale con **código 1** y mensaje. Esto valía más que el
+      mutante que lo destapó.
+- [ ] **SERIO abierto — el pgid sigue sin identidad segura.** Bajar la gracia a
+      5 s reduce la ventana pero no la cierra, y Codex midió además que un hijo
+      legítimo que necesite 5,5 s de limpieza recibe `SIGKILL`. Cierre real:
+      cgroup en POSIX y Job Object en Windows. **Hasta entonces, 5 s es
+      mitigación de riesgo residual, no cierre** — y así está escrito en el
+      código.
+
 ## Ronda 8 — los tres SERIOS, atacados
 
 Registro completo de la ronda en `.codex-out/ronda-8/hallazgos.md`.

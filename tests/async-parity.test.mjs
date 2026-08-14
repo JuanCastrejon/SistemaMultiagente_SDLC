@@ -26,12 +26,28 @@ import {
   MAX_KILL_GRACE_MS,
   TREE_HASH_MAX_BUFFER,
   captureQueueDepth,
+  captureReservedBytes,
   decodeCapture,
   spawnCapture
 } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
+
+// Un cuelgue NO puede ser un build verde. Esta suite usa `await` de nivel
+// superior, y cuando una promesa no resuelve Node se limita a avisar
+// ("Detected unsettled top-level await") y sale con codigo CERO: el pipeline lo
+// lee como exito. Se descubrio mutando la liberacion del presupuesto -- la
+// suite se colgaba en el caso 7 y aun asi "pasaba".
+//
+// El temporizador NO va `unref`-ado: tiene que mantener vivo el bucle
+// precisamente cuando ya no queda nada mas, que es el escenario del cuelgue.
+const CUELGUE_MS = Number(process.env.SDLC_TEST_HANG_TIMEOUT_MS ?? 10 * 60 * 1000);
+const vigilanteGlobal = setTimeout(() => {
+  console.error(`\nLA SUITE SE COLGO: mas de ${CUELGUE_MS / 1000} s sin terminar.`);
+  console.error("Un `await` de nivel superior no resolvio. Node saldria con 0 y el pipeline lo leeria como exito.");
+  process.exit(1);
+}, CUELGUE_MS);
 
 // --- 1. UTF-8 partido entre chunks -----------------------------------------
 // DOS pruebas, porque una sola no bastaba. La de proceso real depende de como
@@ -747,35 +763,100 @@ console.log(
 // RSS. Aqui se prueba el MECANISMO -- que la admision se pone en cola pasado
 // el cupo -- sin gastar esa memoria: el hijo es liviano, lo que se mide es
 // cuantos estan vivos a la vez.
+// El presupuesto es POR BYTES DECLARADOS, no por numero de capturas -- contar
+// capturas no bastaba, porque el tope por captura es configurable y cuatro
+// cupos de 128 MiB daban 512 MiB (ronda 9). Como la reserva va sobre el tope
+// DECLARADO, esta prueba puede pedir 64 MiB por captura sin gastar ni uno: los
+// hijos no escriben casi nada. Lo que se mide es la contabilidad, no la RAM.
+//
+// Las aserciones son EXACTAS a proposito. Ronda 9 mostro que las cotas flojas
+// (`0 < profundidad <= 3`) dejaban pasar dos mutantes: cambiar `<` por `<=` en
+// la admision, y una liberacion que pierde la cuenta. Con igualdades y una
+// SEGUNDA tanda, los dos mueren.
 {
   const script = path.join(tempRoot, "lento-de-admitir.mjs");
-  // Vive el tiempo suficiente para que la ventana de observacion (mas abajo)
-  // alcance a verlo en cola o en vuelo, sin alargar la prueba de mas.
   fs.writeFileSync(script, "setTimeout(() => process.stdout.write('ok'), 300);", "utf8");
 
-  const extra = 3; // por encima del cupo, a proposito
+  const porCaptura = Math.floor(CAPTURE_CEILING_BYTES / MAX_CONCURRENT_CAPTURES);
+  const extra = 3;
   const total = MAX_CONCURRENT_CAPTURES + extra;
+
   assert.equal(captureQueueDepth(), 0, "la cola tiene que arrancar vacia");
+  assert.equal(captureReservedBytes(), 0, "el presupuesto tiene que arrancar sin reservar");
 
-  const promesas = Array.from({ length: total }, () => spawnCapture(process.execPath, [script], { killGraceMs: 500 }));
+  const lanzarTanda = () =>
+    Array.from({ length: total }, () =>
+      spawnCapture(process.execPath, [script], { maxBuffer: porCaptura, killGraceMs: 500 })
+    );
 
-  // Se da tiempo a que las primeras `MAX_CONCURRENT_CAPTURES` se admitan (son
-  // instantaneas de arrancar) y las de mas queden esperando: si la admision no
-  // tuviera cupo, las `total` arrancarian todas ya y la cola seguiria en 0.
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  const profundidad = captureQueueDepth();
-  assert.ok(
-    profundidad > 0,
-    `con ${total} capturas y cupo de ${MAX_CONCURRENT_CAPTURES}, alguna tiene que estar en cola -- se vio profundidad ${profundidad}`
-  );
-  assert.ok(profundidad <= extra, `la cola no puede tener mas que las que exceden el cupo: se vio ${profundidad}`);
+  for (const tanda of ["primera", "segunda"]) {
+    const promesas = lanzarTanda();
 
-  const resultados = await Promise.all(promesas);
-  assert.ok(
-    resultados.every((r) => r.ok),
-    "todas terminan bien: la cola retrasa, no descarta"
-  );
-  assert.equal(captureQueueDepth(), 0, "la cola vuelve a quedar vacia");
+    // La admision es sincrona hasta el primer `await`, asi que en cuanto se
+    // ceda el turno ya estan repartidos los cupos: no depende de temporizacion.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    assert.equal(
+      captureQueueDepth(),
+      extra,
+      `${tanda} tanda: tienen que esperar EXACTAMENTE las ${extra} que exceden el techo`
+    );
+    assert.equal(
+      captureReservedBytes(),
+      MAX_CONCURRENT_CAPTURES * porCaptura,
+      `${tanda} tanda: lo reservado tiene que ser exactamente el techo, ni un byte mas`
+    );
+    assert.ok(
+      captureReservedBytes() <= CAPTURE_CEILING_BYTES,
+      `${tanda} tanda: lo reservado no puede superar el techo`
+    );
+
+    // Con tope: si la liberacion no descuenta, la cola no drena NUNCA y esto se
+    // colgaria en vez de fallar. Un cuelgue tambien "detecta" el mutante, pero
+    // en CI es un timeout sin diagnostico; asi se convierte en un mensaje.
+    // El temporizador NO va `unref`-ado a proposito: si las capturas encoladas
+    // nunca se admiten, no queda nada vivo en el bucle y Node saldria EN
+    // SILENCIO con codigo 0 -- la suite "pasaria" sin haber probado nada.
+    // Mantenerlo referenciado es lo que garantiza que el fallo se vea.
+    let vigilante;
+    const resultados = await Promise.race([
+      Promise.all(promesas).finally(() => clearTimeout(vigilante)),
+      new Promise((_, reject) => {
+        vigilante = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `${tanda} tanda: la cola no drenó en 20 s -- lo reservado quedó en ${captureReservedBytes()} y ${captureQueueDepth()} esperando. Sintoma tipico de una liberacion que no descuenta.`
+              )
+            ),
+          20_000
+        );
+      })
+    ]);
+    assert.ok(resultados.every((r) => r.ok), `${tanda} tanda: la cola retrasa, no descarta`);
+    assert.equal(captureQueueDepth(), 0, `${tanda} tanda: la cola vuelve a vaciarse`);
+    // Si la liberacion pierde la cuenta, esto queda distinto de cero y la
+    // SEGUNDA tanda ya no encolaria nada -- que es justo el mutante que
+    // sobrevivia antes.
+    assert.equal(captureReservedBytes(), 0, `${tanda} tanda: el presupuesto vuelve INTACTO a cero`);
+  }
 }
 
-console.log("cupo de concurrencia de spawnCapture: PASS");
+console.log("presupuesto de admision por bytes declarados: PASS");
+
+// --- 20. un tope mayor que el techo se rechaza, no se cuelga ---------------
+// Si una sola captura pidiera mas que el techo entero, su admision no podria
+// satisfacerse NUNCA y quien la pidiera se quedaria esperando para siempre.
+{
+  await assert.rejects(
+    () => spawnCapture(process.execPath, ["-e", "0"], { maxBuffer: CAPTURE_CEILING_BYTES + 1 }),
+    /no puede superar el techo/,
+    "un maxBuffer mayor que el techo tiene que rechazarse en el acto"
+  );
+  assert.equal(captureReservedBytes(), 0, "un rechazo no puede dejar bytes reservados");
+  assert.equal(captureQueueDepth(), 0, "un rechazo no puede dejar a nadie en cola");
+}
+
+console.log("tope mayor que el techo rechazado: PASS");
+
+clearTimeout(vigilanteGlobal);
