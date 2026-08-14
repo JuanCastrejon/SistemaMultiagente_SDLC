@@ -424,7 +424,25 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
     // `detached` en POSIX crea grupo de procesos propio, que es lo que permite
     // matar a los nietos. En Windows no aplica y se usa `taskkill /T`.
     const detached = process.platform !== "win32";
-    const child = spawn(command, args, { cwd, detached });
+    let child;
+    try {
+      child = spawn(command, args, { cwd, detached });
+    } catch (error) {
+      // `spawn` puede tirar SINCRONAMENTE con argumentos invalidos (un comando
+      // vacio, por ejemplo), antes de que exista `child` y antes de que se
+      // registre `liberarMemoria`. Sin esto, el cupo ya reservado no lo
+      // devolvia NADIE: medido, un `spawnCapture("", [])` con el tope entero
+      // dejaba 268 435 456 bytes reservados para siempre y colgaba toda captura
+      // posterior. Lo encontro la ronda 10.
+      //
+      // Es la misma familia de defecto que ya aparecio dos veces en este
+      // archivo: reservar algo y salir por un camino que no lo libera. Por eso
+      // la liberacion vive AQUI, en el mismo sitio que la adquisicion decide
+      // proteger, y no en un `finally` del llamador -- un `finally` liberaria
+      // tambien al RESOLVER, que es justo el bug de la ronda 9.
+      releaseCaptureSlot(maxBuffer);
+      throw error; // dentro del executor: rechaza la promesa, como antes
+    }
     if (detached) {
       installSignalCleanupOnce();
       activeChildren.add(child);

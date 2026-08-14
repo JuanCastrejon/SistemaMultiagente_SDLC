@@ -859,4 +859,81 @@ console.log("presupuesto de admision por bytes declarados: PASS");
 
 console.log("tope mayor que el techo rechazado: PASS");
 
+// --- 21. un fallo SINCRONO de spawn no puede fugar el presupuesto ----------
+// BLOQUEANTE de la ronda 10. `spawn` tira sincronamente con argumentos
+// invalidos (comando vacio), ANTES de que exista el hijo y antes de registrar
+// la liberacion. El cupo ya reservado no lo devolvia nadie: medido, quedaban
+// 268 435 456 bytes retenidos para siempre y CUALQUIER captura posterior se
+// colgaba. Es la tercera vez en este archivo que aparece la misma familia de
+// defecto -- reservar y salir por un camino que no libera -- asi que va con
+// prueba propia.
+{
+  assert.equal(captureReservedBytes(), 0, "se parte de un presupuesto intacto");
+
+  await assert.rejects(
+    () => spawnCapture("", [], { maxBuffer: CAPTURE_CEILING_BYTES }),
+    /file/i,
+    "un comando vacio tiene que rechazar"
+  );
+
+  assert.equal(
+    captureReservedBytes(),
+    0,
+    "un fallo sincrono de spawn NO puede dejar bytes reservados: si los deja, toda captura posterior se cuelga"
+  );
+  assert.equal(captureQueueDepth(), 0, "ni a nadie en cola");
+
+  // Y lo que de verdad importa: que despues se pueda seguir capturando. La
+  // asercion sobre el contador podria pasar con una contabilidad rota; esta no.
+  const despues = await spawnCapture(process.execPath, ["-e", "process.stdout.write('vivo')"], { maxBuffer: 1024 });
+  assert.equal(despues.ok, true, "tras el fallo, una captura normal tiene que admitirse igual");
+  assert.equal(despues.stdout, "vivo");
+  assert.equal(captureReservedBytes(), 0, "y el presupuesto vuelve a cero");
+}
+
+console.log("fallo sincrono de spawn no fuga presupuesto: PASS");
+
+// --- 22. el override se valida en IMPORT FRESCO ---------------------------
+// SERIO de la ronda 10. `TREE_HASH_MAX_BUFFER` se resuelve al importar el
+// modulo, y esta suite lo importa UNA vez, antes de poder variar el entorno.
+// Codex muto `Number.isSafeInteger` por `Number.isFinite` -- reabriendo la
+// aceptacion de `0.5` que la ronda 9 dice cerrar -- y la suite siguio 17/17
+// verde. La unica forma de cubrir este contrato es arrancar procesos nuevos.
+{
+  const sondear = (valor) => {
+    const env = { ...process.env };
+    if (valor === null) delete env.SDLC_TREE_HASH_MAX_BUFFER_BYTES;
+    else env.SDLC_TREE_HASH_MAX_BUFFER_BYTES = String(valor);
+    const url = JSON.stringify(new URL("../src/file-utils.js", import.meta.url).href);
+    const r = spawnSync(
+      process.execPath,
+      ["-e", `import(${url}).then(m => console.log(String(m.TREE_HASH_MAX_BUFFER))).catch(e => { console.error(e.message); process.exit(1); })`],
+      { env, encoding: "utf8" }
+    );
+    return { ok: r.status === 0, salida: (r.stdout ?? "").trim(), error: (r.stderr ?? "").trim() };
+  };
+
+  // Rechazos. `0.5` es el caso que motivo la ronda 9: pasaba `> 0` y luego
+  // `Math.floor` publicaba un tope de CERO bytes.
+  for (const malo of ["0.5", "0", "-1", "abc", "NaN", "Infinity", String(CAPTURE_CEILING_BYTES + 1)]) {
+    const r = sondear(malo);
+    assert.equal(r.ok, false, `SDLC_TREE_HASH_MAX_BUFFER_BYTES=${malo} tiene que rechazarse en import fresco`);
+    assert.match(r.error, /SDLC_TREE_HASH_MAX_BUFFER_BYTES/, `y el mensaje tiene que nombrar la variable (${malo})`);
+  }
+
+  // Aceptaciones, con el valor EXACTO que se publica.
+  const pordefecto = sondear(null);
+  assert.equal(pordefecto.ok, true, "sin la variable, el modulo carga");
+  assert.equal(pordefecto.salida, String(TREE_HASH_MAX_BUFFER), "sin la variable manda el default");
+
+  const valido = sondear(128 * 1024 * 1024);
+  assert.equal(valido.ok, true, "un entero valido dentro del techo se acepta");
+  assert.equal(valido.salida, String(128 * 1024 * 1024), "y se publica tal cual, sin redondeos");
+
+  const alTecho = sondear(CAPTURE_CEILING_BYTES);
+  assert.equal(alTecho.ok, true, "el techo exacto es valido: el rechazo es para lo que lo SUPERA");
+}
+
+console.log("override validado en import fresco: PASS");
+
 clearTimeout(vigilanteGlobal);
