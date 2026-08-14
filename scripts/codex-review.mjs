@@ -143,8 +143,41 @@ const logEventos = fs.createWriteStream(rutaEventos, { flags: "a" });
 let sessionId = esResume ? args[1] : null;
 let buffer = "";
 
+// Deteccion explicita de cuota. Sin esto, agotar el limite se veia igual que
+// cualquier otro fallo -- "codigo distinto de 0" -- y habia que ir a leer el
+// log para entender que solo hacia falta cambiar de cuenta. Paso dos veces
+// (rondas 8 y 9).
+let cuotaAgotada = false;
+const PATRON_CUOTA = /usage limit|hit your usage limit|quota|rate limit|try again at/i;
+
+// Deteccion de cuelgue. En la ronda 9, Codex entrego su veredicto completo y el
+// proceso siguio vivo 39 MINUTOS sin escribir nada: el trabajo estaba hecho y
+// nadie se enteraba. Se avisa por inactividad, no se mata -- una revision larga
+// puede tardar en pensar, y matarla seria peor que esperarla.
+const INACTIVIDAD_MS = Number(process.env.SDLC_CODEX_IDLE_WARN_MS ?? 5 * 60 * 1000);
+let ultimaSalida = Date.now();
+let avisadoDeCuelgue = false;
+const vigilanteInactividad = setInterval(() => {
+  const quieto = Date.now() - ultimaSalida;
+  if (quieto < INACTIVIDAD_MS || avisadoDeCuelgue) return;
+  avisadoDeCuelgue = true;
+  const hallazgos = fs.existsSync(rutaHallazgos) ? fs.readFileSync(rutaHallazgos, "utf8") : "";
+  const n = (hallazgos.match(/^\[(BLOQUEANTE|SERIO|MENOR)\]/gm) ?? []).length;
+  console.warn(`\n${"!".repeat(60)}`);
+  console.warn(`AVISO: codex lleva ${Math.round(quieto / 60000)} min sin escribir nada.`);
+  console.warn(`Puede haber terminado y quedarse colgado (paso en la ronda 9).`);
+  console.warn(`Hallazgos ya anexados: ${n} -> ${rutaHallazgos}`);
+  console.warn(`Si el veredicto ya esta en el log, se puede cerrar el proceso sin perder nada.`);
+  console.warn(`${"!".repeat(60)}\n`);
+}, 30_000);
+vigilanteInactividad.unref?.();
+
 const mirar = (texto) => {
   logEventos.write(texto);
+  ultimaSalida = Date.now();
+  if (!cuotaAgotada && PATRON_CUOTA.test(texto)) {
+    cuotaAgotada = true;
+  }
   if (sessionId) return;
   buffer += texto;
   const m = buffer.match(/session id:\s*([0-9a-f-]{36})/i);
@@ -198,16 +231,44 @@ hijo.stdout.on("data", (c) => { const t = c.toString("utf8"); process.stdout.wri
 hijo.stderr.on("data", (c) => { const t = c.toString("utf8"); process.stderr.write(t); mirar(t); });
 
 hijo.on("close", (code) => {
+  clearInterval(vigilanteInactividad);
   logEventos.end();
   const hallazgos = fs.existsSync(rutaHallazgos) ? fs.readFileSync(rutaHallazgos, "utf8") : "";
   const n = (hallazgos.match(/^\[(BLOQUEANTE|SERIO|MENOR)\]/gm) ?? []).length;
+  const porGravedad = (nivel) => (hallazgos.match(new RegExp(`^\\[${nivel}\\]`, "gm")) ?? []).length;
+
   console.log(`\n${"=".repeat(60)}`);
   console.log(`codex termino con codigo ${code}`);
-  console.log(`hallazgos anexados en vivo: ${n}  ->  ${rutaHallazgos}`);
-  if (code !== 0) {
+  console.log(
+    `hallazgos anexados en vivo: ${n}` +
+      (n > 0 ? ` (${porGravedad("BLOQUEANTE")} bloqueantes, ${porGravedad("SERIO")} serios, ${porGravedad("MENOR")} menores)` : "") +
+      `  ->  ${rutaHallazgos}`
+  );
+
+  if (cuotaAgotada) {
+    // El caso que ya costo dos rondas: no es un fallo del trabajo, es
+    // administrativo. Se dice con todas las letras y con el comando delante.
+    console.log(`\n${"*".repeat(60)}`);
+    console.log(`CUOTA AGOTADA -- hay que CAMBIAR DE CUENTA para continuar.`);
+    console.log(`${"*".repeat(60)}`);
+    console.log(`\nNo se perdio nada: los ${n} hallazgos ya estan en disco y la sesion`);
+    console.log(`entera esta guardada. Al reanudar, codex conserva lo que ya razono`);
+    console.log(`y ejecuto -- no repite el trabajo.\n`);
+    console.log(`  1. inicia sesion con la otra cuenta:`);
+    console.log(`       codex login`);
+    if (sessionId) {
+      console.log(`\n  2. reanuda exactamente donde se quedo:`);
+      console.log(`       node scripts/codex-review.mjs --resume ${sessionId} ${dirSalida.replace(/\\/g, "/")}`);
+    }
+    console.log(`\n  (detalle completo en ${rutaReanudar})\n`);
+  } else if (code !== 0) {
     console.log(`\nNO se completo. El trabajo NO se perdio:`);
     console.log(`  - hallazgos confirmados: ${rutaHallazgos}`);
     if (sessionId) console.log(`  - como continuar:        ${rutaReanudar}`);
   }
-  process.exit(code ?? 1);
+
+  // La cuota no es un fallo de la revision: se distingue del resto (2) para que
+  // quien automatice esto pueda reintentar con otra cuenta sin confundirlo con
+  // un hallazgo o un error real.
+  process.exit(cuotaAgotada ? 2 : code ?? 1);
 });
