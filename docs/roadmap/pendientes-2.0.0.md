@@ -1,6 +1,6 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (33 commits sobre `develop`).
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (33 commits sobre `develop`), tras siete rondas de revision adversarial.
 `npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
@@ -8,12 +8,41 @@ primero, porque bloquea al resto.
 
 ---
 
+## Bloquea el push
+
+- [ ] **El refactor que quita el presupuesto global (`d698112`) no está
+      revisado.** La ronda 8 se lanzó y **murió a mitad**: Codex agotó el límite
+      de uso de su cuenta (plan `free`, reset el 13-sep-2026) justo cuando
+      empezaba a mutar. No emitió **ni un solo hallazgo**. El historial de esta
+      rama es inequívoco —las rondas 6 y 7 encontraron que los arreglos de la
+      ronda anterior no arreglaban lo que decían—, así que empujar un refactor
+      de −400 líneas sin revisión repetiría el patrón exacto que costó tres
+      rondas corregir.
+      **Opciones:** esperar al reset de Codex, usar otra cuenta, o cerrar el
+      barrido de mutación a mano (empezado, ver abajo).
+- [ ] **Terminar el barrido de mutación sobre los 14 casos.** Hay un arnés
+      escrito que aplica 16 mutaciones sobre la copia POSIX y reporta cuáles
+      sobreviven. Quedó sin ejecutar por un problema de escapado al invocarlo
+      desde PowerShell. Es el sustituto directo de lo que Codex iba a entregar.
+      Contexto que lo justifica: en la ronda 7, Codex encontró que **6 de 7**
+      mutaciones sobrevivían — los tests eran más débiles de lo que sus propios
+      comentarios afirmaban.
+- [ ] **Cerrar el hueco que Codex dejó señalado y sigue abierto:** los casos 13
+      y 18 pasan igual si el primer kill fuese `SIGKILL`. Prueban que el nieto
+      muere, no que haya **una fase de gracia seguida de escalada**. Y
+      `kill(pid, 0)` no distingue un zombi de un proceso vivo.
+
 ## Espera decisión del mantenedor
 
-- [ ] **Publicar 2.0.0.** La rama está lista. Falta `git push`, PR contra
-      `develop` y decidir si se publica a npm. El gate local
-      (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
-      `-Strict`.
+- [ ] **Publicar 2.0.0.** Falta `git push`, PR contra `develop` y decidir si se
+      publica a npm. El gate local (`scripts/validate-local-gate.ps1`) no se ha
+      ejecutado todavía en modo `-Strict`. **Sujeto a cerrar el bloque de
+      arriba.**
+- [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
+      mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
+      aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
+      primer push. Hoy nada en el repo lo garantiza: en Windows esos casos se
+      saltan con `SKIP` y el verde es engañoso.
 - [ ] **Número de versión del modelo de riesgos** (ADR 0008). No cabe en una
       minor: «superficie sin clasificar ⇒ firma obligatoria» bloquea a todo
       consumidor existente en su siguiente gate humano. Probablemente 3.0.0; se

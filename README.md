@@ -274,7 +274,39 @@ Aquí es donde la mayoría de repos se atascan, y el framework tiene una respues
 | `F10.dependency-violations` | F10 | violaciones de dependencias | 0 | 0 | 0 | `ratchet` |
 | `F10.dependency-cycles` | F10 | ciclos de dependencias | 0 | 0 | 0 | `ratchet` |
 
-La cobertura es de **líneas cambiadas**, no del repo entero: un repo con 12 % histórico no queda bloqueado, pero lo que toque hoy sí responde por sí mismo. Y `min_denominator` decide si un gate juzga o es vacuo — «0 violaciones» y «0 violaciones sobre ≥10 módulos escaneados» son controles distintos.
+La cobertura es de **líneas cambiadas**, no del repo entero: un repo con 12 % histórico no queda bloqueado, pero lo que toque hoy sí responde por sí mismo.
+
+**El denominador mínimo es parte del umbral, no un detalle.** «0 violaciones» y «0 violaciones sobre ≥10 módulos escaneados» son controles distintos: el primero lo cumple un repo vacío. Los de fábrica:
+
+| Gate | Denominador | Mínimo | Qué evita |
+| --- | --- | --- | --- |
+| `F8.changed-lines-coverage` | `coverage.changed_lines_total` | **1** | Que un PR sin líneas nuevas dé 100 % |
+| `F9.mutation-survivors` | `mutation.total` | **1** | Que «0 supervivientes» sea «0 mutantes generados» |
+| `F9.no-coverage-mutants` | `mutation.total` | **1** | Igual que el anterior |
+| `F10.dependency-violations` | `dependencies.modules_scanned` | **10** | Que «0 violaciones» sea «0 módulos escaneados» |
+| `F10.dependency-cycles` | `dependencies.modules_scanned` | **10** | Igual que el anterior |
+
+Por debajo del mínimo el gate no pasa ni falla: se marca como no concluyente.
+
+**La escalera de adopción (ADR 0007): ningún control nace en `block`.**
+
+| Modo | Qué hace | Cuándo se usa |
+| --- | --- | --- |
+| `observe` | Mide y reporta. Nunca bloquea. | Entrada obligatoria de todo gate nuevo |
+| `ratchet` | Bloquea solo si **empeora** respecto de la línea base | Cuando ya hay baseline promovido |
+| `block` | Bloquea contra el umbral absoluto | Solo cuando el repo ya lo cumple de forma estable |
+
+`enforcement: observe` en la cabecera del contrato es el interruptor global; un gate en `ratchet` con línea base vacía se comporta como `observe` puro. La línea base se mueve con `sdlc quality-baseline --promote`, que exige `--source ci` o un `--allow-local` explícito.
+
+**Cada probe declara su propio presupuesto y su política de ausencia:**
+
+| Probe | Métricas | Timeout | Si no emite reporte |
+| --- | --- | --- | --- |
+| `coverage` | `coverage.*` | 120 s | `warn` |
+| `deps` | `dependencies.*` | 60 s | `warn` |
+| `mutation` | `mutation.*` | 3600 s (1 h) | `skip` |
+
+`when_absent: warn` avisa pero no bloquea; `skip` lo omite en silencio, que es lo correcto para mutación, cuyo coste no siempre se paga en cada corrida. `applies_when.min_subjects` evita lanzar el probe cuando no hay nada que mutar. Y `command` es el **nombre de un script de `package.json`**, no una línea de shell: el engine lo invoca con el package manager detectado y rechaza cualquier token con metacaracteres.
 
 **Si tu repo no puede medir alguno de esos, declara el probe no disponible con motivo escrito:**
 
@@ -331,6 +363,24 @@ slices:                            # lo que `sdlc status` adjudica entero
 ```
 
 Es aditivo: un `phase-status.yaml` sin el mapa se comporta exactamente como antes.
+
+### 6. Límites del runtime (normalmente no hay que tocarlos)
+
+El framework lanza procesos externos —`git` sobre todo— y captura su salida. Esos límites viven en `src/file-utils.js` y **no están en ningún archivo de configuración a propósito**: cambiarlos mal rompe la propiedad que sostiene toda la verificación. Se documentan porque un repo muy grande puede necesitar subirlos.
+
+| Constante | Valor | Qué acota |
+| --- | --- | --- |
+| `CAPTURE_CEILING_BYTES` | 256 MiB | Techo de diseño: memoria retenida con el pool caliente al completo |
+| `TREE_HASH_MAX_BUFFER` | **64 MiB** | Tope por llamada del hash de árbol. Es `CAPTURE_CEILING_BYTES / 4` |
+| `AUDIT_CONCURRENCY` | 4 | Atestaciones verificadas a la vez (`src/harness.js`) |
+| `maxBuffer` (por llamada) | 1 MiB por defecto | Salida capturada de un proceso. **Un solo presupuesto entre `stdout` y `stderr`**, igual que `spawnSync` |
+| `killGraceMs` | 2 s (máx. 30 s) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
+
+**La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con `AUDIT_CONCURRENCY = 4` y 64 MiB por llamada, eso da exactamente el techo de 256 MiB. Si cambias uno, cambia el otro.
+
+**Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Si tu monorepo pasa de ahí, pasa tu propio `maxBuffer` — **pero en las dos vías**, la síncrona y la asíncrona. Que declaren el mismo número es lo único que garantiza que acepten y rechacen las mismas entradas; si divergen, la auditoría y el gate pueden juzgar distinto la misma firma, y ese desacuerdo no se ve.
+
+**`killGraceMs` está acotado arriba por seguridad.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta: una gracia larga convierte un riesgo despreciable en uno real.
 
 ## Firma humana: emitir, enlazar y auditar
 
