@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
-import { adjudicateFromEvidence, loadQualityContract } from "./quality-adjudicate.js";
+import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
+import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "./evidence-writer.js";
+import { gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -270,9 +272,21 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
           // Un id declarado que no resuelve en quality-contract.yaml se trata
           // como propio por omision: silenciar el aviso por un id roto seria
           // el vacio equivocado.
+          // Y tampoco cuenta como "propio" un gate cuya metrica depende de un
+          // probe que el repo declaro NO DISPONIBLE con motivo escrito: exigir
+          // `quality_metrics` por un gate que ya se adjudica como
+          // `not-applicable` es pedir la medicion que se acaba de declarar
+          // imposible. Reproducido contra el consumidor: declarar el probe
+          // `coverage` no disponible quitaba `quality-gate-not-measured` pero
+          // dejaba `quality-metrics-absent`, el mismo bloqueo con otro nombre.
+          const unavailablePrefixes = new Set(
+            resolveUnavailableProbes(qualityContractLoaded.contract).resolved.map((probe) => probe.prefix)
+          );
           declaresOwnQualityGates = declaredGateIds.some((gateId) => {
             const gate = gatesById.get(gateId);
-            return !gate || gate.phase === phase.id;
+            if (!gate) return true;
+            if (gate.phase !== phase.id) return false;
+            return !unavailablePrefixes.has(String(gate.metric ?? "").split(".")[0]);
           });
         }
       }
@@ -295,8 +309,31 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
           evidenceBlockers.push("human-gate-signoff-missing");
-        } else if (!signoff.review_id) {
-          evidenceWarnings.push("human-gate-signoff-unverifiable");
+        } else {
+          // Hay DOS clases de firma y valen cosas distintas: una atestacion es
+          // un commit firmado que se puede volver a verificar, y una
+          // declaracion es texto que el propio agente escribe. Antes se
+          // trataban igual salvo por un aviso si faltaba `review_id`, asi que
+          // el gate humano "pasaba" con una linea de YAML.
+          const attestationCommit = signoff.attestation_commit ?? null;
+          const declaredClass =
+            signoff.signature_class ?? (attestationCommit ? "attestation" : signoff.review_id ? "platform-review" : "declarative");
+          evidence.signatureClass = declaredClass;
+
+          if (attestationCommit) {
+            const verification = verifyEvidenceAttestation(target, { slice, phase: phase.id, commitSha: attestationCommit });
+            evidence.attestation = verification;
+            // Una atestacion declarada que NO verifica es peor que no declarar
+            // ninguna: afirma una garantia que no existe.
+            if (!verification.ok) evidenceBlockers.push(`human-gate-attestation-invalid:${verification.code}`);
+            else if (verification.fresh === false) evidenceWarnings.push("human-gate-attestation-stale");
+          } else if (declaredClass === "attestation") {
+            evidenceBlockers.push("human-gate-attestation-commit-missing");
+          } else if (!signoff.review_id) {
+            evidenceWarnings.push("human-gate-signoff-declarative");
+          } else {
+            evidenceWarnings.push("human-gate-signoff-unverifiable");
+          }
         }
       }
     }
@@ -319,6 +356,10 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         gates: declaredGates,
         evaluated: adjudication.evaluated,
         vacuous: adjudication.vacuous,
+        // Lo declarado no medible, con su motivo. Sin esto, quien lee
+        // `phase-gate` ve que un gate no aparece y no sabe si es que paso, si
+        // no se midio o si se declaro no aplicable.
+        notApplicable: adjudication.notApplicable ?? [],
         // `findings` trae los hallazgos que no son de gate: superficie
         // fantasma, baseline manipulado y el drift del ancla del probe. Se
         // calculaban y se DESCARTABAN aqui, asi que nunca llegaban a quien lee
@@ -591,16 +632,10 @@ export function commandStatus(options) {
   const sliceFromOpts = options.slice ?? null;
   let resolvedPhase = phaseFromOpts;
   let resolvedSlice = sliceFromOpts;
+  const phaseStatus = readPhaseStatus(target);
   if (!resolvedPhase || !resolvedSlice) {
-    try {
-      const raw = fs.readFileSync(phaseStatusPath, "utf8");
-      for (const line of raw.split("\n")) {
-        const mp = line.match(/^\s*current_phase:\s*"?([^"\r\n]+?)"?\s*$/);
-        const ms = line.match(/^\s*current_slice:\s*"?([^"\r\n]+?)"?\s*$/);
-        if (mp) resolvedPhase = resolvedPhase ?? mp[1].trim();
-        if (ms) resolvedSlice = resolvedSlice ?? ms[1].trim();
-      }
-    } catch { /* phase-status.yaml absent */ }
+    resolvedPhase = resolvedPhase ?? phaseStatus.pointer.phase;
+    resolvedSlice = resolvedSlice ?? phaseStatus.pointer.slice;
   }
   if (resolvedPhase && resolvedSlice) {
     const pgOptions = { ...options, phase: resolvedPhase, slice: resolvedSlice, "exit-code": true };
@@ -635,6 +670,20 @@ export function commandStatus(options) {
     };
   }
 
+  // Estado de CADA slice declarado. El puntero decide el veredicto, pero un
+  // slice en vuelo que nadie mira es un slice que puede llegar a merge sin que
+  // su fase lo permita: por eso se adjudica tambien, y se reporta aparte.
+  const otherSlices = phaseStatus.slices.map((slice) => {
+    if (!slice.id || !slice.phase) {
+      return { ...slice, phaseGate: { status: "skipped", message: "el slice no declara fase" } };
+    }
+    if (slice.id === resolvedSlice && slice.phase === resolvedPhase && phaseGateResult) {
+      return { ...slice, phaseGate: { exitCode: phaseGateExitCode, status: phaseGateResult.status ?? null } };
+    }
+    const result = commandPhaseGate({ ...options, phase: slice.phase, slice: slice.id, "exit-code": true });
+    return { ...slice, phaseGate: { exitCode: result.exitCode, status: result.payload?.status ?? null, blockers: result.payload?.blockers ?? undefined } };
+  });
+
   const govOk = govResult.exitCode === EXIT_OK;
   const toolsOk = toolsResult.exitCode === EXIT_OK;
   const phaseOk = phaseGateResult === null || phaseGateExitCode === EXIT_OK;
@@ -654,7 +703,11 @@ export function commandStatus(options) {
     phaseGate: phaseGateResult
       ? { exitCode: phaseGateExitCode, phase: resolvedPhase, slice: resolvedSlice, ...phaseGateResult }
       : { exitCode: EXIT_OK, status: "skipped", message: "No se resolvio phase/slice" },
-    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" }
+    quality: qualityResult ?? { status: "skipped", message: "No se resolvio phase/slice" },
+    // Todos los slices declarados, no solo el apuntado. `ready` sigue saliendo
+    // del puntero: esto informa sin cambiar el veredicto, que es lo que permite
+    // que sea aditivo y no rompa a nadie al actualizar.
+    slices: otherSlices
   };
 
   if (writeMd) {
@@ -690,6 +743,22 @@ export function commandStatus(options) {
       `| phase-gate (${resolvedPhase ?? "?"}/${resolvedSlice ?? "?"}) | ${phaseStatus} |`,
       `| quality | ${qualityStatus} |`,
       "",
+      ...(otherSlices.length > 1
+        ? [
+            "## Slices declarados",
+            "",
+            "El veredicto de arriba sale del puntero. Estos son todos los slices que",
+            "`phase-status.yaml` declara, con su phase-gate adjudicado por separado.",
+            "",
+            "| slice | fase | phase-gate | puntero |",
+            "|---|---|---|---|",
+            ...otherSlices.map(
+              (slice) =>
+                `| ${slice.id} | ${slice.phase ?? "?"} | ${slice.phaseGate?.status ?? "?"} | ${slice.isPointer ? "sí" : ""} |`
+            ),
+            ""
+          ]
+        : []),
       "## Details",
       "",
       `### governance-check`,
@@ -822,6 +891,338 @@ export function commandGovernanceCheck(options) {
   };
 }
 
+/**
+ * Re-verifica la atestacion que la evidencia DECLARA, en vez de creerle.
+ *
+ * El sujeto se recomputa aqui —arbol de las superficies del contrato, leido en
+ * el commit firmado— igual que en `sdlc signoff --verify`: la evidencia aporta
+ * el sha del commit y nada mas. Cualquier otro dato que trajera declarado seria
+ * exactamente el hueco que la atestacion cierra.
+ */
+function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = null) {
+  // La cache guarda HECHOS INMUTABLES dentro de una misma corrida —el contrato,
+  // los maintainers y el hash de un arbol en un ref—, nunca veredictos. Un
+  // veredicto cacheado seria una respuesta que ya no se recomputa, que es
+  // justo lo que este modulo existe para no hacer.
+  //
+  // El motivo es medido: la auditoria costaba ~485 ms por atestacion, y de esos,
+  // recalcular el arbol de HEAD una vez POR atestacion era puro desperdicio: es
+  // el mismo valor en todas.
+  const memo = cache ?? { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
+
+  if (memo.contract === undefined) memo.contract = loadQualityContract(target);
+  if (!memo.contract.ok) {
+    return { ok: false, code: "quality-contract-missing", detail: "sin quality-contract.yaml no hay superficies con las que recomputar el sujeto" };
+  }
+  if (memo.maintainers === undefined) {
+    try {
+      memo.maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
+    } catch {
+      memo.maintainers = [];
+    }
+  }
+  if (memo.maintainers.length === 0) {
+    return { ok: false, code: "governance-maintainers-missing", detail: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida" };
+  }
+
+  const surfacePaths = (memo.contract.contract.surfaces ?? []).map((surface) => surface.path);
+  const treeAt = (ref) => {
+    if (!memo.trees.has(ref)) memo.trees.set(ref, computeTreeHashAtRef(target, surfacePaths, ref));
+    return memo.trees.get(ref);
+  };
+
+  // `HEAD` se resuelve a OID UNA vez y se usa como clave de cache Y como
+  // `headRef`. Con la clave literal "HEAD", si otro proceso movia la rama a
+  // mitad de pasada la cache servia el arbol del HEAD viejo mientras
+  // `merge-base` leia el HEAD vivo: la entrada dejaba de ser un hecho
+  // inmutable, que es la unica cosa que esta cache tiene permitido guardar.
+  if (memo.headOid === undefined) {
+    const resolved = spawnSync("git", ["rev-parse", "HEAD^{commit}"], { cwd: target, encoding: "utf8" });
+    memo.headOid = resolved.status === 0 ? (resolved.stdout ?? "").trim() : null;
+  }
+  const headRef = memo.headOid ?? "HEAD";
+
+  const approved = treeAt(commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+  const current = treeAt(headRef);
+  return verifySignoff({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers: memo.maintainers,
+    headRef,
+    currentTreeHash: current.ok ? current.hash : null
+  });
+}
+
+// Tres veredictos, no dos. "No se pudo comprobar" no es "la firma es mala",
+// pero TAMPOCO es evidencia apta para autorizar, y meterlo en el mismo saco que
+// un aviso cosmetico fue un error propio: dejaba que `upgrade` terminara en `ok`
+// con atestaciones que nadie habia podido verificar.
+//
+//  - `invalid`      la firma existe y no vale. Error en todas partes.
+//  - `unverifiable` no hay con que comprobarla. Se reporta como aviso
+//                   diagnostico, pero NUNCA produce exito ni deja pasar un gate.
+//  - `valid`        verificada.
+//
+// Solo la historia incompleta del repo entra en `unverifiable`: un clon
+// superficial no trae el commit atestado, y eso no es culpa de nadie. Un repo
+// SIN maintainers o SIN contrato es otra cosa: es configuracion local que
+// desactiva el verificador entero, y clasificarla como incertidumbre permitiria
+// apagar el control borrando seis lineas de config.
+const ATTESTATION_UNVERIFIABLE = new Set(["tree-ref-unreadable", "signoff-commit-not-found"]);
+
+/**
+ * Verificacion asincrona de UNA atestacion, compartiendo cache con el resto de
+ * la pasada. La cache guarda PROMESAS, no valores: con el pool corriendo, dos
+ * tareas pueden pedir el mismo arbol a la vez, y guardar la promesa hace que la
+ * segunda espere a la primera en vez de lanzar otro `ls-tree` identico.
+ */
+async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha }, memo) {
+  if (memo.contract === undefined) memo.contract = loadQualityContract(target);
+  if (!memo.contract.ok) {
+    return { ok: false, code: "quality-contract-missing", detail: "sin quality-contract.yaml no hay superficies con las que recomputar el sujeto" };
+  }
+  if (memo.maintainers === undefined) {
+    try {
+      memo.maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
+    } catch {
+      memo.maintainers = [];
+    }
+  }
+  if (memo.maintainers.length === 0) {
+    return { ok: false, code: "governance-maintainers-missing", detail: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida" };
+  }
+
+  const surfacePaths = (memo.contract.contract.surfaces ?? []).map((surface) => surface.path);
+  const treeAt = (ref) => {
+    if (!memo.trees.has(ref)) {
+      // El `.catch` es defensa barata en el borde: si el primitivo llegara a
+      // rechazar, una promesa rechazada guardada en cache envenenaria a todos
+      // los consumidores de esa pasada. Se convierte a resultado tipado, que es
+      // lo que el resto del codigo sabe manejar.
+      memo.trees.set(
+        ref,
+        computeTreeHashAtRefAsync(target, surfacePaths, ref).catch((error) => ({
+          ok: false,
+          hash: null,
+          files: 0,
+          code: "tree-ref-unreadable",
+          detail: error?.message ?? String(error)
+        }))
+      );
+    }
+    return memo.trees.get(ref);
+  };
+
+  // `HEAD` se resuelve a OID UNA vez y se usa como clave de cache Y como
+  // `headRef`. Con la clave literal "HEAD", si otro proceso movia la rama a
+  // mitad de pasada la cache servia el arbol del HEAD viejo mientras
+  // `merge-base` leia el HEAD vivo: la entrada dejaba de ser un hecho inmutable,
+  // que es la unica cosa que esta cache tiene permitido guardar.
+  if (memo.headOid === undefined) {
+    memo.headOid = gitAsync(["rev-parse", "HEAD^{commit}"], target)
+      .then((result) => (result.ok ? result.stdout : null))
+      .catch(() => null);
+  }
+  const headRef = (await memo.headOid) ?? "HEAD";
+
+  const approved = await treeAt(commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+  const current = await treeAt(headRef);
+  return verifySignoffAsync({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers: memo.maintainers,
+    headRef,
+    currentTreeHash: current.ok ? current.hash : null
+  });
+}
+
+// Cuantas atestaciones se verifican a la vez. Cuatro y no "todas": cada una
+// lanza varios procesos de git, y un `Promise.all` sin limite sobre un repo con
+// cincuenta firmas abriria cientos de procesos y pelearia por el agente de
+// GPG/SSH. Medido, cuatro basta para bajar el orden de magnitud.
+export const AUDIT_CONCURRENCY = 4;
+
+export async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      // Cada tarea atrapa lo suyo. Sin esto, `Promise.all` rechazaba con la
+      // PRIMERA excepcion, `auditAttestations` abortaba entera y los demas
+      // corredores seguian trabajando en segundo plano sobre un informe que ya
+      // nadie iba a leer. Peor en `upgrade`, donde eso ocurre despues de haber
+      // escrito la migracion: el resultado estructurado se perdia y salia el
+      // error generico del CLI.
+      //
+      // Una excepcion se convierte en veredicto FAIL-CLOSED, no en silencio:
+      // una atestacion que no se pudo juzgar no puede contar como buena.
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        results[index] = { ok: false, code: "attestation-audit-failed", detail: error?.message ?? String(error) };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
+ * Recorre la evidencia escrita y re-verifica TODA atestacion declarada.
+ *
+ * Existe porque una atestacion rota se descubria tarde: al llegar al gate humano
+ * de esa fase, con el trabajo ya hecho. Tras una actualizacion que cambia el
+ * formato del sujeto, "tarde" puede ser semanas despues. `doctor` y `upgrade`
+ * la usan para que el descubrimiento ocurra cuando todavia es barato.
+ *
+ * Es ASINCRONA porque el coste medido lo exigia: ~280 ms por atestacion en
+ * serie, o sea 14 s en un repo con cincuenta firmas, en CADA `doctor`. El
+ * trabajo es esperar a procesos de git, no calcular, asi que se solapa.
+ *
+ * No intenta atribuir la causa: un `subject-mismatch` puede venir de una
+ * actualizacion del framework o de un cambio posterior del contrato, y el sujeto
+ * no guarda la lista historica de superficies con la que se emitio.
+ */
+export async function auditAttestations(target) {
+  const root = path.join(target, ".github", "agent-state", "evidence");
+  const result = { checked: 0, findings: [] };
+  if (!pathExists(root)) return result;
+
+  // Una sola cache para toda la pasada: contrato, maintainers, OID de HEAD y
+  // arboles por ref. Vive y muere con esta llamada, asi que no hay nada que
+  // invalidar.
+  const memo = { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
+
+  // Primero se recoge QUE hay que verificar —lectura de YAML, barata y
+  // secuencial— y despues se verifica en paralelo. Mezclarlo daria un orden de
+  // hallazgos dependiente de quien termine antes.
+  // Se ordena explicitamente y POR BYTES: `readdirSync` no garantiza orden entre
+  // sistemas de archivos, y dos corridas sobre el mismo repo tienen que producir
+  // el mismo informe. `localeCompare` no sirve para esto — sin locale explicito
+  // depende del ICU de la maquina, y `["z","a-con-dieresis"]` sale en un orden
+  // en ingles y en otro en sueco. Un orden contractual no puede depender de la
+  // configuracion regional de quien corre el comando.
+  const pendientes = [];
+  const sliceEntries = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => Buffer.compare(Buffer.from(a.name, "utf8"), Buffer.from(b.name, "utf8")));
+  for (const sliceEntry of sliceEntries) {
+    const sliceDir = path.join(root, sliceEntry.name);
+    for (const file of fs.readdirSync(sliceDir).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) {
+      if (!file.endsWith(".yaml")) continue;
+      const phase = file.replace(/\.yaml$/, "");
+      const read = readEvidenceFile(path.join(sliceDir, file));
+      const commitSha = read.ok ? read.evidence?.human_gate_signoff?.attestation_commit ?? null : null;
+      if (!commitSha) continue;
+      pendientes.push({ slice: sliceEntry.name, phase, commitSha });
+    }
+  }
+
+  result.checked = pendientes.length;
+  if (pendientes.length === 0) return result;
+
+  const verificaciones = await runPool(pendientes, (item) => verifyEvidenceAttestationAsync(target, item, memo));
+
+  // Los hallazgos salen en el orden de LECTURA, no en el de terminacion: dos
+  // corridas sobre el mismo repo tienen que producir la misma salida.
+  for (const [index, verification] of verificaciones.entries()) {
+    if (verification.ok) continue;
+    const { slice, phase, commitSha } = pendientes[index];
+    const unverifiable = ATTESTATION_UNVERIFIABLE.has(verification.code);
+    result.findings.push({
+      level: unverifiable ? "warning" : "error",
+      // El veredicto es lo que consumen `upgrade` y los gates; el `level` solo
+      // dice como pintarlo. Un `unverifiable` que se leyera por su nivel pasaria
+      // por aviso inocuo.
+      verdict: unverifiable ? "unverifiable" : "invalid",
+      code: `attestation-${verification.code}`,
+      slice,
+      phase,
+      commit: commitSha,
+      detail: verification.detail ?? null,
+      // Re-firmar NO repara una firma buena que el clon no puede leer: ahi lo
+      // que falta es la historia, no la firma.
+      hint: unverifiable
+        ? `traer la historia que falta (\`git fetch --unshallow\` o el objeto ${String(commitSha).slice(0, 12)}) y repetir; si el commit no existe de verdad, \`sdlc signoff --slice ${slice} --phase ${phase} --create --record\``
+        : `sdlc signoff --slice ${slice} --phase ${phase} --create --record`
+    });
+  }
+  return result;
+}
+
+/**
+ * Lee `.github/agent-state/phase-status.yaml`.
+ *
+ * `current_slice`/`current_phase` son un puntero UNICO, y el arbitro lo lee
+ * para decidir que evalua. Con varios slices en vuelo —tres a la vez en
+ * manga-translator-mvp— eso significa que se evalua uno y los demas quedan
+ * invisibles: no fallan, no aparecen, no existen para el tablero.
+ *
+ * El mapa `slices:` es ADITIVO: el puntero se conserva tal cual (los workflows
+ * de los consumidores lo grepean y no se rompen), y quien declare el mapa
+ * obtiene ademas el estado de cada slice. Sin mapa, se deriva una entrada del
+ * propio puntero, asi que un phase-status antiguo se comporta igual que antes.
+ *
+ * @returns {{pointer: {slice: string|null, phase: string|null}, slices: Array, declared: boolean, parsed: boolean}}
+ */
+export function readPhaseStatus(target) {
+  const raw = readTextIfExists(path.join(target, ".github", "agent-state", "phase-status.yaml"));
+  const empty = { pointer: { slice: null, phase: null }, slices: [], declared: false, parsed: false };
+  if (!raw) return empty;
+
+  let doc = null;
+  try {
+    doc = YAML.parse(raw);
+  } catch {
+    // YAML roto: se cae al parseo por lineas que se usaba antes, para no
+    // perder el puntero por un error en una parte del archivo que no importa.
+    const pointer = { slice: null, phase: null };
+    for (const line of raw.split("\n")) {
+      const mp = line.match(/^\s*current_phase:\s*"?([^"\r\n]+?)"?\s*$/);
+      const ms = line.match(/^\s*current_slice:\s*"?([^"\r\n]+?)"?\s*$/);
+      if (mp) pointer.phase = pointer.phase ?? mp[1].trim();
+      if (ms) pointer.slice = pointer.slice ?? ms[1].trim();
+    }
+    return { pointer, slices: pointer.slice ? [{ id: pointer.slice, phase: pointer.phase, isPointer: true }] : [], declared: false, parsed: false };
+  }
+
+  const pointer = {
+    slice: doc?.current_slice ? String(doc.current_slice).trim() : null,
+    phase: doc?.current_phase ? String(doc.current_phase).trim() : null
+  };
+  const declaredMap = doc?.slices && typeof doc.slices === "object" && !Array.isArray(doc.slices) ? doc.slices : null;
+  if (!declaredMap) {
+    return {
+      pointer,
+      slices: pointer.slice ? [{ id: pointer.slice, phase: pointer.phase, isPointer: true, phasesCompleted: doc?.phases_completed ?? [] }] : [],
+      declared: false,
+      parsed: true
+    };
+  }
+
+  const slices = Object.entries(declaredMap).map(([id, value]) => ({
+    id,
+    phase: value?.phase ? String(value.phase).trim() : null,
+    phaseName: value?.phase_name ?? null,
+    phasesCompleted: value?.phases_completed ?? [],
+    isPointer: id === pointer.slice
+  }));
+  // El puntero apunta a un slice que el mapa no declara: el tablero y el mapa
+  // se contradicen y hay que decirlo, no elegir uno en silencio.
+  if (pointer.slice && !slices.some((slice) => slice.id === pointer.slice)) {
+    slices.push({ id: pointer.slice, phase: pointer.phase, isPointer: true, phasesCompleted: [], unlisted: true });
+  }
+  return { pointer, slices, declared: true, parsed: true };
+}
+
 function checkTool(name, probe) {
   const result = probe();
   return { name, ...result };
@@ -900,6 +1301,51 @@ export function commandToolsDoctor(options) {
       status: pathExists(path.join(target, ".github", "skills", "party-mode", "SKILL.md")) ? "ok" : "missing",
       path: ".github/skills/party-mode/SKILL.md"
     })),
+    // Preparacion para firmar (P5). Sin esto, un consumidor descubre que no
+    // puede atestar NADA en el momento en que un gate humano se lo pide, con la
+    // fase ya bloqueada: es lo que paso en manga-translator-mvp, donde
+    // `governance.maintainers` no existia y ningun commit de la historia estaba
+    // firmado (%G? = N en todos). Todo lo que se comprueba aqui es local y
+    // barato; no se firma nada de prueba.
+    checkTool("commit-signing", () => {
+      const rawConfig = readTextIfExists(path.join(target, ".sdlc", "config.json"));
+      let maintainers = [];
+      if (rawConfig) {
+        try {
+          maintainers = JSON.parse(rawConfig).governance?.maintainers ?? [];
+        } catch {
+          return { status: "warning", detail: ".sdlc/config.json ilegible: no se puede saber quien puede firmar." };
+        }
+      }
+      const gitConfig = (key) => firstLine(runCommand("git", ["config", "--get", key], target, 5_000).stdout ?? "");
+      const format = gitConfig("gpg.format") || "openpgp";
+      const signingKey = gitConfig("user.signingkey");
+      const allowedSigners = format === "ssh" ? gitConfig("gpg.ssh.allowedSignersFile") : null;
+
+      const missing = [];
+      if (maintainers.length === 0) {
+        missing.push("config.governance.maintainers esta vacio: `sdlc signoff --verify` aborta antes de mirar la firma");
+      }
+      if (!signingKey) {
+        missing.push("git config user.signingkey sin valor: `sdlc signoff --create` no puede firmar");
+      }
+      if (format === "ssh" && !allowedSigners) {
+        missing.push("gpg.format=ssh sin gpg.ssh.allowedSignersFile: `git verify-commit` rechaza cualquier firma");
+      }
+      if (format === "ssh" && allowedSigners && !pathExists(allowedSigners)) {
+        missing.push(`gpg.ssh.allowedSignersFile apunta a ${allowedSigners}, que no existe`);
+      }
+      // El formato de `%GS` depende del backend, y declarar el maintainer en la
+      // forma del otro backend es el error que mas cuesta diagnosticar.
+      const hint =
+        format === "ssh"
+          ? "Con SSH, git reporta como firmante el PRINCIPAL de allowed_signers (normalmente el email solo)."
+          : "Con GPG, git reporta como firmante el UID completo (\"Nombre <email>\").";
+
+      return missing.length > 0
+        ? { status: "warning", format, signingKey: Boolean(signingKey), maintainers: maintainers.length, detail: `${missing.join("; ")}. ${hint}` }
+        : { status: "ok", format, maintainers: maintainers.length, detail: hint };
+    }),
     // Un script de gate que resuelve `@latest` en cada corrida no es
     // reproducible (cambia de comportamiento cuando publican) y paga red cada
     // vez. Medido en un consumidor real: `npx @fission-ai/openspec@latest` era
@@ -943,6 +1389,10 @@ export function commandToolsDoctor(options) {
         level: required.has(tool.name) ? "error" : "warning",
         code: `tool-${tool.name}`,
         message: `${tool.name}: ${tool.status}`,
+        // El `detail` que produjo el propio probe: es lo unico que dice QUE
+        // falta en ESTE repo. El inventario describe la herramienta en general;
+        // no puede decir que a este consumidor le falta allowed_signers.
+        ...(tool.detail ? { detail: tool.detail } : {}),
         ...(meta
           ? {
               purpose: meta.purpose,

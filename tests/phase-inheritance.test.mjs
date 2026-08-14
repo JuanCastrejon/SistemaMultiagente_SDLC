@@ -46,9 +46,20 @@ function baseEvidence(phase, slice, extra = {}) {
 
 fs.mkdirSync(target, { recursive: true });
 run(["install", "--target", target, "--mode", "greenfield", "--project-name", "Demo", "--json"]);
-// Las superficies por defecto (apps/api core, apps/web standard) tienen que
-// existir en disco: sin esto checkSurfaces las marca fantasma y bloquea
-// SIEMPRE, independiente de lo que digan los gates.
+// El instalador ya no escribe superficies de ejemplo: las declara este test,
+// que es lo que hace un consumidor real. Tienen que existir tambien en disco,
+// porque si no checkSurfaces las marca fantasma y bloquea SIEMPRE,
+// independiente de lo que digan los gates.
+{
+  const configPath = path.join(target, ".sdlc", "config.json");
+  const installed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  installed.surfaces = [
+    { id: "backend", path: "apps/api", owner: "api-agent", tier: "core" },
+    { id: "web", path: "apps/web", owner: "web-agent", tier: "standard", hasUi: true }
+  ];
+  fs.writeFileSync(configPath, JSON.stringify(installed, null, 2), "utf8");
+  run(["upgrade", "--target", target, "--accept-managed", ".sdlc/config.json", "--json"]);
+}
 fs.mkdirSync(path.join(target, "apps", "api"), { recursive: true });
 fs.writeFileSync(path.join(target, "apps", "api", "index.ts"), "export const api = 1;\n", "utf8");
 fs.mkdirSync(path.join(target, "apps", "web"), { recursive: true });

@@ -2,6 +2,76 @@
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-08-13
+
+Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
+
+> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **tres** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
+
+### Fixed — firma humana (P5, ADR 0007)
+
+- **Una atestación dejaba de verificarse al commit siguiente.** El sujeto (`{slice, phase, tree_hash}`) se computaba sobre el **working tree en el momento de la llamada**, así que `sdlc signoff --verify` sobre una firma legítima devolvía `signoff-subject-mismatch` en cuanto entraba cualquier commit posterior — reproducido con la atestación F5 de `alineacion-del-arbitro-de-calidad`, inválida un solo commit después de emitirse. Una firma que no se puede volver a verificar no sirve como registro de que la fase se aprobó, que es exactamente para lo que existe. Ahora el árbol se lee de **git, en el commit que se presenta como firma** (`computeTreeHashAtRef`), y la verificación es reproducible indefinidamente.
+
+  Que el árbol se haya movido **después** es una pregunta distinta y ahora se responde aparte: `fresh: false` en la salida, y `--require-fresh` para quien exija que lo aprobado siga siendo lo actual (`signoff-stale`). Confundir validez con frescura era la causa raíz.
+
+- **Se podía firmar el vacío.** Con las superficies placeholder que deja el instalador (`apps/api`, `apps/web`) ninguna resuelve a archivos, el `tree_hash` es el SHA-256 de la cadena vacía y la firma resultaba **criptográficamente válida y semánticamente hueca**: atestaba la nada. Ahora es un error duro (`signoff-empty-subject`) tanto en `--create` como en `--verify`.
+
+- **El firmante declarado no podía coincidir nunca con `gpg.format=ssh`.** `%GS` devuelve el UID completo con GPG (`Nombre <email>`) y el **principal** de `allowed_signers` con SSH (normalmente el email solo); la comparación era igualdad exacta contra el valor declarado, y la documentación del propio módulo indicaba la forma GPG. Un consumidor con SSH tenía que averiguarlo empíricamente y gastó un commit de bootstrap en ello. Ahora se aceptan ambas formas y el error muestra **el `%GS` realmente observado** con la línea exacta a poner en `governance.maintainers`.
+
+- **`--create` asumía un keyid GPG.** `-S<clave>` pegado solo vale para GPG; con SSH la clave es una ruta o un literal. Se pasa con `-c user.signingkey`, que funciona en los dos formatos. Cubierto con un E2E de firma **SSH real**, además del de GPG que ya existía.
+
+- **Se podía firmar algo distinto de lo revisado.** El commit de atestación es vacío, así que su árbol es el de `HEAD`: con cambios sin commitear en las superficies, la firma aprobaba el árbol de `HEAD` y no lo que el humano tenía delante. Ahora se bloquea con `signoff-worktree-dirty` y la lista exacta de lo que estorba, salvo `--allow-dirty` explícito.
+
+### Added — la reparación deja de ser un texto en la migración
+
+- **Toda atestación declarada se re-verifica en `doctor` y en `upgrade`.** Una firma que dejó de valer se descubría al llegar al gate humano de su fase, con el trabajo ya hecho; tras una actualización que cambia el formato del sujeto, eso puede ser semanas después. `doctor` la reporta como error persistente y `upgrade` termina en `action-required` con la lista y el comando exacto de reparación —después de escribir los archivos, porque son justamente los que hacen falta para poder re-firmar—. Un commit ausente o un clon superficial se reportan como **aviso**, no como firma inválida: "no se pudo comprobar" y "no vale" son cosas distintas, y confundirlas daría falsos positivos en cualquier CI con `fetch-depth: 1`.
+
+- **`sdlc signoff --create --record`.** La nota de migración decía «volver a firmar con `sdlc signoff --create`», y ese comando crea el commit pero **no toca la evidencia**: `attestation_commit` existía solo como campo leído, nada lo escribía. La reparación documentada dejaba la evidencia apuntando a la firma vieja, el gate seguía bloqueando y el usuario creía haberlo arreglado. Ahora `--record` enlaza la firma con la evidencia de su fase, pero **solo después de verificarla por la misma ruta que usará el gate**; si no verifica, no escribe nada y lo dice. `approved_by` se deriva del firmante que reporta git (`%GS`), nunca de una opción, y la referencia anterior se conserva en `history`: re-firmar no borra a quien aprobó antes.
+
+  Escribir ese puntero desde el CLI no es el mismo pecado que redactar `quality_metrics`: aquellos son los valores que el gate juzga, mientras que `attestation_commit` solo dice **dónde mirar** — `phase-gate` reconstruye desde git el árbol, la ancestría, la firma, el `%G?`, el firmante y el trailer.
+
+### Added
+
+- **`tools-doctor` comprueba la preparación para firmar.** Antes, un consumidor descubría que no podía atestar nada en el momento en que un gate humano se lo pedía, con la fase ya bloqueada: en `manga-translator-mvp` no existía `governance.maintainers` y ningún commit de la historia estaba firmado. El probe `commit-signing` cruza maintainers declarados, `user.signingkey`, `gpg.format` y —en SSH— que `gpg.ssh.allowedSignersFile` esté configurado y exista, y explica qué forma de firmante espera cada backend. Los hallazgos de `tools-doctor` ahora arrastran el `detail` del propio probe: el inventario describe la herramienta en general y no puede decir qué le falta a **este** repo.
+
+### Fixed — árbitro de calidad
+
+- **Las superficies se declaran dos veces y nada las cruzaba.** `.sdlc/config.json` y `quality-contract.yaml` mantienen listas separadas; el contrato se genera desde el config al instalar y después divergen en silencio. Como el árbitro y la firma leen **solo el contrato**, corregir las superficies fantasma del config dejó el KPI sin cumplir y la firma hueca igual. Nuevo hallazgo `surface-declaration-divergent` con las superficies que están en un archivo y no en el otro — `warning`, por la misma escalera de adopción que los probes sin `command_sha256`.
+
+- **`sdlc status` era ciego a todos los slices menos uno.** `current_slice`/`current_phase` son un puntero único y el árbitro lo lee para decidir qué evalúa; con tres slices en vuelo se evaluaba uno y los demás no aparecían en ningún tablero. `phase-status.yaml` admite ahora un mapa `slices:` y `status` adjudica el phase-gate de cada uno. Aditivo: el puntero se conserva —los workflows que lo grepean siguen funcionando—, un archivo sin el mapa se comporta igual que antes, y el veredicto `ready` sigue saliendo del puntero. `validate-active-slices` cruza todos los slices declarados contra `openspec/changes/`, no solo el apuntado.
+
+### Fixed — instalación
+
+- **El instalador dejaba configuración falsa que parecía configuración real.** `surfaces: [apps/api, apps/web]` y cinco `<BACKEND_STACK>`: en un repo con otro layout eso no es un ejemplo, es configuración activa que hace vacuo todo gate y firma el árbol vacío. Ahora `install` escribe `surfaces: []` y `stack` en `null`, y el estado a medio configurar se ve desde el primer minuto (`config-surfaces-empty`, `config-stack-placeholder`, `quality-contract-surfaces-empty`, y `validate-surface-traceability` deja de dar verde con cero superficies). Se generan desde `config.surfaces` los dos artefactos que traían el mismo ejemplo fijo: `.github/agents/surface-traceability.json` y la superficie de las fichas `api-agent`/`web-agent`, que se resolvía por índice (`{{surfaces.0.path}}`).
+
+- **`sdlc adopt` no tenía camino para un repo sin `package.json`.** Respondía «exige un package.json existente: no es un scaffold» y ahí acababa la pista. Sigue sin ser un scaffold por defecto, pero ahora existe `--bootstrap-package-json` y, sin la bandera, el error dice el comando exacto.
+
+### Added — qué se mide y qué no
+
+- **Un probe puede declararse no disponible, con motivo escrito.** `quality-gate` salía exit 2 con `violations: 0`: no suspendía por calidad insuficiente, suspendía por **no poder evaluar**, y un rojo permanente que no distingue las dos cosas enseña a ignorar la señal. Con `unavailable: { reason }` en un probe, todos los gates que dependen de sus métricas salen `not-applicable` en un bucket propio que no entra en el status. Tres contenciones para que no sea una puerta trasera: sin `reason` no hay exención, si la métrica aparece igual manda el número medido y se avisa de que la declaración sobra, y los gates de otras familias siguen bloqueando. `quality-docs` documenta la exención con su motivo.
+
+### Fixed — encontrados probando 1.8.3 contra el consumidor antes de publicar
+
+- **CRLF dejaba a un consumidor Windows sin poder actualizar, para siempre.** `.sdlc/install-manifest.json` se versiona; con `core.autocrlf=true` git lo entrega en CRLF al hacer checkout, y el checksum se comparaba sobre **bytes crudos**. Resultado: `doctor` reportaba `manifest-integrity` y `sdlc upgrade` abortaba con «Manifest corrupto o editado manualmente» sin que nadie hubiera tocado el archivo — es decir, ese repo no podía recibir **ninguna** corrección, incluida esta. Ahora se compara y se escribe sobre contenido normalizado a LF (se sigue aceptando el hash crudo, así que ningún checksum ya escrito deja de validar) y una edición real del manifiesto se sigue detectando. Medido en `manga-translator-mvp`: `doctor` pasa de `error` a `drift` y `upgrade --dry-run` pasa de abortar a listar sus 7 conflictos por la vía documentada (`--accept-managed`).
+
+- **Declarar un probe no disponible quitaba un bloqueo y dejaba el mismo con otro nombre.** Los gates salían `not-applicable`, pero `phase-gate` seguía exigiendo `quality_metrics` en la evidencia (`quality-metrics-absent`): pedir la medición que se acaba de declarar imposible. Un gate cuya métrica depende de un probe no disponible ya no cuenta como medición propia prometida, y `phase-gate` publica `quality.notApplicable` con su motivo. Verificado sobre una copia del consumidor: F8 pasa de `blocked` a `ok` declarando el probe `coverage` no disponible.
+
+- **`quality-gate` publicaba sus hallazgos bajo una clave distinta que `phase-gate`** (`surfaceFindings` frente a `findings`), así que quien leía `findings` veía un `blocked` sin ninguna razón a la vista. Ahora van bajo las dos.
+
+### Fixed — continuidad y gate humano
+
+- **Un checkpoint sin redactar se presentaba como continuidad válida.** Los 12 checkpoints del vault de `manga-translator-mvp`, el más reciente incluido, tenían las cinco secciones narrativas en `_(pendiente de redactar)_`. `save` devuelve ahora `narrative: { complete, pending }` y `resume` reporta el estado del último checkpoint. La señal se calcula leyendo el **cuerpo**, no un campo de frontmatter: un campo que declara «completo» es tan fácil de escribir como la sección misma.
+
+- **El gate humano declarativo no exigía nada.** `human_gate_signoff` con un `approved_by` suelto es texto que el propio agente escribe, y `phase-gate` lo aceptaba con un aviso solo si faltaba `review_id`. Ahora la evidencia declara `signature_class` (`attestation` / `platform-review` / `declarative`, inferida si falta) y, cuando declara `attestation_commit`, **`phase-gate` re-verifica la firma de verdad**: recomputa el sujeto sobre las superficies del contrato en ese commit y comprueba firmante y trailer. Una atestación declarada que no verifica bloquea (`human-gate-attestation-invalid`), declararse `attestation` sin commit también (`human-gate-attestation-commit-missing`), y lo declarativo se nombra como tal (`human-gate-signoff-declarative`) en vez de confundirse con una revisión a la que solo le falta el identificador.
+
+- **`npm test` fallaba en cualquier máquina con `VAULT_PATH` configurado** —la de cualquier usuario real del framework—: el caso del fallback de vault heredaba el entorno del desarrollador en vez de construir el suyo.
+
+### Breaking
+
+- El `tree_hash` del sujeto de firma cambia de formato (object id de git por blob, en lugar de sha256 del contenido en disco). Las atestaciones emitidas con versiones anteriores no verifican; hay que volver a firmar. `computeTreeHash` (frescura de evidencia de calidad, P7) **no** cambia.
+- `install` deja de escribir superficies y stack de ejemplo. Un repo recién instalado sale en **error** en `doctor` hasta que se declaren las superficies reales. Los consumidores existentes no cambian: su configuración ya está en disco.
+- `.github/agents/surface-traceability.json` se genera desde `config.surfaces` y cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; un consumidor que lo consuma a mano debe revisarlo.
+
 ## [1.8.2] — 2026-08-09
 
 Los tres defectos de esta versión salieron de **usar** `sdlc save` en un repo recién instalado, no de leer el código.

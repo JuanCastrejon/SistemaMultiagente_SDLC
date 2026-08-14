@@ -29,16 +29,32 @@ const greenfield = path.join(tempRoot, "greenfield");
 fs.mkdirSync(greenfield, { recursive: true });
 run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name", "Demo", "--json"]);
 
+// El instalador YA NO escribe superficies de ejemplo. Antes dejaba `apps/api`
+// y `apps/web`, y en un repo con otro layout eso no era un ejemplo sino
+// configuracion activa: gates vacuos sobre paths inexistentes y sujeto de
+// firma sobre el arbol vacio, sin que nada lo dijera. Un repo recien instalado
+// declara CERO superficies y `doctor` lo marca como error.
 const installedContract = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"));
-assert.equal(installedContract.surfaces.length, 2);
-const backend = installedContract.surfaces.find((s) => s.id === "backend");
-assert.equal(backend.path, "apps/api");
-assert.equal(backend.tier, "core", "el default de fabrica declara tier explicito: paridad con lo que el template estatico traia antes de P6");
-assert.equal(backend.money_path, false);
-assert.equal(backend.has_ui, false);
-const web = installedContract.surfaces.find((s) => s.id === "web");
-assert.equal(web.tier, "standard");
-assert.equal(web.has_ui, true);
+assert.deepEqual(installedContract.surfaces, [], "install no inventa superficies");
+
+const installedConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
+assert.deepEqual(installedConfig.surfaces, []);
+assert.deepEqual(
+  Object.values(installedConfig.stack),
+  [null, null, null, null, null],
+  "el stack se instala en null, no con placeholders <BACKEND_STACK>"
+);
+
+let doctorPayload;
+try {
+  doctorPayload = JSON.parse(run(["doctor", "--target", greenfield, "--json"]));
+} catch (error) {
+  doctorPayload = JSON.parse(error.stdout.toString());
+}
+assert.ok(
+  doctorPayload.findings.some((finding) => finding.code === "config-surfaces-empty" && finding.level === "error"),
+  `doctor tiene que marcar el repo a medio configurar: ${JSON.stringify(doctorPayload.findings.map((f) => f.code))}`
+);
 
 // --- 2. el piloto real: superficie propia, no apps/api/apps/web ------------
 const config = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
@@ -113,3 +129,47 @@ assert.equal(
 );
 
 console.log("quality-contract-surfaces injection guard: PASS");
+
+// --- Divergencia entre las DOS declaraciones de superficies -----------------
+// Las superficies viven en `.sdlc/config.json` y en `quality-contract.yaml`, y
+// el arbitro y la firma leen SOLO el contrato. En manga-translator-mvp se
+// corrigieron las superficies fantasma del config y el KPI siguio sin cumplirse
+// y la firma siguio hueca, porque las mismas fantasmas seguian en el contrato.
+const driftTarget = path.join(tempRoot, "drift");
+fs.mkdirSync(path.join(driftTarget, ".sdlc"), { recursive: true });
+fs.mkdirSync(path.join(driftTarget, "src"), { recursive: true });
+fs.writeFileSync(path.join(driftTarget, "src", "index.js"), "export const z = 1;\n", "utf8");
+
+function writeDriftFiles(configSurfaces, contractSurfaces) {
+  fs.writeFileSync(
+    path.join(driftTarget, ".sdlc", "config.json"),
+    JSON.stringify({ schemaVersion: 1, project: { name: "Drift", slug: "drift" }, surfaces: configSurfaces }, null, 2),
+    "utf8"
+  );
+  fs.writeFileSync(
+    path.join(driftTarget, "quality-contract.yaml"),
+    YAML.stringify({ version: 1, enforcement: "observe", tiers: { core: { description: "unico" } }, surfaces: contractSurfaces, probes: [], gates: [] }),
+    "utf8"
+  );
+}
+
+writeDriftFiles(
+  [{ id: "app", path: "src", owner: "web-agent", tier: "core" }],
+  [{ id: "app", path: "apps/web", tier: "core" }]
+);
+const drifted = checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract);
+const divergence = drifted.find((finding) => finding.code === "surface-declaration-divergent");
+assert.ok(divergence, `se esperaba surface-declaration-divergent: ${JSON.stringify(drifted)}`);
+assert.equal(divergence.level, "warning", "escalera de adopcion: avisa, no rompe pipelines sanos al actualizar");
+assert.deepEqual(divergence.onlyInConfig, ["app@src"]);
+assert.deepEqual(divergence.onlyInContract, ["app@apps/web"]);
+
+// Sincronizadas: ni un hallazgo. Y `src/` existe, asi que tampoco fantasma.
+writeDriftFiles([{ id: "app", path: "src", owner: "web-agent", tier: "core" }], [{ id: "app", path: "src", tier: "core" }]);
+assert.deepEqual(checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract), []);
+
+// Sin superficies en el config no hay contra que cruzar: no se inventa nada.
+writeDriftFiles([], [{ id: "app", path: "src", tier: "core" }]);
+assert.deepEqual(checkSurfaces(driftTarget, loadQualityContract(driftTarget).contract), []);
+
+console.log("quality-contract-surfaces declaration drift: PASS");

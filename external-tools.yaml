@@ -61,6 +61,24 @@ tools:
     manual: "Instalar desde https://cli.github.com y autenticar con `gh auth login` (el login es un acto del usuario: pide credenciales)."
     docs: https://cli.github.com
 
+  - id: codex
+    name: Codex CLI
+    repo: https://github.com/openai/codex
+    purpose: >-
+      Segundo agente para contraste adversarial: revision, diagnostico y debate multi-ronda
+      contra las decisiones del agente principal. El puente esta documentado en AGENTS.md.
+    required: false
+    profile: ANALYSIS y ORCHESTRATION (una segunda voz no es gratis; en LEAN no se usa)
+    install: null
+    manual: >-
+      Instalar segun su README y autenticar con `codex login` (el login es un acto del usuario:
+      pide credenciales). ANTES de delegarle nada, ejecutar `node scripts/codex-session-check.mjs`:
+      la cuenta activa no se ve por ningun lado hasta que algo falla, y un turno largo contra una
+      cuenta sin cuota se corta a mitad y pierde el trabajo del turno. Ver la skill `codex-sesion`.
+    notUsedFor: >-
+      Sustituir el gate humano. Es otra voz, no otra autoridad: sus conclusiones entran como
+      argumento a contrastar, nunca como aprobacion.
+
   - id: codegraph
     name: CodeGraph
     repo: https://github.com/colbymchenry/codegraph

@@ -40,8 +40,23 @@ function newRepo(name) {
   });
   return target;
 }
+// El caso 1 comprueba el FALLBACK a `.sdlc/vault`, que solo ocurre cuando
+// `${VAULT_PATH}`/`${MEMORY_WORKSPACE}` no estan en el entorno. Heredar el
+// entorno del desarrollador hacia que la suite entera fallara aqui en
+// cualquier maquina con un vault configurado — es decir, en la de cualquier
+// usuario real del framework. El entorno del test se construye, no se hereda.
+const CLEAN_ENV = { ...process.env };
+delete CLEAN_ENV.VAULT_PATH;
+delete CLEAN_ENV.MEMORY_WORKSPACE;
+
 function save(target) {
-  return JSON.parse(execFileSync("node", [cli, "save", "--target", target, "--event", "manual", "--json"], { cwd: repoRoot, encoding: "utf8" }));
+  return JSON.parse(
+    execFileSync("node", [cli, "save", "--target", target, "--event", "manual", "--json"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: CLEAN_ENV
+    })
+  );
 }
 
 // --- 1. un marcador sin resolver NO puede viajar como ruta ------------------
@@ -153,3 +168,37 @@ console.log("save commits desde el anterior: PASS");
 }
 
 console.log("save checkpoint fuera de git: PASS");
+
+// --- 5. un checkpoint sin redactar no se presenta como continuidad ----------
+// Medido en manga-translator-mvp: los 12 checkpoints del vault, incluido el mas
+// reciente, tenian las cinco secciones narrativas en `_(pendiente de redactar)_`
+// y `resume` los mostraba como continuidad valida. El CLI escribe los huecos;
+// que sigan vacios tiene que verse.
+{
+  const target = newRepo("narrativa");
+  const saved = save(target);
+  assert.equal(saved.narrative.complete, false);
+  assert.equal(saved.narrative.pending.length, 5, JSON.stringify(saved.narrative));
+  assert.match(saved.message, /INCOMPLETO/);
+
+  const resumeSinRedactar = JSON.parse(
+    execFileSync("node", [cli, "resume", "--target", target, "--json"], { cwd: repoRoot, encoding: "utf8", env: CLEAN_ENV })
+  );
+  assert.equal(resumeSinRedactar.latestCheckpointNarrative.complete, false);
+
+  // El agente redacta: el estado cambia. La senal sale del CUERPO, no de un
+  // campo declarado, que seria tan facil de escribir como la seccion misma.
+  const redactado = fs
+    .readFileSync(saved.checkpoint, "utf8")
+    .split("_(pendiente de redactar)_")
+    .join("Lo que se decidio y por que, con su verificacion.");
+  fs.writeFileSync(saved.checkpoint, redactado, "utf8");
+
+  const resumeRedactado = JSON.parse(
+    execFileSync("node", [cli, "resume", "--target", target, "--json"], { cwd: repoRoot, encoding: "utf8", env: CLEAN_ENV })
+  );
+  assert.equal(resumeRedactado.latestCheckpointNarrative.complete, true);
+  assert.deepEqual(resumeRedactado.latestCheckpointNarrative.pending, []);
+}
+
+console.log("save narrativa sin redactar: PASS");

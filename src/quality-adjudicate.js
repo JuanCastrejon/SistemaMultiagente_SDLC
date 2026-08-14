@@ -25,10 +25,114 @@ export function loadQualityContract(target) {
   }
 }
 
+// Las superficies se declaran DOS veces: en `.sdlc/config.json` (con owner y
+// tier) y en `quality-contract.yaml` (con money_path y has_ui). El contrato se
+// genera desde el config al instalar, pero nada volvia a cruzarlos despues, y
+// el arbitro y la firma leen SOLO el contrato. Reproducido en
+// manga-translator-mvp: corregir las superficies fantasma en `.sdlc/config.json`
+// dejaba el KPI sin cumplir y la firma hueca igual, porque las mismas
+// superficies fantasma seguian en el contrato. La divergencia era detectable
+// desde antes, solo que nadie la habia cruzado.
+function surfaceKeys(surfaces) {
+  return new Set((surfaces ?? []).map((surface) => `${surface.id ?? "?"}@${String(surface.path ?? "").replace(/\\/g, "/").replace(/\/+$/, "")}`));
+}
+
+function checkSurfaceDeclarationDrift(target, contract) {
+  const raw = readTextIfExists(path.join(target, ".sdlc", "config.json"));
+  if (!raw) return [];
+  let configSurfaces;
+  try {
+    configSurfaces = JSON.parse(raw).surfaces;
+  } catch {
+    return [];
+  }
+  // Sin superficies en el config no hay contra que cruzar. No se inventa un
+  // hallazgo: el consumidor puede estar declarandolas solo en el contrato.
+  if (!Array.isArray(configSurfaces) || configSurfaces.length === 0) return [];
+
+  const fromConfig = surfaceKeys(configSurfaces);
+  const fromContract = surfaceKeys(contract?.surfaces);
+  const onlyConfig = [...fromConfig].filter((key) => !fromContract.has(key));
+  const onlyContract = [...fromContract].filter((key) => !fromConfig.has(key));
+  if (onlyConfig.length === 0 && onlyContract.length === 0) return [];
+
+  // WARNING y no error, por la misma escalera de adopcion que los probes sin
+  // `command_sha256`: casi ningun consumidor existente mantiene las dos listas
+  // sincronizadas, y convertir eso en rojo el dia del upgrade rompe pipelines
+  // sanos. Lo que faltaba no era severidad: era que alguien las cruzara y
+  // dijera cual de las dos esta gobernando de verdad.
+  return [
+    {
+      level: "warning",
+      code: "surface-declaration-divergent",
+      detail:
+        "`.sdlc/config.json` y `quality-contract.yaml` declaran superficies distintas, y el arbitro y la firma " +
+        "leen SOLO el contrato: corregir una sola de las dos no arregla nada. " +
+        `Solo en config: ${onlyConfig.join(", ") || "(ninguna)"}. Solo en el contrato: ${onlyContract.join(", ") || "(ninguna)"}.`,
+      onlyInConfig: onlyConfig,
+      onlyInContract: onlyContract
+    }
+  ];
+}
+
+/**
+ * Probes que el contrato declara NO DISPONIBLES, con el motivo escrito.
+ *
+ * El caso que lo motiva: una extension Chrome de raiz plana, sin build y sin un
+ * solo test, contra un contrato que exige cobertura de lineas cambiadas, grafo
+ * de dependencias y mutation testing. Ahi el rojo no dice "calidad
+ * insuficiente", dice "no se pudo evaluar", y un rojo permanente que no
+ * distingue las dos cosas ensena a ignorar la senal.
+ *
+ * La exencion se declara sobre el PROBE (la capacidad ausente), no sobre el
+ * gate: renunciar a medir cobertura es una decision visible que arrastra a
+ * todos sus gates, mientras que apagar gates de uno en uno permite quedarse con
+ * los que pasan. Y sin `reason` no hay exencion: una exencion sin motivo
+ * escrito es indistinguible de bajar el liston.
+ *
+ * `metrics_prefix` existe porque el id del probe no siempre es el espacio de
+ * nombres de sus metricas (el probe `deps` emite `dependencies.*`).
+ */
+export function resolveUnavailableProbes(contract) {
+  const resolved = [];
+  const findings = [];
+  for (const probe of contract?.probes ?? []) {
+    if (!probe?.unavailable) continue;
+    const declared = typeof probe.unavailable === "object" ? probe.unavailable : {};
+    const reason = String(declared.reason ?? "").trim();
+    const prefix = String(probe.metrics_prefix ?? probe.id ?? "").trim();
+    if (!reason || !prefix) {
+      findings.push({
+        level: "warning",
+        code: "probe-unavailable-without-reason",
+        probe: probe.id ?? null,
+        detail:
+          `el probe '${probe.id ?? "?"}' se declara no disponible sin \`reason\`: sin motivo escrito no hay exencion, ` +
+          "y sus gates se siguen adjudicando como no medidos"
+      });
+      continue;
+    }
+    resolved.push({ probeId: probe.id ?? prefix, prefix, reason, since: declared.since ?? null });
+  }
+  return { resolved, findings };
+}
+
 // Una superficie cuyo path no existe hace que todo gate sobre ella sea vacuo, y
 // "0 violaciones sobre 0 archivos" se ve igual de verde que un repo sano.
 export function checkSurfaces(target, contract) {
   const findings = [];
+  // Sin una sola superficie no hay tier, y sin tier los gates con umbral por
+  // tier no pueden resolverlo: el sintoma es un `gate-threshold-missing` que no
+  // dice nada de la causa. Se nombra la causa primero.
+  if ((contract?.surfaces ?? []).length === 0) {
+    findings.push({
+      level: "error",
+      code: "quality-contract-surfaces-empty",
+      detail:
+        "quality-contract.yaml no declara ninguna superficie: no hay nada que medir, no hay tier con el que resolver umbrales " +
+        "y `sdlc signoff` firmaria el arbol vacio. Declarar las superficies reales en .sdlc/config.json y regenerar el contrato."
+    });
+  }
   for (const surface of contract?.surfaces ?? []) {
     if (!pathExists(path.join(target, surface.path))) {
       findings.push({
@@ -40,6 +144,7 @@ export function checkSurfaces(target, contract) {
       });
     }
   }
+  findings.push(...checkSurfaceDeclarationDrift(target, contract));
   return findings;
 }
 
@@ -193,7 +298,8 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
       evaluated: [],
       violations: [],
       warnings: [],
-      vacuous: []
+      vacuous: [],
+      notApplicable: []
     };
   }
 
@@ -245,8 +351,13 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
   }
 
   const declaredByContract = Array.isArray(gateIds) ? gateIds : null;
+  const unavailable = resolveUnavailableProbes(contract);
+  surfaceFindings.push(...unavailable.findings);
+  const unavailableProbes = unavailable.resolved;
   const ownMetrics = read.evidence?.quality_metrics?.metrics ?? {};
-  const groupResults = [evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract })];
+  const groupResults = [
+    evaluateQualityGates({ gates: ownGates, metrics: ownMetrics, phase, tier, baseline, declaredByContract, unavailableProbes })
+  ];
   const inherited = [];
 
   // El arbol sobre el que ESTA fase se midio. Es la referencia contra la que se
@@ -264,7 +375,15 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     const originMetrics = originRead.ok ? originRead.evidence?.quality_metrics?.metrics ?? {} : {};
     const originTreeHash = originRead.ok ? originRead.evidence?.quality_metrics?.tree_hash ?? null : null;
     groupResults.push(
-      evaluateQualityGates({ gates: originGates, metrics: originMetrics, phase: originPhase, tier, baseline, declaredByContract })
+      evaluateQualityGates({
+        gates: originGates,
+        metrics: originMetrics,
+        phase: originPhase,
+        tier,
+        baseline,
+        declaredByContract,
+        unavailableProbes
+      })
     );
     inherited.push({
       phase: originPhase,
@@ -298,7 +417,8 @@ export function adjudicateFromEvidence(target, { slice, phase, evidencePath: exp
     evaluated: groupResults.flatMap((result) => result.evaluated),
     violations: groupResults.flatMap((result) => result.violations),
     warnings: groupResults.flatMap((result) => result.warnings),
-    vacuous: groupResults.flatMap((result) => result.vacuous)
+    vacuous: groupResults.flatMap((result) => result.vacuous),
+    notApplicable: groupResults.flatMap((result) => result.notApplicable ?? [])
   };
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");

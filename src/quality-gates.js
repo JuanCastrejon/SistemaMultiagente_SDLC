@@ -105,8 +105,26 @@ export function evaluateQualityGates({
   // por el contrato de fases es una promesa explicita de medir algo; si no se
   // midio, la promesa se incumplio y eso no puede degradarse a aviso segun el
   // modo. El modo gradua cuan exigente es el umbral, no si la medicion existe.
-  declaredByContract = null
+  declaredByContract = null,
+  // Probes que el repo declara NO PODER ejecutar todavia, con motivo escrito
+  // (`resolveUnavailableProbes`). Un gate cuya metrica depende de uno de ellos
+  // sale `not-applicable` en vez de `not-measured`: NO MEDIDO e INCUMPLIDO son
+  // cosas distintas y confundirlas en un solo rojo es lo que ensena a ignorar
+  // la senal (RN-AC-03/RN-AC-05 del consumidor). La exencion se declara sobre
+  // la CAPACIDAD ausente, nunca gate por gate: asi no se puede silenciar un
+  // gate que si se podria medir sin declarar que se renuncia a medir toda su
+  // familia.
+  unavailableProbes = []
 } = {}) {
+  const unavailableByPrefix = new Map(
+    (unavailableProbes ?? [])
+      .filter((probe) => probe && probe.prefix && probe.reason)
+      .map((probe) => [probe.prefix, probe])
+  );
+  const findUnavailable = (metric) => {
+    if (typeof metric !== "string") return null;
+    return unavailableByPrefix.get(metric.split(".")[0]) ?? null;
+  };
   const declaredSet = declaredByContract instanceof Set
     ? declaredByContract
     : Array.isArray(declaredByContract)
@@ -116,6 +134,7 @@ export function evaluateQualityGates({
   const violations = [];
   const warnings = [];
   const vacuous = [];
+  const notApplicable = [];
 
   for (const gate of gates) {
     if (phase && gate.phase && gate.phase !== phase) continue;
@@ -145,8 +164,40 @@ export function evaluateQualityGates({
       continue;
     }
 
+    const unavailable = findUnavailable(gate.metric);
+    // Declarado no medible Y medido de todas formas: la declaracion esta
+    // obsoleta o es falsa. Se evalua con el numero real —medir gana siempre— y
+    // se avisa, porque una exencion que sobrevive a la capacidad que dice que
+    // falta es justo el mecanismo con el que se bajaria el liston en silencio.
+    if (unavailable && actual !== undefined) {
+      warnings.push({
+        code: "probe-unavailable-but-measured",
+        id: gate.id,
+        metric: gate.metric,
+        probe: unavailable.probeId,
+        detail: `el contrato declara '${unavailable.probeId}' no disponible, pero hay metrica en ${gate.metric}: retirar la declaracion`
+      });
+    }
+
     // La metrica no se midio: el gate no puede juzgar y NO puede pasar en
     // silencio, que es exactamente como se cuela un falso verde.
+    if (actual === undefined && gate.op !== "absent" && unavailable) {
+      entry.status = "not-applicable";
+      entry.declaredByPhase = declaredByPhase;
+      entry.probe = unavailable.probeId;
+      entry.reason = unavailable.reason;
+      evaluated.push(entry);
+      notApplicable.push({
+        code: "gate-not-applicable",
+        id: gate.id,
+        metric: gate.metric,
+        probe: unavailable.probeId,
+        reason: unavailable.reason,
+        declaredByPhase
+      });
+      continue;
+    }
+
     if (actual === undefined && gate.op !== "absent") {
       entry.status = "not-measured";
       entry.declaredByPhase = declaredByPhase;
@@ -250,11 +301,16 @@ export function evaluateQualityGates({
     }
   }
 
+  // `notApplicable` NO entra en el status: es lo declarado como no medible con
+  // motivo, y su sitio es la salida —visible siempre—, no el veredicto. Un
+  // repo que declara honestamente lo que no puede medir queda en verde; lo que
+  // no puede quedar en verde es lo que NO se midio sin decir por que.
   return {
     status: violations.length > 0 ? "blocked" : warnings.length > 0 ? "warning" : "ok",
     evaluated,
     violations,
     warnings,
-    vacuous
+    vacuous,
+    notApplicable
   };
 }

@@ -1,7 +1,7 @@
 # Agente: web-agent
 
 Plane: specialist
-Superficie: {{surfaces.1.path}}
+Superficie: {{surfacesOwnedByWebAgent}}
 Proyecto: {{project.name}}
 
 ## Responsabilidades

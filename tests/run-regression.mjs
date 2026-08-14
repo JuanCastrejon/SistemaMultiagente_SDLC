@@ -24,6 +24,16 @@ function run(args, options = {}) {
   });
 }
 
+// Para los comandos que DEBEN salir en no-cero: devuelve su stdout en vez de
+// tumbar la regresion.
+function runAllowingFailure(args, options = {}) {
+  try {
+    return run(args, options);
+  } catch (error) {
+    return `${error.stdout ?? ""}${error.stderr ?? ""}`;
+  }
+}
+
 function runStatus(args) {
   return spawnSync("node", [cli, ...args], {
     cwd: repoRoot,
@@ -106,8 +116,55 @@ run(["install", "--target", greenfield, "--mode", "greenfield", "--project-name"
 const greenfieldConfig = JSON.parse(fs.readFileSync(path.join(greenfield, ".sdlc", "config.json"), "utf8"));
 assert.equal(greenfieldConfig.frameworkVersion, FRAMEWORK_VERSION);
 assert.equal(greenfieldConfig.scale, "feature");
+// Un install de fabrica ya NO declara superficies: `doctor` sale en error
+// hasta que se declaren las reales, que es el estado honesto de un repo a
+// medio configurar. Se comprueba el error y despues se configura, como haria
+// un consumidor.
+const doctorSinSuperficies = runAllowingFailure(["doctor", "--target", greenfield, "--json"]);
+assert.match(doctorSinSuperficies, /config-surfaces-empty/);
+
+const greenfieldConfigPath = path.join(greenfield, ".sdlc", "config.json");
+const configuredGreenfield = JSON.parse(fs.readFileSync(greenfieldConfigPath, "utf8"));
+configuredGreenfield.surfaces = [{ id: "app", path: "src", owner: "api-agent", tier: "core" }];
+fs.writeFileSync(greenfieldConfigPath, JSON.stringify(configuredGreenfield, null, 2), "utf8");
+fs.mkdirSync(path.join(greenfield, "src"), { recursive: true });
+fs.writeFileSync(path.join(greenfield, "src", "index.js"), "export const app = 1;\n", "utf8");
+run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+
 run(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
+
+// El manifiesto se versiona, y en Windows con `core.autocrlf=true` git lo
+// entrega en CRLF al hacer checkout. El checksum se comparaba sobre bytes
+// crudos, asi que el hash cambiaba sin que nadie tocara el archivo: `doctor`
+// daba `manifest-integrity` y `upgrade` quedaba bloqueado PARA SIEMPRE en ese
+// repo — es decir, el consumidor no podia recibir ninguna correccion. Medido en
+// manga-translator-mvp, donde impedia entregarle 1.8.3.
+{
+  const manifestPath = path.join(greenfield, ".sdlc", "install-manifest.json");
+  const lf = fs.readFileSync(manifestPath, "utf8");
+  fs.writeFileSync(manifestPath, lf.replace(/\n/g, "\r\n"), "utf8");
+
+  const doctorCrlf = JSON.parse(run(["doctor", "--target", greenfield, "--json"]));
+  assert.ok(
+    !doctorCrlf.findings.some((finding) => finding.code === "manifest-integrity"),
+    "CRLF en el manifiesto no puede leerse como manipulacion"
+  );
+  const upgradeCrlf = JSON.parse(runAllowingFailure(["upgrade", "--target", greenfield, "--dry-run", "--json"]));
+  assert.notEqual(upgradeCrlf.status, "error", JSON.stringify(upgradeCrlf));
+
+  // Una edicion REAL del manifiesto sigue detectandose: la normalizacion cubre
+  // los finales de linea, no el contenido.
+  const manipulado = fs.readFileSync(manifestPath, "utf8").replace(/"manifestVersion": 1/, '"manifestVersion": 99');
+  fs.writeFileSync(manifestPath, manipulado, "utf8");
+  const doctorManipulado = JSON.parse(runAllowingFailure(["doctor", "--target", greenfield, "--json"]));
+  assert.ok(
+    doctorManipulado.findings.some((finding) => finding.code === "manifest-integrity"),
+    "una edicion real del manifiesto tiene que seguir bloqueando"
+  );
+
+  fs.writeFileSync(manifestPath, lf, "utf8");
+}
 
 const phaseGateF0 = JSON.parse(run(["phase-gate", "--target", greenfield, "--phase", "F0", "--slice", "harness-bootstrap", "--json"]));
 assert.equal(phaseGateF0.status, "ok");
@@ -451,7 +508,65 @@ const humanGateUnverifiable = JSON.parse(
   run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
 );
 assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
-assert.ok(humanGateUnverifiable.warnings.includes("human-gate-signoff-unverifiable"));
+// Un `approved_by` suelto es una DECLARACION: texto que el propio agente puede
+// escribir. Se nombra como tal, en vez de confundirla con una revision de
+// plataforma a la que solo le falta el identificador.
+assert.ok(
+  humanGateUnverifiable.warnings.includes("human-gate-signoff-declarative"),
+  JSON.stringify(humanGateUnverifiable.warnings)
+);
+assert.equal(humanGateUnverifiable.evidence.signatureClass, "declarative");
+
+// Una atestacion DECLARADA que no verifica es peor que ninguna: afirma una
+// garantia que no existe, asi que bloquea en vez de avisar.
+writeEvidence(
+  greenfield,
+  "slice-hg3",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg3",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien",
+    "  signature_class: attestation",
+    '  attestation_commit: "0000000000000000000000000000000000000000"'
+  ].join("\n")
+);
+const atestacionFalsa = JSON.parse(
+  runAllowingFailure(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg3", "--json"])
+);
+assert.ok(
+  atestacionFalsa.blockers.some((blocker) => blocker.startsWith("human-gate-attestation-invalid")),
+  JSON.stringify(atestacionFalsa.blockers)
+);
+
+// Y declararse `attestation` sin commit que verificar tampoco cuela.
+writeEvidence(
+  greenfield,
+  "slice-hg4",
+  "F13",
+  [
+    "phase: F13",
+    "slice: slice-hg4",
+    "agent_id: pm",
+    "started_at: 2026-08-06T00:00:00Z",
+    "outputs: []",
+    "validators_run: []",
+    "human_gate_signoff:",
+    "  required: true",
+    "  approved_by: alguien",
+    "  signature_class: attestation"
+  ].join("\n")
+);
+const atestacionSinCommit = JSON.parse(
+  runAllowingFailure(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg4", "--json"])
+);
+assert.ok(atestacionSinCommit.blockers.includes("human-gate-attestation-commit-missing"), JSON.stringify(atestacionSinCommit.blockers));
 
 // tools-doctor detecta scripts de gate que resuelven @latest en cada corrida.
 const floatingRepo = makeRepo("floating-tooling");

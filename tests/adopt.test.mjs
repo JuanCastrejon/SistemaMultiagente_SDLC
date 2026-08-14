@@ -305,3 +305,28 @@ assert.equal(cliPayload.status, "ok");
 assert.ok(fs.existsSync(path.join(cliTarget, "quality-contract.yaml")));
 
 console.log("adopt cli e2e: PASS");
+
+// --- repo de raiz plana, sin package.json ----------------------------------
+// Una extension de navegador sin build no podia adoptar el framework y el
+// mensaje solo decia que no. Ahora hay un camino explicito, y sin la bandera el
+// error dice exactamente que ejecutar.
+{
+  const plano = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-adopt-plano-"));
+  fs.writeFileSync(path.join(plano, "content.js"), "// extension\n", "utf8");
+
+  const sinBandera = commandAdopt({ target: plano });
+  assert.equal(sinBandera.payload.status, "error");
+  assert.equal(sinBandera.payload.code, "adopt-package-json-missing");
+  assert.match(sinBandera.payload.message, /--bootstrap-package-json/, "el error tiene que decir el comando exacto");
+  assert.equal(fs.existsSync(path.join(plano, "package.json")), false, "sin la bandera no se escribe nada");
+
+  const conBandera = commandAdopt({ target: plano, "bootstrap-package-json": true, "project-name": "Mi Extension" });
+  assert.equal(conBandera.payload.status, "ok", JSON.stringify(conBandera.payload));
+  const bootstrapped = JSON.parse(fs.readFileSync(path.join(plano, "package.json"), "utf8"));
+  assert.equal(bootstrapped.name, "mi-extension");
+  assert.equal(bootstrapped.private, true);
+  assert.ok(bootstrapped.devDependencies["sistema-multiagente-sdlc"], "la devDependency se agrega en la misma pasada");
+  assert.ok(fs.existsSync(path.join(plano, "quality-contract.yaml")));
+}
+
+console.log("adopt sin package.json previo: PASS");

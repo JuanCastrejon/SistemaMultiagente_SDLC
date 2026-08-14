@@ -75,14 +75,17 @@ export function renderQualityDocs({ contract, phaseContract }) {
   lines.push("");
 
   lines.push("## Probes");
+  // `no disponible` se documenta con su motivo: una exencion que no se ve en la
+  // doc de gates es una exencion que nadie revisa.
   lines.push(table(
-    ["id", "command", "format", "emits", "when_absent"],
+    ["id", "command", "format", "emits", "when_absent", "no disponible"],
     (contract.probes ?? []).map((probe) => [
       probe.id,
       `\`${probe.command}\``,
       probe.format,
       `\`${probe.emits}\``,
-      probe.when_absent ?? "warn"
+      probe.when_absent ?? "warn",
+      probe.unavailable?.reason ? `si — ${probe.unavailable.reason}` : "no"
     ])
   ));
   lines.push("");

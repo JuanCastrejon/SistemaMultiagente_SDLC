@@ -11,6 +11,7 @@ import {
   readTextIfExists,
   removePath,
   sha256File,
+  sha256FileNormalized,
   sha256Text,
   toPosixPath,
   writeJson,
@@ -33,7 +34,8 @@ import {
   commandPrBodyCheck,
   commandStatus,
   commandToolsDoctor,
-  commandVerdict
+  commandVerdict,
+  auditAttestations
 } from "./harness.js";
 import {
   commandSkillEval,
@@ -43,7 +45,7 @@ import { commandQualityGate, commandQualityBaseline } from "./quality.js";
 import { baselineDoctorFindings } from "./quality-baseline.js";
 import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
-import { computeTreeHash } from "./evidence-writer.js";
+import { computeTreeHashAtRef, evidencePath as evidencePathFor, recordAttestation } from "./evidence-writer.js";
 import { createAttestationCommit, verifySignoff } from "./signoff.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
@@ -143,19 +145,32 @@ function verifyManifestIntegrity(target) {
     };
   }
   const expected = fs.readFileSync(paths.checksum, "utf8").trim();
-  const actual = sha256File(paths.manifest);
+  // Se compara sobre contenido normalizado a LF, no sobre bytes crudos. El
+  // manifiesto se versiona, y en Windows con `core.autocrlf=true` git lo
+  // entrega en CRLF al hacer checkout: el hash cambiaba sin que nadie tocara el
+  // archivo y `upgrade` quedaba bloqueado PARA SIEMPRE en ese repo, acusando
+  // ademas una edicion manual que no existio. Reproducido en
+  // manga-translator-mvp, donde impedia entregarle esta misma correccion.
+  //
+  // Se sigue aceptando el hash de bytes crudos: en un repo con finales LF los
+  // dos coinciden, y asi ningun checksum ya escrito deja de validar.
+  const actual = sha256FileNormalized(paths.manifest);
+  const raw = sha256File(paths.manifest);
+  const ok = expected === actual || expected === raw;
   return {
-    ok: expected === actual,
+    ok,
     expected,
     actual,
-    message: expected === actual ? "Manifest integro" : "Manifest corrupto o editado manualmente"
+    message: ok
+      ? "Manifest integro"
+      : "Manifest corrupto o editado manualmente: el contenido de .sdlc/install-manifest.json no coincide con .sdlc/install-manifest.sha256 (comparado con finales de linea normalizados, asi que CRLF no es la causa)"
   };
 }
 
 function writeManifest(target, manifest) {
   const paths = manifestPaths(target);
   writeJson(paths.manifest, manifest);
-  writeText(paths.checksum, `${sha256File(paths.manifest)}\n`);
+  writeText(paths.checksum, `${sha256FileNormalized(paths.manifest)}\n`);
 }
 
 function buildManifest(config, files, previous = {}) {
@@ -543,6 +558,36 @@ function daysSince(filePath) {
 
 function collectDoctorEnhancements(target, config) {
   const findings = [];
+
+  // Un repo recien instalado NO esta configurado, y tiene que verse asi. Antes
+  // el instalador dejaba superficies y stack de ejemplo, el repo parecia listo,
+  // y el precio se pagaba semanas despues: gates vacuos sobre paths que no
+  // existen y una firma humana sobre el arbol vacio.
+  if (config) {
+    const surfaces = Array.isArray(config.surfaces) ? config.surfaces : [];
+    if (surfaces.length === 0) {
+      findings.push({
+        level: "error",
+        code: "config-surfaces-empty",
+        message:
+          "config.surfaces esta vacio: sin superficies declaradas ningun gate mide nada y `sdlc signoff` no puede atestar nada. " +
+          "Declarar las superficies reales del repo en .sdlc/config.json y regenerar quality-contract.yaml."
+      });
+    }
+    const placeholders = Object.entries(config.stack ?? {})
+      .filter(([, value]) => typeof value === "string" && /^<.*>$/.test(value.trim()))
+      .map(([key]) => key);
+    if (placeholders.length > 0) {
+      findings.push({
+        level: "error",
+        code: "config-stack-placeholder",
+        fields: placeholders,
+        message:
+          `config.stack conserva placeholders de plantilla en: ${placeholders.join(", ")}. ` +
+          "Poner la tecnologia real, o `null` si el proyecto no tiene esa superficie."
+      });
+    }
+  }
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   findings.push({
     level: nodeMajor >= 18 ? "info" : "error",
@@ -636,7 +681,7 @@ function collectDoctorEnhancements(target, config) {
   return findings;
 }
 
-function commandDoctor(options) {
+async function commandDoctor(options) {
   const target = requireTarget(options);
   const findings = [];
   let config = null;
@@ -675,6 +720,11 @@ function commandDoctor(options) {
     }
   }
   findings.push(...collectDoctorEnhancements(target, config));
+  // Toda atestacion declarada se re-verifica aqui, no solo cuando su fase llega
+  // al gate. Una firma que dejo de valer —por una actualizacion que cambio el
+  // formato del sujeto, o por un cambio posterior del contrato— se descubria
+  // semanas despues, con el trabajo ya hecho.
+  findings.push(...(await auditAttestations(target)).findings);
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
   findings.push(...checkRetentionPolicy(target));
@@ -707,11 +757,86 @@ function commandDoctor(options) {
  * `sdlc signoff` (ADR 0007, P5)
  *
  * El sujeto que se aprueba/verifica es SIEMPRE { slice, phase, tree_hash },
- * recomputado sobre las superficies declaradas en quality-contract.yaml en
- * el momento de la llamada — nunca se confia en un tree_hash que alguien
- * declare por fuera, porque eso reabriria exactamente el hueco que esto
- * cierra (una firma que dice aprobar algo que nadie recomputo).
+ * recomputado sobre las superficies declaradas en quality-contract.yaml — nunca
+ * se confia en un tree_hash que alguien declare por fuera, porque eso reabriria
+ * exactamente el hueco que esto cierra (una firma que dice aprobar algo que
+ * nadie recomputo).
+ *
+ * El arbol se lee de GIT, no del working tree, y en `--verify` se lee EN EL
+ * COMMIT que se presenta como firma. Antes se leia del working tree en el
+ * momento de la llamada, y eso hacia que la atestacion dejara de verificarse en
+ * cuanto entraba el commit siguiente: no servia como registro de que una fase
+ * se aprobo. Que el arbol se haya movido despues se reporta aparte, como
+ * `fresh: false`, sin invalidar la firma.
  */
+/**
+ * Lo que hay que poder garantizar ANTES de crear un commit de atestacion con
+ * `--record`: que exista evidencia de esa fase, que sea legible y que haya
+ * maintainers con quien contrastar la firma. Ninguna de las tres cambia por
+ * firmar, asi que comprobarlas despues solo sirve para dejar un commit
+ * huerfano en la historia.
+ */
+function recordPreconditions(target, { slice, phase }) {
+  let config;
+  try {
+    config = loadConfig(target);
+  } catch (error) {
+    return { ok: false, code: "config-missing", detail: error.message };
+  }
+  if ((config.governance?.maintainers ?? []).length === 0) {
+    return {
+      ok: false,
+      code: "governance-maintainers-missing",
+      detail: "config.governance.maintainers esta vacio: la firma no podria verificarse contra nadie, asi que no se crea"
+    };
+  }
+  const evidenceAbsolute = evidencePathFor(target, slice, phase);
+  const raw = readTextIfExists(evidenceAbsolute);
+  if (!raw) {
+    return {
+      ok: false,
+      code: "evidence-missing",
+      detail: `no existe ${path.relative(target, evidenceAbsolute)}: escribir la evidencia de la fase antes de firmarla`
+    };
+  }
+  try {
+    YAML.parse(raw);
+  } catch (error) {
+    return { ok: false, code: "evidence-unparseable", detail: `${path.relative(target, evidenceAbsolute)}: ${error.message}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Verifica un commit de atestacion ya existente y lo enlaza con su evidencia.
+ * Comparte ruta de verificacion con el gate a proposito: enlazar algo que el
+ * gate va a rechazar seria peor que no enlazarlo.
+ */
+function recordVerifiedAttestation(target, { slice, phase, surfacePaths, commitSha }) {
+  if (!commitSha) {
+    return { ok: false, code: "signoff-commit-missing", detail: "`--record` sin `--create` exige `--commit <sha>`" };
+  }
+  const ready = recordPreconditions(target, { slice, phase });
+  if (!ready.ok) return ready;
+
+  const config = loadConfig(target);
+  const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+
+  const verification = verifySignoff({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers: config.governance?.maintainers ?? []
+  });
+  if (!verification.ok) {
+    return { ok: false, code: verification.code, detail: `no se enlaza: ${verification.detail ?? verification.code}` };
+  }
+
+  const recorded = recordAttestation({ target, slice, phase, commitSha, signer: verification.signer });
+  return recorded.ok ? { ...recorded, signer: verification.signer } : recorded;
+}
+
 function commandSignoff(options) {
   const target = requireTarget(options);
   const loaded = loadQualityContract(target);
@@ -724,19 +849,116 @@ function commandSignoff(options) {
     return { exitCode: EXIT_ERROR, payload: { status: "error", message: "signoff exige --slice y --phase." } };
   }
   const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
-  const tree = computeTreeHash(target, surfacePaths);
-  const subject = { slice, phase, tree_hash: tree.hash };
+  const headRef = options["head-ref"] ?? options.headRef ?? "HEAD";
+
+  // `--record` sin `--create` enlaza un commit que YA existe y ya esta firmado.
+  // Existe para el caso en que la firma se creo pero el enlace fallo despues
+  // (disco lleno, YAML ilegible, interrupcion): obligar a firmar OTRA vez
+  // dejaria dos commits de aprobacion para la misma cosa, y el segundo no seria
+  // mas valido que el primero.
+  if (options.record && !options.create) {
+    const linked = recordVerifiedAttestation(target, {
+      slice,
+      phase,
+      surfacePaths,
+      commitSha: options.commit ?? null
+    });
+    return {
+      exitCode: linked.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+      payload: linked.ok
+        ? { status: "ok", recorded: true, commitSha: options.commit, evidence: linked.path, signer: linked.signer }
+        : { status: "blocked", recorded: false, code: linked.code, detail: linked.detail }
+    };
+  }
 
   if (options.create) {
+    // Precondiciones ANTES de firmar. El commit de atestacion es un efecto
+    // secundario permanente en la historia: crearlo para descubrir despues que
+    // la evidencia no existe deja un commit huerfano que nadie va a limpiar.
+    // Lo barato se comprueba primero.
+    if (options.record) {
+      const ready = recordPreconditions(target, { slice, phase });
+      if (!ready.ok) {
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", recorded: false, ...ready } };
+      }
+    }
+
+    const tree = computeTreeHashAtRef(target, surfacePaths, "HEAD");
+    if (!tree.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: tree.code, message: tree.detail } };
+    }
+    const subject = { slice, phase, tree_hash: tree.hash };
     const created = createAttestationCommit({
       target,
       slice,
       phase,
       subject,
-      signingKey: options["signing-key"] ?? options.signingKey ?? null
+      signingKey: options["signing-key"] ?? options.signingKey ?? null,
+      surfacePaths,
+      allowDirty: Boolean(options["allow-dirty"] ?? options.allowDirty)
     });
-    if (!created.ok) return { exitCode: EXIT_ERROR, payload: { status: "error", ...created, subject } };
-    return { exitCode: EXIT_OK, payload: { status: "ok", ...created, subject } };
+    if (!created.ok) {
+      const exitCode = created.code === "signoff-commit-failed" ? EXIT_ERROR : EXIT_ACTION_REQUIRED;
+      return { exitCode, payload: { status: created.code === "signoff-commit-failed" ? "error" : "blocked", ...created, subject } };
+    }
+
+    // `--record` enlaza la firma recien creada con la evidencia de su fase.
+    // Sin este paso, `signoff --create` deja el commit hecho y la evidencia
+    // apuntando a la firma ANTERIOR: el gate sigue bloqueando y la reparacion
+    // parece hecha. Se descubrio auditando la propia migracion de 2.0.0, donde
+    // `attestation_commit` solo existia como campo LEIDO y nada lo escribia.
+    if (options.record) {
+      let recordConfig;
+      try {
+        recordConfig = loadConfig(target);
+      } catch (error) {
+        return { exitCode: error.exitCode ?? EXIT_ERROR, payload: { status: "error", message: error.message, ...created } };
+      }
+      // Se verifica por la MISMA ruta que usara el gate, y ANTES de escribir:
+      // enlazar una firma que no verifica seria afirmar una garantia inexistente.
+      const approved = computeTreeHashAtRef(target, surfacePaths, created.commitSha);
+      const verification = approved.ok
+        ? verifySignoff({
+            target,
+            commitSha: created.commitSha,
+            subject: { slice, phase, tree_hash: approved.hash },
+            maintainers: recordConfig.governance?.maintainers ?? []
+          })
+        : { ok: false, code: approved.code, detail: approved.detail };
+      if (!verification.ok) {
+        return {
+          exitCode: EXIT_ACTION_REQUIRED,
+          payload: {
+            status: "blocked",
+            ...created,
+            subject,
+            recorded: false,
+            code: verification.code,
+            detail: `el commit se creo pero NO se enlazo con la evidencia: ${verification.detail ?? verification.code}`
+          }
+        };
+      }
+      // `approved_by` sale del firmante que reporta git, nunca de una opcion.
+      const recorded = recordAttestation({
+        target,
+        slice,
+        phase,
+        commitSha: created.commitSha,
+        signer: verification.signer
+      });
+      if (!recorded.ok) {
+        return {
+          exitCode: EXIT_ACTION_REQUIRED,
+          payload: { status: "blocked", ...created, subject, recorded: false, code: recorded.code, detail: recorded.detail }
+        };
+      }
+      return {
+        exitCode: EXIT_OK,
+        payload: { status: "ok", ...created, subject, files: tree.files, recorded: true, evidence: recorded.path, signer: verification.signer }
+      };
+    }
+
+    return { exitCode: EXIT_OK, payload: { status: "ok", ...created, subject, files: tree.files } };
   }
 
   if (options.verify) {
@@ -757,19 +979,54 @@ function commandSignoff(options) {
         }
       };
     }
+    const commitSha = options.commit ?? null;
+    if (!commitSha) {
+      return {
+        exitCode: EXIT_ACTION_REQUIRED,
+        payload: { status: "blocked", ok: false, code: "signoff-commit-missing", detail: "no se declaro que commit firma la aprobacion" }
+      };
+    }
+    const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
+    if (!approved.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: approved.code, message: approved.detail } };
+    }
+    const current = computeTreeHashAtRef(target, surfacePaths, headRef);
+    const subject = { slice, phase, tree_hash: approved.hash };
     const result = verifySignoff({
       target,
-      commitSha: options.commit ?? null,
+      commitSha,
       subject,
       maintainers,
-      headRef: options["head-ref"] ?? options.headRef ?? "HEAD"
+      headRef,
+      currentTreeHash: current.ok ? current.hash : null
     });
+    // Una firma valida sobre un arbol que ya se movio NO es un fallo de firma:
+    // es una aprobacion que quedo atras. Se distingue con `--require-fresh`,
+    // que es lo que debe usar el gate de la fase que aprueba esas superficies.
+    const requireFresh = Boolean(options["require-fresh"] ?? options.requireFresh);
+    if (result.ok && requireFresh && result.fresh === false) {
+      return {
+        exitCode: EXIT_ACTION_REQUIRED,
+        payload: {
+          status: "blocked",
+          ...result,
+          ok: false,
+          code: "signoff-stale",
+          detail: `la firma es valida pero aprobo el arbol ${subject.tree_hash.slice(0, 12)} y ${headRef} esta en ${String(current.hash).slice(0, 12)}: hay que volver a firmar`,
+          subject
+        }
+      };
+    }
     return { exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED, payload: { status: result.ok ? "ok" : "blocked", ...result, subject } };
   }
 
   return {
     exitCode: EXIT_ERROR,
-    payload: { status: "error", message: "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha>>" }
+    payload: {
+      status: "error",
+      message:
+        "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>"
+    }
   };
 }
 
@@ -861,7 +1118,7 @@ function commandDiff(options) {
   };
 }
 
-function commandUpgrade(options) {
+async function commandUpgrade(options) {
   const target = requireTarget(options);
   const toVersion = options["to-version"] ?? FRAMEWORK_VERSION;
   const dryRun = Boolean(options["dry-run"]);
@@ -1001,13 +1258,40 @@ function commandUpgrade(options) {
     skipWrite
   );
   pruneBackupsInternal(target, nextConfig.backup?.keepLast ?? 5);
+
+  // La auditoria corre DESPUES de escribir, no antes, y a proposito: los
+  // archivos nuevos son justamente los que hacen falta para poder re-firmar.
+  // Pero el upgrade no puede terminar en verde dejando atestaciones muertas: el
+  // consumidor se enteraria al llegar al siguiente gate humano, semanas
+  // despues. Sale `action-required` con la lista y el comando de reparacion.
+  const attestations = await auditAttestations(target);
+  // Un `unverifiable` cuenta igual que un `invalid` para decidir si el upgrade
+  // puede terminar en verde. Filtrar solo por `level === "error"` dejaba pasar
+  // como exito un repo cuyas atestaciones nadie habia podido comprobar, que es
+  // justo el estado que esta auditoria existe para no dejar pasar.
+  const pendientes = attestations.findings.filter((finding) => finding.verdict !== undefined);
+  const invalidas = pendientes.filter((finding) => finding.verdict === "invalid").length;
+  const noVerificables = pendientes.filter((finding) => finding.verdict === "unverifiable").length;
+  const bloqueado = pendientes.length > 0;
   return {
-    exitCode: EXIT_OK,
+    exitCode: bloqueado ? EXIT_ACTION_REQUIRED : EXIT_OK,
     payload: {
-      status: "ok",
+      status: bloqueado ? "action-required" : "ok",
       backup,
       frameworkVersion: nextManifest.frameworkVersion,
-      accepted: overrideEntries.map((entry) => entry.path)
+      accepted: overrideEntries.map((entry) => entry.path),
+      ...(attestations.checked > 0 ? { attestations } : {}),
+      ...(bloqueado
+        ? {
+            // Se dice lo que de verdad paso: la migracion se aplico y lo que
+            // queda pendiente es la autorizacion. Presentarlo como "upgrade
+            // fallido" mandaria a revertir una migracion sana.
+            message:
+              `Migracion aplicada; autorizacion PENDIENTE. ${invalidas} atestacion(es) dejaron de verificar y ` +
+              `${noVerificables} no se pudieron comprobar. Hasta resolverlas, esas fases no pueden pasar su gate ` +
+              "humano. Ver `attestations.findings[].hint` para la accion de cada una."
+          }
+        : {})
     }
   };
 }
@@ -1171,7 +1455,7 @@ function commandRollback(options) {
   const manifestBackup = path.join(backupRoot, "install-manifest.json");
   if (pathExists(manifestBackup)) {
     copyFilePreservingPath(backupRoot, path.join(target, ".sdlc"), "install-manifest.json");
-    writeText(path.join(target, ".sdlc", "install-manifest.sha256"), `${sha256File(path.join(target, ".sdlc", "install-manifest.json"))}\n`);
+    writeText(path.join(target, ".sdlc", "install-manifest.sha256"), `${sha256FileNormalized(path.join(target, ".sdlc", "install-manifest.json"))}\n`);
   }
   return { exitCode: EXIT_OK, payload: { status: "ok", message: `Rollback aplicado: ${backup}` } };
 }
@@ -1189,12 +1473,16 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] | --verify --commit <sha> [--head-ref <ref>]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\ninstall: [--mode greenfield|legacy] [--project-name <n>] [--dry-run] [--with-tools <ids|all>]\n         Al terminar OFRECE las herramientas externas (obligatorias y opcionales) con el repo\n         de cada una y su comando. Sin --with-tools no instala ninguna: sigue apto para CI.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] [--record] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         El arbol se lee de git EN EL COMMIT firmado, no del working tree: la firma se puede volver a\n         verificar mas adelante en lugar de caducar con el commit siguiente.\n         --require-fresh bloquea ademas si el arbol de --head-ref ya no es el aprobado (signoff-stale).\n         --create rechaza firmar con cambios sin commitear en las superficies, salvo --allow-dirty.\n         Ninguna superficie que resuelva a cero archivos puede firmarse ni verificarse (signoff-empty-subject).\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>] [--bootstrap-package-json]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\n         --bootstrap-package-json crea un package.json minimo cuando el repo no tiene ninguno\n         (raiz plana, sin build). Sin esa bandera, adopt sigue exigiendo uno previo.\ninstall: [--mode greenfield|legacy] [--project-name <n>] [--dry-run] [--with-tools <ids|all>]\n         Al terminar OFRECE las herramientas externas (obligatorias y opcionales) con el repo\n         de cada una y su comando. Sin --with-tools no instala ninguna: sigue apto para CI.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
     }
   };
 }
 
-export function run(argv) {
+// `run` es SIEMPRE asincrona aunque casi todos los comandos sean sincronos.
+// Devolver "objeto o Promise segun el comando" es un contrato que rompe en
+// silencio a cualquier consumidor programatico el dia que un comando mas se
+// vuelve async — y ya paso con `doctor` y `upgrade`.
+export async function run(argv) {
   const parsed = parseArgs(argv);
   // `--version` se parsea como opcion booleana, no como subcomando, asi que caia
   // en la ayuda con exit 0 sin decir nunca la version.

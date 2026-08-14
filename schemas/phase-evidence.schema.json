@@ -3,7 +3,14 @@
   "$id": "https://grupoit.dev/sistema-multiagente-sdlc/phase-evidence.schema.json",
   "title": "SDLC Phase Evidence",
   "type": "object",
-  "required": ["phase", "slice", "agent_id", "started_at", "outputs", "validators_run"],
+  "required": [
+    "phase",
+    "slice",
+    "agent_id",
+    "started_at",
+    "outputs",
+    "validators_run"
+  ],
   "properties": {
     "phase": {
       "type": "string",
@@ -22,7 +29,10 @@
       "format": "date-time"
     },
     "completed_at": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "format": "date-time"
     },
     "inputs_hash": {
@@ -42,63 +52,201 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["command", "status"],
+        "required": [
+          "command",
+          "status"
+        ],
         "properties": {
-          "command": { "type": "string" },
-          "status": { "type": "string", "enum": ["ok", "warning", "error", "blocked", "skipped"] },
-          "exit_code": { "type": ["integer", "null"] }
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "blocked",
+              "skipped"
+            ]
+          },
+          "exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
         },
         "additionalProperties": true
       }
     },
     "human_gate_signoff": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "required": { "type": "boolean" },
-        "approved_by": { "type": ["string", "null"] },
-        "approved_at": { "type": ["string", "null"], "format": "date-time" },
-        "notes": { "type": ["string", "null"] }
+        "required": {
+          "type": "boolean"
+        },
+        "approved_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approved_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "signature_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "attestation",
+            "platform-review",
+            "declarative",
+            "declarative-bootstrap",
+            null
+          ]
+        },
+        "attestation_commit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$",
+          "description": "OID COMPLETO (SHA-1 o SHA-256) del commit de atestacion firmado. No se admite una expresion de revision (`HEAD`, `main~2`): lo que se verifica tiene que ser inmutable, y `HEAD` apunta a cosas distintas segun cuando se lea."
+        },
+        "review_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Identificador de la revision en la plataforma."
+        }
       },
-      "additionalProperties": true
+      "additionalProperties": true,
+      "description": "Aprobacion humana de la fase. `signature_class` dice de que CLASE es, porque no todas valen lo mismo: `attestation` es un commit firmado y verificable (exige attestation_commit); `platform-review` es una revision de la plataforma (exige review_id); `declarative` es texto que el propio agente puede escribir y no verifica nada. Sin declararla se infiere de los campos presentes, y lo declarativo se reporta siempre como no verificable."
     },
     "risks": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "next_phase": {
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "quality_metrics": {
       "type": "object",
       "description": "Metricas medidas por el harness. NO las escribe el agente: las anexa evidence-writer tras ejecutar el probe. Un bloque sin `source: harness` es sospechoso por definicion.",
       "properties": {
-        "measured_at": { "type": "string", "format": "date-time" },
-        "source": { "type": "string", "enum": ["harness", "ci"] },
+        "measured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "harness",
+            "ci"
+          ]
+        },
         "tree_hash": {
           "type": "string",
           "description": "Hash del arbol de fuentes evaluadas. La frescura se decide por contenido, no por timestamp declarado."
         },
-        "commit_sha": { "type": ["string", "null"] },
-        "tree_files": { "type": ["integer", "null"] },
+        "commit_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tree_files": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "probes": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "command", "exit_code", "report_sha256"],
+            "required": [
+              "id",
+              "command",
+              "exit_code",
+              "report_sha256"
+            ],
             "properties": {
-              "id": { "type": "string" },
-              "command": { "type": "string" },
-              "exit_code": { "type": ["integer", "null"] },
-              "report_path": { "type": ["string", "null"] },
-              "report_sha256": { "type": ["string", "null"] },
-              "duration_ms": { "type": ["integer", "null"] },
-              "detail": { "type": ["string", "null"] },
-              "status": { "type": "string", "enum": ["ok", "failed", "skipped", "not-applicable", "not-configured"] }
+              "id": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "report_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "report_sha256": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "duration_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "failed",
+                  "skipped",
+                  "not-applicable",
+                  "not-configured"
+                ]
+              }
             },
             "additionalProperties": true
           }
         },
-        "metrics": { "type": "object" }
+        "metrics": {
+          "type": "object"
+        }
       },
       "additionalProperties": true
     },
@@ -107,17 +255,42 @@
       "description": "Escenario firmado -> test que lo cubre, con la prueba de que fallaba antes de existir la implementacion.",
       "items": {
         "type": "object",
-        "required": ["sc_id", "test_ref"],
+        "required": [
+          "sc_id",
+          "test_ref"
+        ],
         "properties": {
           "sc_id": {
             "type": "string",
             "description": "Secuencial (SC-001) para escenarios legacy-unversioned exentos permanentemente; hash de (capability, requirement, titulo) via computeScenarioId para escenarios nuevos o modificados (ADR 0007, P9).",
             "pattern": "^SC-([0-9]{3,}|[0-9a-f]{8,})$"
           },
-          "test_ref": { "type": ["string", "null"] },
-          "red_proof_run_id": { "type": ["string", "null"] },
-          "red_proof_sha": { "type": ["string", "null"] },
-          "status": { "type": "string", "enum": ["red", "green", "unknown"] }
+          "test_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "red_proof_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "red_proof_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "red",
+              "green",
+              "unknown"
+            ]
+          }
         },
         "additionalProperties": true
       }
@@ -126,15 +299,26 @@
       "type": "object",
       "description": "Re-ejecucion autoritativa en CI. La discrepancia entre lo declarado y lo recomputado es el detector de fraude.",
       "properties": {
-        "recomputed_by": { "type": "string" },
-        "recomputed_at": { "type": "string", "format": "date-time" },
+        "recomputed_by": {
+          "type": "string"
+        },
+        "recomputed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
         "mismatches": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["metric", "declared", "recomputed"],
+            "required": [
+              "metric",
+              "declared",
+              "recomputed"
+            ],
             "properties": {
-              "metric": { "type": "string" },
+              "metric": {
+                "type": "string"
+              },
               "declared": {},
               "recomputed": {}
             },
@@ -148,12 +332,26 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["gate_id", "reason", "approved_by", "expires_at"],
+        "required": [
+          "gate_id",
+          "reason",
+          "approved_by",
+          "expires_at"
+        ],
         "properties": {
-          "gate_id": { "type": "string" },
-          "reason": { "type": "string" },
-          "approved_by": { "type": "string" },
-          "expires_at": { "type": "string", "format": "date-time" }
+          "gate_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "approved_by": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
         "additionalProperties": true
       }

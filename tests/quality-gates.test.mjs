@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { evaluateQualityGates, resolveMetric } from "../src/quality-gates.js";
+import { resolveUnavailableProbes } from "../src/quality-adjudicate.js";
 
 // --- resolveMetric ---------------------------------------------------------
 assert.equal(resolveMetric({ coverage: { lines_pct: 91 } }, "coverage.lines_pct"), 91);
@@ -230,5 +231,61 @@ const absent = evaluateQualityGates({
   metrics: {}
 });
 assert.equal(absent.status, "blocked");
+
+// --- probe declarado no disponible: no medido != incumplido ----------------
+// El caso real: extension Chrome de raiz plana, sin build y sin un solo test,
+// contra un contrato que exige cobertura, grafo de dependencias y mutation.
+// El rojo decia "no se pudo evaluar" y se leia como "calidad insuficiente".
+const NA_GATES = [
+  { id: "F8.cov", phase: "F8", metric: "coverage.changed_lines_pct", op: "gte", mode: "block", threshold: 80 },
+  { id: "F10.deps", phase: "F10", metric: "dependencies.violations", op: "eq", mode: "block", threshold: 0 }
+];
+
+const sinDeclarar = evaluateQualityGates({ gates: NA_GATES, metrics: {} });
+assert.equal(sinDeclarar.status, "blocked", "sin declaracion, no medir un gate block sigue bloqueando");
+
+const declarado = evaluateQualityGates({
+  gates: NA_GATES,
+  metrics: {},
+  unavailableProbes: [
+    { probeId: "coverage", prefix: "coverage", reason: "sin runner de tests: montarlo es un slice propio" },
+    { probeId: "deps", prefix: "dependencies", reason: "tres archivos JS sueltos, sin grafo de modulos" }
+  ]
+});
+assert.equal(declarado.status, "ok", "lo declarado no medible con motivo no bloquea");
+assert.equal(declarado.notApplicable.length, 2);
+assert.equal(declarado.violations.length, 0);
+assert.deepEqual(declarado.evaluated.map((e) => e.status), ["not-applicable", "not-applicable"]);
+assert.match(declarado.notApplicable[0].reason, /slice propio/, "el motivo viaja hasta la salida");
+
+// La exencion no puede tapar un gate de OTRA familia que si se podia medir.
+const parcial = evaluateQualityGates({
+  gates: NA_GATES,
+  metrics: {},
+  unavailableProbes: [{ probeId: "coverage", prefix: "coverage", reason: "sin runner de tests" }]
+});
+assert.equal(parcial.status, "blocked");
+assert.deepEqual(parcial.violations.map((v) => v.id), ["F10.deps"]);
+
+// Declarado no disponible y medido de todas formas: manda el numero real y se
+// avisa de que la declaracion sobra. Es el camino por el que se bajaria el
+// liston en silencio.
+const contradictorio = evaluateQualityGates({
+  gates: [NA_GATES[0]],
+  metrics: { coverage: { changed_lines_pct: 41 } },
+  unavailableProbes: [{ probeId: "coverage", prefix: "coverage", reason: "sin runner de tests" }]
+});
+assert.equal(contradictorio.status, "blocked", "41 < 80 se juzga igual: medir gana a declarar");
+assert.ok(contradictorio.warnings.some((w) => w.code === "probe-unavailable-but-measured"));
+
+// Sin `reason` no hay exencion: se avisa y los gates siguen adjudicandose.
+const sinMotivo = resolveUnavailableProbes({
+  probes: [{ id: "coverage", unavailable: { since: "2026-08-13" } }, { id: "deps", metrics_prefix: "dependencies", unavailable: { reason: "sin grafo" } }]
+});
+assert.deepEqual(sinMotivo.resolved.map((p) => p.prefix), ["dependencies"]);
+assert.equal(sinMotivo.findings.length, 1);
+assert.equal(sinMotivo.findings[0].code, "probe-unavailable-without-reason");
+
+console.log("quality-gates not-applicable: PASS");
 
 console.log("quality-gates: PASS");
