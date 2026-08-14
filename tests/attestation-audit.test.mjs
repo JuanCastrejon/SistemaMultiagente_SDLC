@@ -169,14 +169,54 @@ if (ready) {
 
   console.log("attestation audit y reparacion: PASS");
 
-  // --- 5. sin evidencia previa, --record no inventa una fase ----------------
+  // --- 5. sin evidencia previa NO se crea el commit -------------------------
+  // Antes se creaba y luego fallaba el enlace, dejando un commit de aprobacion
+  // huerfano en la historia que nadie iba a limpiar. Las precondiciones que no
+  // cambian por firmar se comprueban ANTES de firmar.
+  const antes = execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim();
   const sinEvidencia = JSON.parse(
     runCli(["signoff", "--target", target, "--slice", "slice-sin-evidencia", "--phase", "F13", "--create", "--record", "--json"]).stdout
   );
   assert.equal(sinEvidencia.status, "blocked");
   assert.equal(sinEvidencia.code, "evidence-missing");
   assert.equal(sinEvidencia.recorded, false);
-  assert.ok(sinEvidencia.commitSha, "el commit se creo; lo que falla es el enlace, y se dice");
+  assert.equal(sinEvidencia.commitSha, undefined, "no puede haberse creado ningun commit");
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim(),
+    antes,
+    "la historia no se toca si el enlace no se puede garantizar"
+  );
 
   console.log("attestation record sin evidencia: PASS");
+
+  // --- 6. enlazar un commit ya firmado, sin volver a firmar -----------------
+  // El camino de recuperacion cuando la firma existe pero el enlace fallo:
+  // obligar a firmar otra vez dejaria dos commits de aprobacion para lo mismo,
+  // y el segundo no seria mas valido que el primero.
+  const firmado = reparado.commitSha;
+  const docSuelto = YAML.parse(fs.readFileSync(evidencePath, "utf8"));
+  delete docSuelto.human_gate_signoff.attestation_commit;
+  docSuelto.human_gate_signoff.signature_class = "declarative";
+  fs.writeFileSync(evidencePath, YAML.stringify(docSuelto), "utf8");
+
+  const reenlazado = JSON.parse(
+    runCli(["signoff", "--target", target, "--slice", "slice-firmado", "--phase", "F13", "--record", "--commit", firmado, "--json"]).stdout
+  );
+  assert.equal(reenlazado.status, "ok", JSON.stringify(reenlazado));
+  assert.equal(reenlazado.recorded, true);
+  assert.equal(YAML.parse(fs.readFileSync(evidencePath, "utf8")).human_gate_signoff.attestation_commit, firmado);
+  assert.equal(
+    execFileSync("git", ["rev-parse", "HEAD"], { cwd: target, encoding: "utf8" }).trim(),
+    firmado,
+    "enlazar no crea historia nueva"
+  );
+
+  // Un commit que no verifica no se enlaza, aunque se pida explicitamente.
+  const noVerifica = JSON.parse(
+    runCli(["signoff", "--target", target, "--slice", "slice-firmado", "--phase", "F13", "--record", "--commit", otroCommit, "--json"]).stdout
+  );
+  assert.equal(noVerifica.status, "blocked");
+  assert.equal(noVerifica.recorded, false);
+
+  console.log("attestation record de commit existente: PASS");
 }

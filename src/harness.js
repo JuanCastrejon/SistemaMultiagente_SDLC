@@ -926,17 +926,22 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }) {
   });
 }
 
-// Codigos que significan "no se pudo comprobar", no "la firma es mala". Un clon
-// superficial no trae el commit atestado, y un repo sin contrato o sin
-// maintainers no tiene con que recomputar el sujeto. Tratarlos como firma
-// invalida produciria falsos positivos justo en los entornos donde menos se
-// pueden diagnosticar (CI con `fetch-depth: 1`, por ejemplo).
-const ATTESTATION_UNKNOWN = new Set([
-  "tree-ref-unreadable",
-  "quality-contract-missing",
-  "governance-maintainers-missing",
-  "signoff-commit-not-found"
-]);
+// Tres veredictos, no dos. "No se pudo comprobar" no es "la firma es mala",
+// pero TAMPOCO es evidencia apta para autorizar, y meterlo en el mismo saco que
+// un aviso cosmetico fue un error propio: dejaba que `upgrade` terminara en `ok`
+// con atestaciones que nadie habia podido verificar.
+//
+//  - `invalid`      la firma existe y no vale. Error en todas partes.
+//  - `unverifiable` no hay con que comprobarla. Se reporta como aviso
+//                   diagnostico, pero NUNCA produce exito ni deja pasar un gate.
+//  - `valid`        verificada.
+//
+// Solo la historia incompleta del repo entra en `unverifiable`: un clon
+// superficial no trae el commit atestado, y eso no es culpa de nadie. Un repo
+// SIN maintainers o SIN contrato es otra cosa: es configuracion local que
+// desactiva el verificador entero, y clasificarla como incertidumbre permitiria
+// apagar el control borrando seis lineas de config.
+const ATTESTATION_UNVERIFIABLE = new Set(["tree-ref-unreadable", "signoff-commit-not-found"]);
 
 /**
  * Recorre la evidencia escrita y re-verifica TODA atestacion declarada.
@@ -969,14 +974,23 @@ export function auditAttestations(target) {
       const verification = verifyEvidenceAttestation(target, { slice: sliceEntry.name, phase, commitSha });
       if (verification.ok) continue;
 
+      const unverifiable = ATTESTATION_UNVERIFIABLE.has(verification.code);
       result.findings.push({
-        level: ATTESTATION_UNKNOWN.has(verification.code) ? "warning" : "error",
+        level: unverifiable ? "warning" : "error",
+        // El veredicto es lo que consumen `upgrade` y los gates; el `level` solo
+        // dice como pintarlo. Un `unverifiable` que se leyera por su nivel
+        // pasaria por aviso inocuo.
+        verdict: unverifiable ? "unverifiable" : "invalid",
         code: `attestation-${verification.code}`,
         slice: sliceEntry.name,
         phase,
         commit: commitSha,
         detail: verification.detail ?? null,
-        hint: `sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record`
+        // Re-firmar NO repara una firma buena que el clon no puede leer: ahi lo
+        // que falta es la historia, no la firma.
+        hint: unverifiable
+          ? `traer la historia que falta (\`git fetch --unshallow\` o el objeto ${String(commitSha).slice(0, 12)}) y repetir; si el commit no existe de verdad, \`sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record\``
+          : `sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record`
       });
     }
   }

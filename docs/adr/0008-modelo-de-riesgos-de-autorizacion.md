@@ -67,11 +67,14 @@ surfaces:
     state_machine_critical: false
 ```
 
-**Ausencia o valor desconocido de cualquiera de los cuatro obliga a firmar.**
-Fail-closed, por el mismo criterio que ya aplica a `surfaces: []` desde 2.0.0:
-*no clasificado* no es lo mismo que *no aplica*. Una superficie `core` heredada
-sin clasificación explícita conserva la obligación hasta que una revisión la
-clasifique.
+La obligación desaparece **solo** si los cuatro riesgos están presentes, son
+booleanos válidos y los cuatro son `false`. Ausente, `null`, una cadena, un
+duplicado o un valor no booleano son fail-closed: obligan. Mismo criterio que ya
+aplica a `surfaces: []` desde 2.0.0 — *no clasificado* no es lo mismo que *no
+aplica*—, y una superficie `core` heredada sin clasificación explícita conserva
+la obligación hasta que una revisión la clasifique.
+
+`id` es obligatorio y único: es la identidad con la que D4 empareja BASE y HEAD.
 
 Se descarta anclar la obligación a `tier` (castiga una etiqueta que existe para
 otra cosa), solo a riesgo declarado (evadir sería escribir `false` gratis) y a
@@ -100,34 +103,56 @@ control, y hoy el cruce solo compara `id@path`, no `tier` ni los riesgos.
 firma deja de valer si alguien muta la política bajo la que se emitió. El sujeto
 se sigue recomputando siempre, jamás se recibe declarado.
 
-### D4. Obligación efectiva BASE → HEAD, no política abstracta
+### D4. Obligación efectiva BASE → HEAD
 
-Comparar "la política" contra la base no basta, porque la obligación depende
-también de los riesgos, del tier y de la **identidad** de la superficie. Se
-compara la obligación efectiva por superficie:
+Comparar "la política" contra la base no basta, porque la obligación se deriva
+de los riesgos declarados y de la **identidad** de la superficie. Se compara la
+obligación efectiva, superficie a superficie:
 
 ```text
 required_base(superficie) → required_head(superficie)
-true → false = downgrade
+true → false = downgrade de autorización
 ```
 
-Cuenta como downgrade: poner un riesgo en `false`, rebajar la política, **borrar,
-renombrar o mover una superficie** —sin identidad persistente se trata
-conservadoramente como downgrade—, bajar un umbral, eliminar un gate o debilitar
-su modo. **Si BASE no se puede resolver, se bloquea**: sin comparación no hay
-garantía.
+Lo que cuenta es la **transición del booleano**, no cada mutación de campo:
+poner un riesgo en `false` mientras otro sigue en `true` no cambia nada, porque
+la obligación seguía siendo `true`.
 
-Un downgrade solo pasa con una atestación válida **bajo `required_base`**,
-vinculada al árbol/commit final y al digest de política BASE→HEAD. Un
-`approved_by` escrito en el mismo diff no prueba nada: es una afirmación del
+`id` es **identidad persistente** de la superficie y es obligatorio. El
+emparejamiento BASE↔HEAD se hace por `id`: con un `id` estable, renombrar o
+mover una superficie se compara con normalidad y no es downgrade por sí mismo.
+Se trata conservadoramente como downgrade solo cuando la continuidad de
+identidad **no puede demostrarse** — un `id` que desaparece, dos superficies que
+se fusionan en una, o una que se parte en varias. **Si BASE no se puede
+resolver, se bloquea**: sin comparación no hay garantía.
+
+Un downgrade solo pasa con una **autorización de reducción**, que es un sujeto
+distinto del de la atestación de fase de D3 y no debe confundirse con él:
+
+```
+{ base_sha, head_sha, contract_sha256_base, contract_sha256_head, surface_ids[] }
+```
+
+Un `approved_by` escrito en el mismo diff no prueba nada: es una afirmación del
 evaluado, no una autoridad.
 
-### D5. El enforcement vive en `phase-gate`
+**Fuera de este eje, y a propósito:** bajar un umbral, eliminar un gate de
+calidad o debilitar su modo **no** son downgrades de autorización. Son controles
+de calidad y su protección corresponde a otro mecanismo — el guard de frontera
+ya los cubre por ruta—. Meterlos aquí reintroduciría `tier` en la obligación de
+firma, que es exactamente lo que D1 separa.
+
+### D5. El decisor del downgrade es `phase-gate`, y solo él
 
 Verificar la atestación que la evidencia declara —lo que 2.0.0 ya hace— **no
 basta**: no detecta una obligación que se eliminó. `phase-gate` debe además
-**exigir** atestación cuando BASE la requería. El evaluador de D4 se conecta a
-`signoff --record`, `signoff --verify` y `phase-gate`.
+**exigir** atestación cuando BASE la requería.
+
+La comparación BASE→HEAD de D4 la decide **únicamente** `phase-gate`.
+`signoff --create/--record/--verify` construyen y verifican atestaciones, pero no
+adjudican downgrades: normalmente ni siquiera conocen el BASE de la evaluación, y
+darles voto repartiría el mismo veredicto entre dos sitios con información
+distinta.
 
 ### D6. Las atestaciones v1 se rechazan visiblemente
 
@@ -194,9 +219,37 @@ conservan como regresión de la ruta v2.
 | Confiar en el guard de frontera para el downgrade | Decide por ruta; no compara semántica ni prueba revisión humana. |
 | Partir el diseño entre 2.0.0 y una minor posterior | Clasificación sin comparación contra BASE permite desclasificar en el mismo commit; comparación sin contrato en el sujeto permite mutar la política sin invalidar evidencia; sujeto anclado sin las otras dos certifica una política que aún puede auto-debilitarse. |
 
+## Estado de la implementación
+
+**Nada de este ADR está implementado en 2.0.0, y conviene no confundirlo con lo
+que sí lo está.** 2.0.0 lleva el sujeto anclado al commit
+(`{ slice, phase, tree_hash }`), la verificación de la atestación declarada en
+`phase-gate`, y la auditoría de atestaciones en `doctor`/`upgrade`. Eso es la
+ruta v1: no computa `contract_sha256` (D3), no distingue sujetos v1 de v2 (D6),
+no evalúa riesgos por superficie (D1) ni compara BASE→HEAD (D4).
+
+Lo que falta para poder implementar sin reabrir el diseño:
+
+1. Algoritmo puro y canónico `required(surface, contract)`, con tipos válidos,
+   valores desconocidos, duplicados y superficie vacía.
+2. Reglas de match BASE/HEAD por `id`, y tratamiento exacto de alta, baja, split
+   y merge de superficies.
+3. Definición exacta de `BASE` y `HEAD` — PR, merge-base, SHA de CI—, con el
+   comportamiento en clon superficial y sus códigos de salida.
+4. Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
+   derivada de riesgos.
+5. Alcance de `humanGate.policy`: por repositorio, por superficie, por fase o por
+   slice. Sin eso, `declarative` y `none` son ambiguos.
+6. Migración: qué evidencia v1 queda como histórica, cuál bloquea, cómo se
+   re-firma y qué reporta `upgrade --dry-run`.
+7. Matriz de enforcement por comando: `doctor`, `upgrade`, `phase-gate`, CI y
+   local no pueden inferir severidad solo de `warning`/`error`.
+
 ## Lo que este ADR NO decide
 
-- El número de versión.
+- **El número de versión de este modelo.** 2.0.0 es la rama actual, que no lo
+  implementa; este ADR describe la siguiente ruptura y su número se fija al
+  implementarla.
 - Si el fail-closed retroactivo admite un período de gracia para consumidores ya
   instalados, o bloquea desde el primer gate. La recomendación del contraste fue
   bloquear; el coste de migración lo decide el mantenedor al implementar.

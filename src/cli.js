@@ -45,7 +45,7 @@ import { commandQualityGate, commandQualityBaseline } from "./quality.js";
 import { baselineDoctorFindings } from "./quality-baseline.js";
 import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
-import { computeTreeHashAtRef, recordAttestation } from "./evidence-writer.js";
+import { computeTreeHashAtRef, evidencePath as evidencePathFor, recordAttestation } from "./evidence-writer.js";
 import { createAttestationCommit, verifySignoff } from "./signoff.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
@@ -769,6 +769,74 @@ function commandDoctor(options) {
  * se aprobo. Que el arbol se haya movido despues se reporta aparte, como
  * `fresh: false`, sin invalidar la firma.
  */
+/**
+ * Lo que hay que poder garantizar ANTES de crear un commit de atestacion con
+ * `--record`: que exista evidencia de esa fase, que sea legible y que haya
+ * maintainers con quien contrastar la firma. Ninguna de las tres cambia por
+ * firmar, asi que comprobarlas despues solo sirve para dejar un commit
+ * huerfano en la historia.
+ */
+function recordPreconditions(target, { slice, phase }) {
+  let config;
+  try {
+    config = loadConfig(target);
+  } catch (error) {
+    return { ok: false, code: "config-missing", detail: error.message };
+  }
+  if ((config.governance?.maintainers ?? []).length === 0) {
+    return {
+      ok: false,
+      code: "governance-maintainers-missing",
+      detail: "config.governance.maintainers esta vacio: la firma no podria verificarse contra nadie, asi que no se crea"
+    };
+  }
+  const evidenceAbsolute = evidencePathFor(target, slice, phase);
+  const raw = readTextIfExists(evidenceAbsolute);
+  if (!raw) {
+    return {
+      ok: false,
+      code: "evidence-missing",
+      detail: `no existe ${path.relative(target, evidenceAbsolute)}: escribir la evidencia de la fase antes de firmarla`
+    };
+  }
+  try {
+    YAML.parse(raw);
+  } catch (error) {
+    return { ok: false, code: "evidence-unparseable", detail: `${path.relative(target, evidenceAbsolute)}: ${error.message}` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Verifica un commit de atestacion ya existente y lo enlaza con su evidencia.
+ * Comparte ruta de verificacion con el gate a proposito: enlazar algo que el
+ * gate va a rechazar seria peor que no enlazarlo.
+ */
+function recordVerifiedAttestation(target, { slice, phase, surfacePaths, commitSha }) {
+  if (!commitSha) {
+    return { ok: false, code: "signoff-commit-missing", detail: "`--record` sin `--create` exige `--commit <sha>`" };
+  }
+  const ready = recordPreconditions(target, { slice, phase });
+  if (!ready.ok) return ready;
+
+  const config = loadConfig(target);
+  const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+
+  const verification = verifySignoff({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers: config.governance?.maintainers ?? []
+  });
+  if (!verification.ok) {
+    return { ok: false, code: verification.code, detail: `no se enlaza: ${verification.detail ?? verification.code}` };
+  }
+
+  const recorded = recordAttestation({ target, slice, phase, commitSha, signer: verification.signer });
+  return recorded.ok ? { ...recorded, signer: verification.signer } : recorded;
+}
+
 function commandSignoff(options) {
   const target = requireTarget(options);
   const loaded = loadQualityContract(target);
@@ -783,7 +851,38 @@ function commandSignoff(options) {
   const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
   const headRef = options["head-ref"] ?? options.headRef ?? "HEAD";
 
+  // `--record` sin `--create` enlaza un commit que YA existe y ya esta firmado.
+  // Existe para el caso en que la firma se creo pero el enlace fallo despues
+  // (disco lleno, YAML ilegible, interrupcion): obligar a firmar OTRA vez
+  // dejaria dos commits de aprobacion para la misma cosa, y el segundo no seria
+  // mas valido que el primero.
+  if (options.record && !options.create) {
+    const linked = recordVerifiedAttestation(target, {
+      slice,
+      phase,
+      surfacePaths,
+      commitSha: options.commit ?? null
+    });
+    return {
+      exitCode: linked.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
+      payload: linked.ok
+        ? { status: "ok", recorded: true, commitSha: options.commit, evidence: linked.path, signer: linked.signer }
+        : { status: "blocked", recorded: false, code: linked.code, detail: linked.detail }
+    };
+  }
+
   if (options.create) {
+    // Precondiciones ANTES de firmar. El commit de atestacion es un efecto
+    // secundario permanente en la historia: crearlo para descubrir despues que
+    // la evidencia no existe deja un commit huerfano que nadie va a limpiar.
+    // Lo barato se comprueba primero.
+    if (options.record) {
+      const ready = recordPreconditions(target, { slice, phase });
+      if (!ready.ok) {
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", recorded: false, ...ready } };
+      }
+    }
+
     const tree = computeTreeHashAtRef(target, surfacePaths, "HEAD");
     if (!tree.ok) {
       return { exitCode: EXIT_ERROR, payload: { status: "error", code: tree.code, message: tree.detail } };
@@ -1166,21 +1265,31 @@ function commandUpgrade(options) {
   // consumidor se enteraria al llegar al siguiente gate humano, semanas
   // despues. Sale `action-required` con la lista y el comando de reparacion.
   const attestations = auditAttestations(target);
-  const attestationErrors = attestations.findings.filter((finding) => finding.level === "error");
+  // Un `unverifiable` cuenta igual que un `invalid` para decidir si el upgrade
+  // puede terminar en verde. Filtrar solo por `level === "error"` dejaba pasar
+  // como exito un repo cuyas atestaciones nadie habia podido comprobar, que es
+  // justo el estado que esta auditoria existe para no dejar pasar.
+  const pendientes = attestations.findings.filter((finding) => finding.verdict !== undefined);
+  const invalidas = pendientes.filter((finding) => finding.verdict === "invalid").length;
+  const noVerificables = pendientes.filter((finding) => finding.verdict === "unverifiable").length;
+  const bloqueado = pendientes.length > 0;
   return {
-    exitCode: attestationErrors.length > 0 ? EXIT_ACTION_REQUIRED : EXIT_OK,
+    exitCode: bloqueado ? EXIT_ACTION_REQUIRED : EXIT_OK,
     payload: {
-      status: attestationErrors.length > 0 ? "action-required" : "ok",
+      status: bloqueado ? "action-required" : "ok",
       backup,
       frameworkVersion: nextManifest.frameworkVersion,
       accepted: overrideEntries.map((entry) => entry.path),
       ...(attestations.checked > 0 ? { attestations } : {}),
-      ...(attestationErrors.length > 0
+      ...(bloqueado
         ? {
+            // Se dice lo que de verdad paso: la migracion se aplico y lo que
+            // queda pendiente es la autorizacion. Presentarlo como "upgrade
+            // fallido" mandaria a revertir una migracion sana.
             message:
-              `El upgrade se aplico, pero ${attestationErrors.length} atestacion(es) dejaron de verificar. ` +
-              "Volver a firmar y re-enlazar con `sdlc signoff --slice <id> --phase <F> --create --record` antes de " +
-              "seguir: hasta entonces esas fases no pueden pasar su gate humano."
+              `Migracion aplicada; autorizacion PENDIENTE. ${invalidas} atestacion(es) dejaron de verificar y ` +
+              `${noVerificables} no se pudieron comprobar. Hasta resolverlas, esas fases no pueden pasar su gate ` +
+              "humano. Ver `attestations.findings[].hint` para la accion de cada una."
           }
         : {})
     }
