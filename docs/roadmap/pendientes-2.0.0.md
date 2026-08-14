@@ -8,29 +8,58 @@ primero, porque bloquea al resto.
 
 ---
 
-## Bloquea el push
+## Bloquea el push — ronda 8 CERRADA, 0 bloqueantes y 3 SERIOS
 
-- [ ] **El refactor que quita el presupuesto global (`d698112`) no está
-      revisado.** La ronda 8 se lanzó y **murió a mitad**: Codex agotó el límite
-      de uso de su cuenta (plan `free`, reset el 13-sep-2026) justo cuando
-      empezaba a mutar. No emitió **ni un solo hallazgo**. El historial de esta
-      rama es inequívoco —las rondas 6 y 7 encontraron que los arreglos de la
-      ronda anterior no arreglaban lo que decían—, así que empujar un refactor
-      de −400 líneas sin revisión repetiría el patrón exacto que costó tres
-      rondas corregir.
-      **Opciones:** esperar al reset de Codex, usar otra cuenta, o cerrar el
-      barrido de mutación a mano (empezado, ver abajo).
-- [ ] **Terminar el barrido de mutación sobre los 14 casos.** Hay un arnés
-      escrito que aplica 16 mutaciones sobre la copia POSIX y reporta cuáles
-      sobreviven. Quedó sin ejecutar por un problema de escapado al invocarlo
-      desde PowerShell. Es el sustituto directo de lo que Codex iba a entregar.
-      Contexto que lo justifica: en la ronda 7, Codex encontró que **6 de 7**
-      mutaciones sobrevivían — los tests eran más débiles de lo que sus propios
-      comentarios afirmaban.
-- [ ] **Cerrar el hueco que Codex dejó señalado y sigue abierto:** los casos 13
-      y 18 pasan igual si el primer kill fuese `SIGKILL`. Prueban que el nieto
-      muere, no que haya **una fase de gracia seguida de escalada**. Y
-      `kill(pid, 0)` no distingue un zombi de un proceso vivo.
+La ronda 8 se completó reanudando la sesión con otra cuenta (ver
+`docs/guides/codex-revision-reanudable.md`). Veredicto: **0 BLOQUEANTES**, 3
+SERIOS y 7 MENORES. Registro completo en `.codex-out/ronda-8/hallazgos.md`.
+Mínimo para publicar según Codex: los tres SERIOS.
+
+- [ ] **SERIO — `CAPTURE_CEILING_BYTES` no es un techo aplicado.** El cálculo
+      *64 MiB × 4* solo vale dentro de UNA ejecución de `auditAttestations`.
+      `spawnCapture` es exportación pública sin tope de concurrencia propio.
+      **Medido por Codex:** cinco capturas simultáneas de 63 MiB retuvieron
+      315 MiB con pico de 497 MiB de RSS. Y un mutante que reintroduce un límite
+      compartido *a partir de la quinta* captura dejó la suite en 14/14, porque
+      el caso 12 solo lanza cuatro.
+      **Corregido en el README** (ya no se presenta como límite aplicado);
+      queda decidir si se impone el tope en el borde público.
+- [ ] **SERIO — la regresión 256→64 MiB no tiene escape.**
+      `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` fijan
+      `TREE_HASH_MAX_BUFFER` y **no aceptan opciones**; `signoff --create`,
+      `--verify` y `--record` tampoco. Un árbol >64 MiB queda
+      `tree-ref-unreadable` y no puede firmarse ni avanzar de fase.
+      **El README afirmaba que bastaba pasar `maxBuffer`: era falso y ya está
+      corregido.** Falta la decisión de producto: exponer configuración
+      coherente para las dos vías, o conservar explícitamente los 256 MiB
+      síncronos.
+- [ ] **SERIO — 30 s de gracia no hacen despreciable el pgid reciclado.**
+      `pid_max` es un valor de wrap configurable del kernel, no una garantía de
+      esta librería, así que el argumento no es portable a otros consumidores o
+      namespaces. Y el propio caso 18 usa el peor valor permitido. Mitigación
+      mínima: bajar el máximo cerca del default de 2 s con una prueba literal.
+      Cierre real: cgroup o job object.
+
+### Mutantes que SOBREVIVIERON (los tests afirman más de lo que prueban)
+
+Todos ejecutados por Codex sobre la copia POSIX:
+
+- [ ] `+1 KiB` al límite combinado → 14/14 verde. La vía async acepta hasta
+      1 KiB más que `spawnSync`: **la paridad vuelve a romperse en el borde**.
+      Falta probar exactamente `maxBuffer` y `maxBuffer + 1` en ambos órdenes.
+- [ ] `.normalize("NFC")` en `decodeCapture` → 14/14 verde. Un principal de
+      firma en NFD podría juzgarse distinto en las dos vías.
+- [ ] `MAX_KILL_GRACE_MS` de 30 s a 60 s → 14/14 verde, porque el test calcula
+      su entrada inválida como `MAX_KILL_GRACE_MS + 1` **importado del propio
+      código**. Hay que afirmar el máximo literal.
+- [ ] `Math.min(4, …)` en vez de `Math.min(concurrency, …)` en `runPool` →
+      14/14 verde. El grado de paralelismo que pida un consumidor se ignora.
+- [ ] Orden por bytes: cambiar `Buffer.compare` por comparación UTF-16 → 14/14
+      verde. `Z`, `a`, `ñ` ordenan igual por ambos criterios.
+- [ ] Detalle de error del `ls-tree` async → 14/14 verde: el caso del ref
+      inexistente compara solo `ok` y `code`, no el diagnóstico.
+- [ ] `trip` con resolución retrasada 1 s → 14/14 verde: el caso 6 solo exige
+      <10 s, no la propiedad comentada de liberar el hueco del pool de inmediato.
 
 ## Espera decisión del mantenedor
 

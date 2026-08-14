@@ -378,7 +378,13 @@ El framework lanza procesos externos —`git` sobre todo— y captura su salida.
 
 **La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con `AUDIT_CONCURRENCY = 4` y 64 MiB por llamada, eso da exactamente el techo de 256 MiB. Si cambias uno, cambia el otro.
 
-**Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Si tu monorepo pasa de ahí, pasa tu propio `maxBuffer` — **pero en las dos vías**, la síncrona y la asíncrona. Que declaren el mismo número es lo único que garantiza que acepten y rechacen las mismas entradas; si divergen, la auditoría y el gate pueden juzgar distinto la misma firma, y ese desacuerdo no se ve.
+> **`CAPTURE_CEILING_BYTES` es un techo de diseño, no un límite aplicado.** Nada lo hace cumplir en tiempo de ejecución: solo se cumple porque la auditoría es hoy el único consumidor concurrente y corre a cuatro. `spawnCapture` es una exportación pública sin tope de concurrencia propio, así que quien la llame en paralelo por su cuenta —o solape dos auditorías— puede pasarse. Medido en la revisión adversarial: **cinco capturas simultáneas de 63 MiB retuvieron 315 MiB con un pico de 497 MiB de RSS**. Si vas a usar `spawnCapture` directamente, el tope de concurrencia lo pones tú.
+
+**Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Esa media es de *este* repo; rutas más largas la suben y bajan el número de archivos que caben.
+
+> **Límite conocido, sin escape hoy.** Si tu árbol pasa de 64 MiB, `signoff` y el phase-gate devuelven `tree-ref-unreadable` y **no hay forma de subir el tope**: `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` fijan `TREE_HASH_MAX_BUFFER` y no aceptan opciones. Antes de 2.0.0 la vía síncrona admitía 256 MiB, así que **para árboles de entre 64 y 256 MiB esto es una regresión de capacidad**. Está anotada en `docs/roadmap/pendientes-2.0.0.md` y pendiente de decisión: exponer configuración coherente para las dos vías, o conservar explícitamente la capacidad síncrona.
+
+Si algún día se expone ese ajuste, tendrá que ser **en las dos vías a la vez**. Que declaren el mismo número es lo único que garantiza que acepten y rechacen las mismas entradas; si divergen, la auditoría y el gate pueden juzgar distinto la misma firma, y ese desacuerdo no se ve.
 
 **`killGraceMs` está acotado arriba por seguridad.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta: una gracia larga convierte un riesgo despreciable en uno real.
 
