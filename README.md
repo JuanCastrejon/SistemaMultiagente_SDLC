@@ -374,19 +374,24 @@ El framework lanza procesos externos —`git` sobre todo— y captura su salida.
 | `TREE_HASH_MAX_BUFFER` | **64 MiB** | Tope por llamada del hash de árbol. Es `CAPTURE_CEILING_BYTES / 4` |
 | `AUDIT_CONCURRENCY` | 4 | Atestaciones verificadas a la vez (`src/harness.js`) |
 | `maxBuffer` (por llamada) | 1 MiB por defecto | Salida capturada de un proceso. **Un solo presupuesto entre `stdout` y `stderr`**, igual que `spawnSync` |
-| `killGraceMs` | 2 s (máx. 30 s) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
+| `MAX_CONCURRENT_CAPTURES` | 4 | Cuántas capturas pueden estar vivas a la vez, en todo el proceso |
+| `killGraceMs` | 2 s (máx. **5 s**) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
 
 **La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con `AUDIT_CONCURRENCY = 4` y 64 MiB por llamada, eso da exactamente el techo de 256 MiB. Si cambias uno, cambia el otro.
 
-> **`CAPTURE_CEILING_BYTES` es un techo de diseño, no un límite aplicado.** Nada lo hace cumplir en tiempo de ejecución: solo se cumple porque la auditoría es hoy el único consumidor concurrente y corre a cuatro. `spawnCapture` es una exportación pública sin tope de concurrencia propio, así que quien la llame en paralelo por su cuenta —o solape dos auditorías— puede pasarse. Medido en la revisión adversarial: **cinco capturas simultáneas de 63 MiB retuvieron 315 MiB con un pico de 497 MiB de RSS**. Si vas a usar `spawnCapture` directamente, el tope de concurrencia lo pones tú.
+`CAPTURE_CEILING_BYTES` **es un límite aplicado**, no solo de diseño: `spawnCapture` admite como máximo `MAX_CONCURRENT_CAPTURES` capturas a la vez, en cola FIFO. Antes de la ronda 8 de revisión adversarial no lo era —`spawnCapture` es pública y no tenía tope de concurrencia propio; medido: cinco capturas simultáneas de 63 MiB retenían 315 MiB con pico de 497 MiB de RSS—. La cola solo **admite** por conteo, nunca por contenido: eso es lo que evita que vuelva a romper la paridad sync/async como el presupuesto que se quitó en la ronda 7.
 
 **Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Esa media es de *este* repo; rutas más largas la suben y bajan el número de archivos que caben.
 
-> **Límite conocido, sin escape hoy.** Si tu árbol pasa de 64 MiB, `signoff` y el phase-gate devuelven `tree-ref-unreadable` y **no hay forma de subir el tope**: `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` fijan `TREE_HASH_MAX_BUFFER` y no aceptan opciones. Antes de 2.0.0 la vía síncrona admitía 256 MiB, así que **para árboles de entre 64 y 256 MiB esto es una regresión de capacidad**. Está anotada en `docs/roadmap/pendientes-2.0.0.md` y pendiente de decisión: exponer configuración coherente para las dos vías, o conservar explícitamente la capacidad síncrona.
+> **Límite conocido, con escape parcial.** Si tu árbol pasa de 64 MiB, `signoff` y el phase-gate devuelven `tree-ref-unreadable`. `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` no aceptan un parámetro por llamada —a propósito: eso dejaría abierto que alguien subiera solo una de las dos vías—, pero sí hay una variable de entorno: `SDLC_TREE_HASH_MAX_BUFFER_BYTES` se lee una sola vez y la comparten las dos. Un flag de CLI o un campo de `.sdlc/config.json` siguen pendientes de decisión de producto.
 
-Si algún día se expone ese ajuste, tendrá que ser **en las dos vías a la vez**. Que declaren el mismo número es lo único que garantiza que acepten y rechacen las mismas entradas; si divergen, la auditoría y el gate pueden juzgar distinto la misma firma, y ese desacuerdo no se ve.
+```bash
+SDLC_TREE_HASH_MAX_BUFFER_BYTES=134217728 sdlc signoff --slice <id> --phase <F> --create --record
+```
 
-**`killGraceMs` está acotado arriba por seguridad.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta: una gracia larga convierte un riesgo despreciable en uno real.
+Si algún día se expone como flag o config, tendrá que seguir siendo **el mismo número en las dos vías** — es lo único que garantiza que acepten y rechacen las mismas entradas.
+
+**`killGraceMs` está acotado arriba por seguridad, y el tope bajó en la ronda 8.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta. `pid_max` es un valor de wrap **configurable del kernel**, no una garantía de esta librería, así que un tope de 30 s no era defendible fuera de esta máquina — ahora son 5 s.
 
 ## Firma humana: emitir, enlazar y auditar
 

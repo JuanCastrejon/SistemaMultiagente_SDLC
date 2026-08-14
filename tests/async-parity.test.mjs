@@ -20,7 +20,15 @@ import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { AUDIT_CONCURRENCY as HARNESS_AUDIT_CONCURRENCY } from "../src/harness.js";
-import { CAPTURE_CEILING_BYTES, MAX_KILL_GRACE_MS, TREE_HASH_MAX_BUFFER, decodeCapture, spawnCapture } from "../src/file-utils.js";
+import {
+  CAPTURE_CEILING_BYTES,
+  MAX_CONCURRENT_CAPTURES,
+  MAX_KILL_GRACE_MS,
+  TREE_HASH_MAX_BUFFER,
+  captureQueueDepth,
+  decodeCapture,
+  spawnCapture
+} from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
@@ -225,6 +233,36 @@ console.log("tope de stderr: PASS");
 
 console.log("maxBuffer combinado entre stdout y stderr: PASS");
 
+// --- 5c. el corte es EXACTO, sin margen -------------------------------------
+// MENOR de la ronda 8, mutante superviviente: dar 1 KiB de margen al corte
+// (`outSize + errSize > maxBuffer + 1024`) dejaba la suite entera en verde.
+// El caso 5b usa margenes grandes (6 MiB de cada lado, tope de 10 MiB) porque
+// prueba OTRA cosa -- que el presupuesto es compartido, no por stream -- y ese
+// margen amplio es precisamente lo que dejaba pasar 1 KiB de mas sin que nadie
+// lo notara. Este caso prueba la frontera misma: en el limite exacto no
+// desborda; un byte mas si, y en LAS DOS vias.
+{
+  const maxBuffer = 100 * 1024; // 100 KiB
+  const escribir = (bytes) => `process.stdout.write('a'.repeat(${bytes}));`;
+
+  const script1 = path.join(tempRoot, "borde-exacto.mjs");
+  fs.writeFileSync(script1, escribir(maxBuffer), "utf8");
+  const sync1 = spawnSync(process.execPath, [script1], { maxBuffer, encoding: "utf8" });
+  const async1 = await spawnCapture(process.execPath, [script1], { maxBuffer });
+  assert.equal(sync1.status, 0, "exactamente maxBuffer bytes NO desborda en spawnSync");
+  assert.equal(async1.ok, true, "exactamente maxBuffer bytes NO desborda en spawnCapture -- sin margen de mas");
+
+  const script2 = path.join(tempRoot, "borde-mas-uno.mjs");
+  fs.writeFileSync(script2, escribir(maxBuffer + 1), "utf8");
+  const sync2 = spawnSync(process.execPath, [script2], { maxBuffer, encoding: "utf8" });
+  const async2 = await spawnCapture(process.execPath, [script2], { maxBuffer });
+  assert.notEqual(sync2.status, 0, "maxBuffer + 1 byte SI desborda en spawnSync");
+  assert.equal(async2.ok, false, "maxBuffer + 1 byte SI desborda en spawnCapture -- ni un KiB de margen");
+  assert.equal(async2.overflow, true);
+}
+
+console.log("corte exacto, sin margen: PASS");
+
 // --- 6. un hijo que ignora SIGTERM no cuelga la promesa --------------------
 // `kill()` manda SIGTERM y no garantiza nada. Si `spawnCapture` esperara a
 // `close` para resolver, un hijo que lo ignore dejaria la promesa colgada para
@@ -345,6 +383,14 @@ console.log("orden de hallazgos por bytes: PASS");
   // grupo por pgid, y ese pgid solo sigue siendo el nuestro mientras la ventana
   // sea corta. Sin tope, el argumento de riesgo escrito en `trip` deja de
   // sostenerse sin que nadie lo note (lo señalo la ronda 7).
+  //
+  // El tope se afirma LITERAL, no solo `+1` sobre lo que sea que declare el
+  // codigo. Ronda 8: `MAX_KILL_GRACE_MS + 1` importado del propio codigo dejaba
+  // pasar un mutante que subia el tope de 30 s a 60 s -- el test seguia
+  // "rechazando el siguiente valor" sin importar cual fuera ese valor. El
+  // numero en si es la politica; hay que afirmarlo, no solo su frontera.
+  assert.equal(MAX_KILL_GRACE_MS, 5_000, "el tope de la gracia es una decision de riesgo, no un detalle: si cambia, tiene que ser a proposito");
+
   for (const malo of [Number.NaN, Number.POSITIVE_INFINITY, -1, MAX_KILL_GRACE_MS + 1]) {
     await assert.rejects(
       () => spawnCapture(process.execPath, ["-e", "0"], { killGraceMs: malo }),
@@ -646,10 +692,11 @@ if (process.platform !== "win32") {
     "utf8"
   );
 
-  // `killGraceMs` largo A PROPOSITO: deja la ventana abierta de sobra para
-  // actuar dentro de ella. Si la limpieza dependiera del temporizador y no del
+  // `killGraceMs` largo A PROPOSITO (pero dentro de MAX_KILL_GRACE_MS, que
+  // bajo a 5 s en la ronda 8): deja la ventana abierta de sobra para actuar
+  // dentro de ella. Si la limpieza dependiera del temporizador y no del
   // registro, este test no podria distinguir una cosa de la otra.
-  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 30_000 });
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 3_000 });
   assert.equal(resultado.overflow, true, "la captura corto, que es lo que abre la ventana");
 
   assert.ok(fs.existsSync(pidFile), "el nieto llego a escribir su pid antes del corte");
@@ -690,3 +737,45 @@ console.log(
     ? "ventana entre corte y muerte real: SKIP (Windows no detacha)"
     : "ventana entre corte y muerte real: PASS"
 );
+
+// --- 19. spawnCapture no deja pasar mas de MAX_CONCURRENT_CAPTURES a la vez -
+// SERIO de la ronda 8. `spawnCapture` es publica y, tras quitar el presupuesto
+// global en la ronda 7, se quedo SIN memoria de sus vecinas: nada impedia que
+// un consumidor (o dos auditorias solapadas) la llamara mas veces de las que
+// `CAPTURE_CEILING_BYTES` asume. Medido por Codex antes de este fix: cinco
+// capturas de 63 MiB en paralelo retuvieron 315 MiB con un pico de 497 MiB de
+// RSS. Aqui se prueba el MECANISMO -- que la admision se pone en cola pasado
+// el cupo -- sin gastar esa memoria: el hijo es liviano, lo que se mide es
+// cuantos estan vivos a la vez.
+{
+  const script = path.join(tempRoot, "lento-de-admitir.mjs");
+  // Vive el tiempo suficiente para que la ventana de observacion (mas abajo)
+  // alcance a verlo en cola o en vuelo, sin alargar la prueba de mas.
+  fs.writeFileSync(script, "setTimeout(() => process.stdout.write('ok'), 300);", "utf8");
+
+  const extra = 3; // por encima del cupo, a proposito
+  const total = MAX_CONCURRENT_CAPTURES + extra;
+  assert.equal(captureQueueDepth(), 0, "la cola tiene que arrancar vacia");
+
+  const promesas = Array.from({ length: total }, () => spawnCapture(process.execPath, [script], { killGraceMs: 500 }));
+
+  // Se da tiempo a que las primeras `MAX_CONCURRENT_CAPTURES` se admitan (son
+  // instantaneas de arrancar) y las de mas queden esperando: si la admision no
+  // tuviera cupo, las `total` arrancarian todas ya y la cola seguiria en 0.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  const profundidad = captureQueueDepth();
+  assert.ok(
+    profundidad > 0,
+    `con ${total} capturas y cupo de ${MAX_CONCURRENT_CAPTURES}, alguna tiene que estar en cola -- se vio profundidad ${profundidad}`
+  );
+  assert.ok(profundidad <= extra, `la cola no puede tener mas que las que exceden el cupo: se vio ${profundidad}`);
+
+  const resultados = await Promise.all(promesas);
+  assert.ok(
+    resultados.every((r) => r.ok),
+    "todas terminan bien: la cola retrasa, no descarta"
+  );
+  assert.equal(captureQueueDepth(), 0, "la cola vuelve a quedar vacia");
+}
+
+console.log("cupo de concurrencia de spawnCapture: PASS");

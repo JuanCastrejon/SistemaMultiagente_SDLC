@@ -49,40 +49,47 @@ export function sha256Text(value) {
 // ---------------------------------------------------------------------------
 // Techo de memoria de las capturas.
 //
-// El unico mecanismo es el tope POR LLAMADA (`maxBuffer`). Hubo ademas un
+// El tope POR LLAMADA (`maxBuffer`) acota una captura sola. Hubo ademas un
 // presupuesto GLOBAL compartido entre capturas concurrentes, y se quito: era
-// la causa raiz de tres bloqueantes seguidos, y no acotaba nada que el tope
-// por llamada no acotara ya.
+// la causa raiz de tres bloqueantes seguidos -- dos capturas con la MISMA
+// entrada podian terminar distinto segun el orden de llegada de sus chunks,
+// porque el presupuesto se consultaba a mitad de la escritura, con decisiones
+// que dependian de CONTENIDO. Eso rompia la paridad sync/async, que es la
+// propiedad que este modulo existe para sostener.
 //
-// El argumento, porque volver a meterlo seria facil: el pico de bytes
-// RETENIDOS es (tope por llamada) x (capturas en vuelo). Con el consumidor
-// caliente -- la auditoria de atestaciones, AUDIT_CONCURRENCY en vuelo -- eso
-// da exactamente `CAPTURE_CEILING_BYTES`, el mismo numero que el presupuesto
-// hacia cumplir. La diferencia es que el tope por llamada es una propiedad
-// LOCAL de cada captura, y el presupuesto era estado COMPARTIDO: dos capturas
-// con la misma entrada podian terminar distinto segun el orden de llegada de
-// sus chunks. Eso rompia la paridad sync/async, que es la propiedad que este
-// modulo existe para sostener, y encima traia cola, inanicion, barging,
-// crecimiento por bloques y una fuga permanente -- todo para acotar lo que ya
-// estaba acotado.
+// Ronda 8 de revision adversarial encontro que quitarlo entero dejo el techo
+// de diseño SIN CUMPLIR: `spawnCapture` es publica y no tenia tope de
+// concurrencia propio. Medido: cinco capturas de 63 MiB en paralelo retuvieron
+// 315 MiB con un pico de 497 MiB de RSS -- muy por encima de
+// `CAPTURE_CEILING_BYTES`.
 //
-// Lo que se pierde: el presupuesto permitia que UNA captura sola usara los
-// 256 MiB enteros mientras cuatro juntas seguian sin pasar de 256 MiB. Ahora
-// el tope es fijo. Es capacidad de verdad perdida, y se acepta a cambio de que
-// las dos vias no puedan discrepar.
+// La correccion NO reintroduce estado dependiente de bytes. `acquireCaptureSlot`
+// / `releaseCaptureSlot` (mas abajo) son un semaforo FIFO que solo cuenta
+// CAPTURAS EN VUELO, nunca su contenido. La diferencia con el presupuesto
+// viejo es la que importa: aquel decidia A MITAD de la escritura, mirando
+// bytes acumulados -- por eso dos llamadas identicas podian terminar distinto.
+// Este decide UNA vez, al admitir la llamada, ANTES de que el hijo arranque.
+// Una vez admitida, una captura se comporta exactamente igual este sola o en
+// cola detras de otras cuatro: nada de lo que ve mientras corre depende de sus
+// vecinas. Eso es lo que preserva la paridad sync/async y evita repetir el
+// error de las rondas 5 y 6.
 //
 // El transitorio de decodificacion (`Buffer.concat` + `toString` + `split`)
 // sigue fuera de esta cuenta y sigue declarado como limite conocido.
 // ---------------------------------------------------------------------------
 
 // Techo de diseño: cuanta memoria retenida se acepta con el pool caliente al
-// completo. No se aplica en ningun sitio; es de donde sale el tope por llamada.
+// completo. Lo hace cumplir `MAX_CONCURRENT_CAPTURES` (ver mas abajo): con esa
+// cota de concurrencia y el tope por llamada, ninguna combinacion de capturas
+// puede superarlo.
 export const CAPTURE_CEILING_BYTES = 256 * 1024 * 1024;
 
 // Concurrencia esperada del consumidor caliente. Es AUDIT_CONCURRENCY
 // (harness.js), duplicado aqui porque harness.js importa de evidence-writer.js,
 // que importaria de aqui: cerrar el ciclo importando el valor de vuelta no es
-// posible. La prueba de paridad fija la relacion entre los dos numeros.
+// posible. La prueba de paridad fija la relacion entre los dos numeros. Se usa
+// ademas como cota REAL de concurrencia en `spawnCapture` (no solo como
+// divisor): ver `MAX_CONCURRENT_CAPTURES`.
 const EXPECTED_CONCURRENCY = 4;
 
 // Techo por llamada del hash de arbol. Lo usan LAS DOS vias, la sincrona y la
@@ -92,17 +99,94 @@ const EXPECTED_CONCURRENCY = 4;
 // Cuanto es en la practica: `git ls-tree -r -z` gasta ~94 bytes por entrada
 // (medido sobre este repo: 37 402 bytes / 399 archivos), asi que 64 MiB dan
 // para ~715 000 archivos en un solo arbol. Esa media es de ESTE repo: rutas
-// mas largas la suben y bajan el numero de archivos que caben. Quien necesite
-// mas puede pasar su propio `maxBuffer`, que es un parametro publico de
-// `spawnCapture` -- pero entonces le toca subirlo en LAS DOS vias.
-export const TREE_HASH_MAX_BUFFER = Math.floor(CAPTURE_CEILING_BYTES / EXPECTED_CONCURRENCY);
+// mas largas la suben y bajan el numero de archivos que caben.
+//
+// REGRESION DE CAPACIDAD REAL para arboles de entre 64 y 256 MiB (antes de
+// 2.0.0 la via sincrona admitia 256 MiB). Ronda 8 de revision adversarial:
+// `computeTreeHashAtRef`/`computeTreeHashAtRefAsync` (evidence-writer.js) no
+// aceptaban un tope distinto -- un arbol mayor quedaba `tree-ref-unreadable`
+// SIN FORMA de subirlo, ni siquiera para un repo que lo necesitara de verdad.
+//
+// `SDLC_TREE_HASH_MAX_BUFFER_BYTES` es el escape: se lee UNA vez, aqui, asi
+// que las dos vias comparten automaticamente el mismo valor y no pueden
+// divergir por ese lado (una API con un parametro POR FUNCION dejaria abierta
+// la posibilidad de que alguien subiera solo una de las dos, que es la
+// clase exacta de bug que motivo la ronda 6). Sin la variable, el default sigue
+// siendo el mismo de siempre. Con ella, un valor invalido (no numerico, <= 0)
+// tira al arrancar en vez de aceptarlo en silencio y decepcionar mas tarde.
+// Exponerlo ademas como flag de CLI o campo de `.sdlc/config.json` sigue
+// pendiente de decision de producto (docs/roadmap/pendientes-2.0.0.md); esta
+// variable ya es usable hoy sin esperar esa decision.
+function resolveTreeHashMaxBuffer() {
+  const override = process.env.SDLC_TREE_HASH_MAX_BUFFER_BYTES;
+  if (override === undefined) return Math.floor(CAPTURE_CEILING_BYTES / EXPECTED_CONCURRENCY);
+  const parsed = Number(override);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new TypeError(
+      `SDLC_TREE_HASH_MAX_BUFFER_BYTES tiene que ser un numero finito > 0, y llego "${override}"`
+    );
+  }
+  return Math.floor(parsed);
+}
+export const TREE_HASH_MAX_BUFFER = resolveTreeHashMaxBuffer();
+
+// Cuantas capturas pueden estar VIVAS a la vez, en todo el proceso. Es lo que
+// hace cumplir `CAPTURE_CEILING_BYTES` de verdad: sin esto, `spawnCapture` es
+// una funcion publica sin memoria de sus vecinas, y nada impide que un
+// consumidor (o dos auditorias solapadas) la llame mas veces de las que el
+// techo de diseño asume. Deliberadamente el mismo numero que
+// `EXPECTED_CONCURRENCY`: en el camino caliente (la auditoria, que ya limita a
+// AUDIT_CONCURRENCY en `runPool`) esta cola nunca llega a activarse -- solo
+// entra en juego cuando alguien se sale de ese camino.
+export const MAX_CONCURRENT_CAPTURES = EXPECTED_CONCURRENCY;
+
+let capturasEnVuelo = 0;
+const colaDeAdmision = [];
+
+// Semaforo FIFO de admision. A proposito NO mira `maxBuffer` ni bytes: solo
+// cuenta cuantas capturas estan vivas. Ver el comentario del bloque para por
+// que esa diferencia es la que evita repetir el bug de las rondas 5 y 6.
+function acquireCaptureSlot() {
+  if (capturasEnVuelo < MAX_CONCURRENT_CAPTURES) {
+    capturasEnVuelo += 1;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    colaDeAdmision.push(resolve);
+  });
+}
+
+function releaseCaptureSlot() {
+  const siguiente = colaDeAdmision.shift();
+  if (siguiente) {
+    // El cupo se entrega DIRECTO a quien sigue en la cola: `capturasEnVuelo` no
+    // cambia, porque el cupo nunca quedo libre de verdad.
+    siguiente();
+  } else {
+    capturasEnVuelo -= 1;
+  }
+}
+
+// Solo para pruebas y diagnostico.
+export function captureQueueDepth() {
+  return colaDeAdmision.length;
+}
 
 // Tope de la fase de gracia entre el SIGTERM al grupo y el SIGKILL. Existe
 // porque la escalada identifica al grupo por pgid, y un pgid solo sigue siendo
-// el nuestro mientras la ventana sea corta. Treinta segundos es holgado para
-// cualquier hijo que este cerrando de verdad y sigue siendo despreciable frente
-// al tiempo que tarda un sistema en reciclar el espacio de PIDs entero.
-export const MAX_KILL_GRACE_MS = 30_000;
+// el nuestro mientras la ventana sea corta.
+//
+// Bajado de 30 s a 5 s en la ronda 8 de revision adversarial: el argumento de
+// "despreciable" no se sostenia con 30 s. `pid_max` es un valor de wrap
+// CONFIGURABLE del kernel (no una garantia de esta libreria), y un consumidor
+// con otra configuracion o namespace puede reciclarlo mucho antes de lo que
+// esta libreria puede saber. 5 s (2.5x el default de 2000 ms) sigue dando
+// margen de sobra para que un hijo que este cerrando de verdad lo haga, sin
+// dejar una ventana que un argumento de probabilidad tenga que justificar caso
+// por caso. El riesgo no se elimina -- cerrarlo de verdad pide una contencion
+// del SO (cgroup, job object), no un pgid -- pero la ventana en la que puede
+// materializarse es ahora seis veces mas corta.
+export const MAX_KILL_GRACE_MS = 5_000;
 
 
 /**
@@ -161,7 +245,16 @@ export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024
   if (!Number.isFinite(killGraceMs) || killGraceMs < 0 || killGraceMs > MAX_KILL_GRACE_MS) {
     throw new TypeError(`killGraceMs tiene que estar entre 0 y ${MAX_KILL_GRACE_MS} ms, y llego ${killGraceMs}`);
   }
-  return captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
+  // Se admite ANTES de arrancar el hijo, nunca durante: ver el bloque de
+  // comentarios sobre `MAX_CONCURRENT_CAPTURES`. Ronda 8 de revision
+  // adversarial: sin esto, cinco capturas de 63 MiB en paralelo median
+  // 497 MiB de pico de RSS, muy por encima del techo de diseño.
+  await acquireCaptureSlot();
+  try {
+    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
+  } finally {
+    releaseCaptureSlot();
+  }
 }
 
 // Terminar el ARBOL, no solo el hijo. `child.kill()` no alcanza a los nietos, y

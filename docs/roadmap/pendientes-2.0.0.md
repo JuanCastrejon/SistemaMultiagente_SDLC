@@ -8,50 +8,39 @@ primero, porque bloquea al resto.
 
 ---
 
-## Bloquea el push — ronda 8 CERRADA, 0 bloqueantes y 3 SERIOS
+## Ronda 8 — los tres SERIOS, atacados
 
-La ronda 8 se completó reanudando la sesión con otra cuenta (ver
-`docs/guides/codex-revision-reanudable.md`). Veredicto: **0 BLOQUEANTES**, 3
-SERIOS y 7 MENORES. Registro completo en `.codex-out/ronda-8/hallazgos.md`.
-Mínimo para publicar según Codex: los tres SERIOS.
+Registro completo de la ronda en `.codex-out/ronda-8/hallazgos.md`.
 
-- [ ] **SERIO — `CAPTURE_CEILING_BYTES` no es un techo aplicado.** El cálculo
-      *64 MiB × 4* solo vale dentro de UNA ejecución de `auditAttestations`.
-      `spawnCapture` es exportación pública sin tope de concurrencia propio.
-      **Medido por Codex:** cinco capturas simultáneas de 63 MiB retuvieron
-      315 MiB con pico de 497 MiB de RSS. Y un mutante que reintroduce un límite
-      compartido *a partir de la quinta* captura dejó la suite en 14/14, porque
-      el caso 12 solo lanza cuatro.
-      **Corregido en el README** (ya no se presenta como límite aplicado);
-      queda decidir si se impone el tope en el borde público.
-- [ ] **SERIO — la regresión 256→64 MiB no tiene escape.**
-      `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` fijan
-      `TREE_HASH_MAX_BUFFER` y **no aceptan opciones**; `signoff --create`,
-      `--verify` y `--record` tampoco. Un árbol >64 MiB queda
-      `tree-ref-unreadable` y no puede firmarse ni avanzar de fase.
-      **El README afirmaba que bastaba pasar `maxBuffer`: era falso y ya está
-      corregido.** Falta la decisión de producto: exponer configuración
-      coherente para las dos vías, o conservar explícitamente los 256 MiB
-      síncronos.
-- [ ] **SERIO — 30 s de gracia no hacen despreciable el pgid reciclado.**
-      `pid_max` es un valor de wrap configurable del kernel, no una garantía de
-      esta librería, así que el argumento no es portable a otros consumidores o
-      namespaces. Y el propio caso 18 usa el peor valor permitido. Mitigación
-      mínima: bajar el máximo cerca del default de 2 s con una prueba literal.
-      Cierre real: cgroup o job object.
+- [x] ~~SERIO — `CAPTURE_CEILING_BYTES` no era un techo aplicado.~~ Cerrado:
+      `spawnCapture` ahora admite como máximo `MAX_CONCURRENT_CAPTURES` (4)
+      capturas a la vez, en cola FIFO que solo cuenta llamadas — nunca bytes ni
+      contenido, para no repetir el bug de las rondas 5/6. Verificado con la
+      **misma carga que midió Codex** (cinco capturas de 63 MiB): la 5ª queda
+      en cola, profundidad máxima observada 1. Mutación: quitar el semáforo
+      hace fallar el caso 19 (`captureQueueDepth()` se queda en 0).
+- [x] ~~SERIO — la regresión 256→64 MiB no tenía escape.~~ Cerrado con
+      `SDLC_TREE_HASH_MAX_BUFFER_BYTES`: se lee **una sola vez**, así que las
+      dos vías comparten automáticamente el mismo valor y no pueden divergir
+      (a propósito no es un parámetro por función — eso dejaría abierto que
+      alguien subiera solo una vía). Un flag de CLI o campo de
+      `.sdlc/config.json` sigue pendiente como decisión de producto aparte;
+      esta variable ya es usable hoy. El README ya no promete un parámetro
+      `maxBuffer` que no existía.
+- [x] ~~SERIO — 30 s de gracia no hacían despreciable el pgid reciclado.~~
+      Bajado a `MAX_KILL_GRACE_MS = 5_000`. El riesgo no se elimina —cerrarlo
+      de verdad pide cgroup o job object, no un pgid— pero la ventana es ahora
+      seis veces más corta, y el test que afirma el tope lo hace **literal**
+      (`assert.equal(MAX_KILL_GRACE_MS, 5_000, …)`), no `+1` sobre lo que sea
+      que declare el código — ese era el mutante que sobrevivía.
 
-### Mutantes que SOBREVIVIERON (los tests afirman más de lo que prueban)
+También cerrado de los mutantes supervivientes: el de `+1 KiB` al límite
+combinado (caso nuevo 5c, corte exacto sin margen — mutación verificada) y el
+de `MAX_KILL_GRACE_MS` (arriba). **Quedan cinco MENORES sin atacar**, todos
+ejecutados y confirmados por Codex sobre la copia POSIX — ninguno bloquea:
 
-Todos ejecutados por Codex sobre la copia POSIX:
-
-- [ ] `+1 KiB` al límite combinado → 14/14 verde. La vía async acepta hasta
-      1 KiB más que `spawnSync`: **la paridad vuelve a romperse en el borde**.
-      Falta probar exactamente `maxBuffer` y `maxBuffer + 1` en ambos órdenes.
 - [ ] `.normalize("NFC")` en `decodeCapture` → 14/14 verde. Un principal de
       firma en NFD podría juzgarse distinto en las dos vías.
-- [ ] `MAX_KILL_GRACE_MS` de 30 s a 60 s → 14/14 verde, porque el test calcula
-      su entrada inválida como `MAX_KILL_GRACE_MS + 1` **importado del propio
-      código**. Hay que afirmar el máximo literal.
 - [ ] `Math.min(4, …)` en vez de `Math.min(concurrency, …)` en `runPool` →
       14/14 verde. El grado de paralelismo que pida un consumidor se ignora.
 - [ ] Orden por bytes: cambiar `Buffer.compare` por comparación UTF-16 → 14/14
@@ -65,8 +54,8 @@ Todos ejecutados por Codex sobre la copia POSIX:
 
 - [ ] **Publicar 2.0.0.** Falta `git push`, PR contra `develop` y decidir si se
       publica a npm. El gate local (`scripts/validate-local-gate.ps1`) no se ha
-      ejecutado todavía en modo `-Strict`. **Sujeto a cerrar el bloque de
-      arriba.**
+      ejecutado todavía en modo `-Strict`. Los tres SERIOS de la ronda 8 ya
+      están cerrados; quedan los cinco MENORES sin atacar, ninguno bloqueante.
 - [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
       mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
       aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
