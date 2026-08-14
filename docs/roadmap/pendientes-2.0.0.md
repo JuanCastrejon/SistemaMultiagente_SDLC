@@ -1,12 +1,34 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (33 commits sobre `develop`), tras siete rondas de revision adversarial.
-`npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (44 commits sobre `develop`), tras seis rondas de revision adversarial (5 a 10).
+`npm test` y `npm run validate` en verde, en Windows y en POSIX. **Empujada y con PR abierto contra `develop`; sin merge y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
 primero, porque bloquea al resto.
 
 ---
+
+## Ronda 10 — un BLOQUEANTE más, cerrado
+
+Registro en `.codex-out/ronda-10/hallazgos.md`.
+
+- [x] ~~BLOQUEANTE — un fallo SÍNCRONO de `spawn` fugaba el presupuesto.~~
+      `spawn()` tira síncronamente con argumentos inválidos, antes de que exista
+      el hijo y antes de registrar la liberación. Reproducido:
+      `spawnCapture("", [])` con el tope entero dejaba **268 435 456 bytes
+      reservados para siempre** y colgaba toda captura posterior. **Tercera
+      aparición de la misma familia de defecto** (ronda 6: registro de hijos;
+      ronda 9: cupo al resolver un corte).
+- [x] ~~SERIO — el override no estaba cubierto en import fresco.~~ Mutar
+      `Number.isSafeInteger` a `isFinite` reabría `0.5` y la suite quedaba
+      **17/17 verde**: el módulo se importa una sola vez, antes de poder variar
+      el entorno. El caso 22 arranca subprocesos.
+- [x] ~~MENOR — el CLI perdía su contrato de error.~~ La validación corre al
+      evaluar imports, antes de que exista `main()`: con `--json` el stdout
+      salía **vacío**. `bin/sdlc.js` importa dinámicamente dentro de un `try`.
+
+Codex confirmó que **sí se sostienen** (sus mutaciones fallaron como debían): la
+liberación en `trip`, la cola FIFO, los casos 19 y 20, y el vigilante global.
 
 ## Ronda 9 — dos BLOQUEANTES en los arreglos de la ronda 8, cerrados
 
@@ -91,10 +113,13 @@ ejecutados y confirmados por Codex sobre la copia POSIX — ninguno bloquea:
 
 ## Espera decisión del mantenedor
 
-- [ ] **Publicar 2.0.0.** Falta `git push`, PR contra `develop` y decidir si se
-      publica a npm. El gate local (`scripts/validate-local-gate.ps1`) no se ha
-      ejecutado todavía en modo `-Strict`. Los tres SERIOS de la ronda 8 ya
-      están cerrados; quedan los cinco MENORES sin atacar, ninguno bloqueante.
+- [ ] **Publicar 2.0.0.** Rama empujada y **PR abierto contra `develop`**. Falta
+      la revisión humana, el merge, y decidir si se publica a npm. El gate local
+      (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
+      `-Strict`.
+      Tras seis rondas adversariales (5 a 10) no queda ningún BLOQUEANTE
+      abierto. Sí quedan un SERIO declarado (pgid) y cinco MENORES, todos
+      anotados abajo y ninguno bloqueante.
 - [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
       mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
       aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
