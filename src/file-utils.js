@@ -60,8 +60,26 @@ export function sha256Text(value) {
 // cara. Medido: el coste marginal por atestacion pasaba de 67 a 99 ms.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_BUDGET_BYTES = 256 * 1024 * 1024;
+export const DEFAULT_BUDGET_BYTES = 256 * 1024 * 1024;
 const INITIAL_RESERVE_BYTES = 8 * 1024 * 1024;
+
+// Techo por captura para quien lo usa en POOL (la auditoria de atestaciones:
+// AUDIT_CONCURRENCY llamadas en vuelo a la vez, harness.js). Pasar aqui el
+// presupuesto GLOBAL entero -- lo que hacia evidence-writer.js antes de esta
+// correccion -- deja que UNA llamada del pool reclame TODO el presupuesto
+// para si misma: con cuatro en vuelo, el camino async podia cortar por
+// "presupuesto" en una entrada donde el camino sincrono (que nunca compite:
+// `spawnSync` bloquea el hilo, jamas hay dos a la vez) siempre tenia exito.
+// El MISMO arbol, dos veredictos, decidido por quien gano la carrera de
+// memoria -- justo lo que este modulo existe para evitar. Repartido entre las
+// llamadas concurrentes esperadas, cada una tiene una cuota FIJA: el tope por
+// llamada baja, pero deja de depender de una carrera.
+//
+// El "4" es AUDIT_CONCURRENCY (harness.js); vive duplicado aqui porque
+// harness.js importa de evidence-writer.js, que importaria de aqui: cerrar el
+// ciclo importando AUDIT_CONCURRENCY de vuelta no es posible. La prueba de
+// paridad fija la relacion entre los dos numeros.
+export const TREE_HASH_MAX_BUFFER = Math.floor(DEFAULT_BUDGET_BYTES / 4);
 
 /**
  * Crea un presupuesto aislado. Existe para poder probarlo con cifras pequeñas
@@ -153,9 +171,15 @@ export function decodeCapture(chunks) {
  *    distintos por cada camino. Dos verificadores que no coinciden son peores
  *    que uno solo.
  *
- * LIMITE CONOCIDO: al desbordar se termina el ARBOL de procesos (grupo en POSIX,
- * `taskkill /T` en Windows), pero si un nieto sobrevive y hereda los pipes, el
- * proceso padre puede tardar en salir. No se promete lo contrario.
+ * LIMITE CONOCIDO: en Windows, `taskkill /T` recorre el arbol que reporta el
+ * SO en el momento en que se invoca; un nieto REPARENTADO antes de esa
+ * consulta puede escapar. En POSIX el nieto no escapa por esa via: la
+ * escalada a SIGKILL fuerza el GRUPO al vencer `killGraceMs` sin mirar si el
+ * lider ya salio (ronda 5 de revision adversarial -- antes, el `exit` del
+ * lider cancelaba el watchdog y un nieto que ignorara SIGTERM sobrevivia para
+ * siempre). Sigue sin cubrirse: un descendiente que se independiza de su
+ * grupo (`setsid()`) en cualquiera de las dos plataformas, y el `spawn` de
+ * `taskkill` no tiene listener de `error` propio.
  */
 export async function spawnCapture(
   command,
@@ -276,10 +300,15 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       killTree(child);
       killTimer = setTimeout(() => {
         killTimer = null;
-        // `child.killed` solo dice que se mando la señal. `exitCode`/
-        // `signalCode` en null significa que sigue vivo, y solo entonces se
-        // escala: asi se estrecha la ventana de PID reciclado.
-        if (child.exitCode === null && child.signalCode === null) killTreeForce(child);
+        // SIEMPRE se escala, sin mirar si el LIDER sigue vivo. Ronda 5 de
+        // revision adversarial: `child.exitCode`/`signalCode` solo hablan del
+        // lider, y `killTree` mato al GRUPO -- un nieto que hereda el grupo y
+        // ignora SIGTERM sobrevive a su padre. Comprobar solo al lider dejaba
+        // la escalada sin disparar justo cuando mas falta hacia. Forzar un
+        // grupo ya vacio es inofensivo (ESRCH, capturado en `killTreeForce`);
+        // la ventana de pgid reciclado que esto abre se acepta a cambio de no
+        // dejar descendientes vivos.
+        killTreeForce(child);
       }, killGraceMs);
       killTimer.unref?.();
       settle({ ok: false, stdout: "", stderr: detalle, overflow: true, reason: motivo });
@@ -327,9 +356,12 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
     });
 
     child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
-    // `exit` y `close` son el unico momento en que consta que el hijo murio, y
-    // por tanto el unico en que el watchdog sobra.
-    child.on("exit", cancelWatchdog);
+    // Solo `close` cancela el watchdog. `exit` unicamente dice que el LIDER
+    // murio -- no que el grupo este vacio -- y cancelar ahi era el defecto:
+    // dejaba sin disparar la escalada a SIGKILL cuando un nieto sobrevivia a
+    // su padre (ronda 5 de revision adversarial). `close` tampoco es prueba
+    // perfecta (puede no llegar si un descendiente retiene el pipe), pero
+    // entonces el watchdog SI debe seguir armado, que es lo correcto.
     child.on("close", (code) => {
       cancelWatchdog();
       settle({

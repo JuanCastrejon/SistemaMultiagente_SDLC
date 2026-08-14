@@ -16,7 +16,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { ensureDir, listIgnoredPaths, pathExists, readTextIfExists, spawnCapture, writeText } from "./file-utils.js";
+import { DEFAULT_BUDGET_BYTES, TREE_HASH_MAX_BUFFER, ensureDir, listIgnoredPaths, pathExists, readTextIfExists, spawnCapture, writeText } from "./file-utils.js";
 
 function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
@@ -133,7 +133,7 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
   const listed = spawnSync("git", ["ls-tree", "-r", "-z", ref], {
     cwd: target,
     encoding: "buffer",
-    maxBuffer: 256 * 1024 * 1024
+    maxBuffer: DEFAULT_BUDGET_BYTES
   });
   if (listed.status !== 0) {
     return {
@@ -152,11 +152,18 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
  * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.
  */
 export async function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
-  // El mismo tope de 256 MiB que la version sincrona. Sin el, un repo grande
-  // retenia la salida completa sin limite y con cuatro arboles en vuelo a la
-  // vez: una via real de agotar memoria, y ademas una divergencia con el camino
-  // sincrono, que ahi si habria fallado.
-  const listed = await spawnCapture("git", ["ls-tree", "-r", "-z", ref], { cwd: target, maxBuffer: 256 * 1024 * 1024 });
+  // NO el mismo tope que la version sincrona -- lo era, y era el defecto que
+  // encontro la ronda 5 de revision adversarial. `spawnSync` bloquea el hilo:
+  // nunca hay dos a la vez, asi que una captura sincrona SIEMPRE tiene
+  // disponible el presupuesto global entero. Esta via corre en el pool de la
+  // auditoria (AUDIT_CONCURRENCY llamadas en vuelo, harness.js): pasarle el
+  // presupuesto GLOBAL como tope POR LLAMADA dejaba que una ganara la carrera
+  // y agotara el presupuesto de las otras tres -- el MISMO arbol, dos
+  // veredictos, decidido por el orden de llegada de los chunks.
+  // `TREE_HASH_MAX_BUFFER` reparte el presupuesto entre las llamadas
+  // concurrentes esperadas: el tope por llamada baja, pero deja de depender
+  // de una carrera.
+  const listed = await spawnCapture("git", ["ls-tree", "-r", "-z", ref], { cwd: target, maxBuffer: TREE_HASH_MAX_BUFFER });
   if (!listed.ok) {
     return {
       ok: false,

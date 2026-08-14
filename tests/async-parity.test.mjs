@@ -19,7 +19,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { createCaptureBudget, decodeCapture, spawnCapture } from "../src/file-utils.js";
+import { AUDIT_CONCURRENCY as HARNESS_AUDIT_CONCURRENCY } from "../src/harness.js";
+import { DEFAULT_BUDGET_BYTES, TREE_HASH_MAX_BUFFER, createCaptureBudget, decodeCapture, spawnCapture } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
@@ -364,3 +365,136 @@ console.log("cola sin barging: PASS");
 }
 
 console.log("validacion de maxBuffer: PASS");
+
+// --- 12. paridad bajo carga: el veredicto ya no lo decide una carrera ------
+// BLOQUEANTE de la ronda 5 de revision adversarial. `computeTreeHashAtRefAsync`
+// pasaba el presupuesto GLOBAL entero como tope POR LLAMADA; con
+// AUDIT_CONCURRENCY en vuelo a la vez, la primera en crecer podia agotarlo
+// para las otras tres. Reproducido: con un presupuesto de 64 MiB, tope SIN
+// dividir y cuatro capturas de 20 MiB en paralelo, el resultado cambiaba de
+// corrida en corrida -- ["presupuesto","ok","ok","presupuesto"], luego
+// ["presupuesto","presupuesto","ok","ok"] -- la MISMA entrada, veredictos
+// distintos segun quien ganara la carrera de memoria.
+{
+  // La relacion entre los dos numeros vive partida en dos archivos porque
+  // evidence-writer.js no puede importar AUDIT_CONCURRENCY de harness.js sin
+  // cerrar un ciclo (harness.js ya importa de evidence-writer.js). Esta
+  // asercion es lo que evita que diverjan sin que nadie se entere.
+  assert.equal(
+    TREE_HASH_MAX_BUFFER * HARNESS_AUDIT_CONCURRENCY,
+    DEFAULT_BUDGET_BYTES,
+    "TREE_HASH_MAX_BUFFER tiene que ser DEFAULT_BUDGET_BYTES / AUDIT_CONCURRENCY exacto"
+  );
+
+  // Y que el sitio de produccion de verdad use la cuota, no el presupuesto
+  // entero: una prueba de comportamiento no protege un `import` que alguien
+  // cambia por el nombre equivocado.
+  const fuente = fs.readFileSync(new URL("../src/evidence-writer.js", import.meta.url), "utf8");
+  assert.match(
+    fuente,
+    /computeTreeHashAtRefAsync[\s\S]*?maxBuffer:\s*TREE_HASH_MAX_BUFFER/,
+    "la via async tiene que pasar TREE_HASH_MAX_BUFFER, no el presupuesto global entero"
+  );
+
+  const dir = fs.mkdtempSync(path.join(tempRoot, "paridad-pool-"));
+  const script = path.join(dir, "lento.mjs");
+  // Escritura PACEADA: streaming real, no un solo `write` que termina antes de
+  // que las otras tres capturas lleguen a competir por el mismo presupuesto.
+  // 20 MiB por proceso, a proposito POR ENCIMA de la cuota justa (16 MiB con
+  // este presupuesto de prueba): asi el desenlace deja de depender del
+  // presupuesto COMPARTIDO (racy) y pasa a depender solo del tope INDIVIDUAL
+  // (determinista), que es exactamente la propiedad que este fix entrega.
+  fs.writeFileSync(
+    script,
+    [
+      "const b = Buffer.alloc(1024 * 1024, 0x61);",
+      "let i = 0;",
+      "const t = setInterval(() => { if (i++ >= 20) { clearInterval(t); return; } process.stdout.write(b); }, 4);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  for (let intento = 1; intento <= 3; intento += 1) {
+    const budget = createCaptureBudget(64 * 1024 * 1024);
+    const cuotaJusta = Math.floor(budget.total / 4);
+    const resultados = await Promise.all(
+      Array.from({ length: 4 }, () => spawnCapture(process.execPath, [script], { maxBuffer: cuotaJusta, killGraceMs: 500, budget }))
+    );
+    assert.deepEqual(
+      resultados.map((r) => r.reason),
+      ["maxBuffer", "maxBuffer", "maxBuffer", "maxBuffer"],
+      `intento ${intento}: las cuatro tienen que cortar por su propio tope, SIEMPRE la misma razon -- no por una carrera de presupuesto compartido`
+    );
+    assert.equal(budget.availableBytes(), budget.total, `intento ${intento}: el presupuesto vuelve completo`);
+  }
+}
+
+console.log("paridad bajo carga del pool: PASS");
+
+// --- 13. el watchdog fuerza el GRUPO aunque el lider ya haya salido --------
+// BLOQUEANTE de la ronda 5. El lider muere por el SIGTERM del propio corte
+// mientras un DESCENDIENTE que hereda el grupo lo ignora y sigue vivo: antes
+// de este fix, `child.on("exit", cancelWatchdog)` desarmaba la escalada en
+// cuanto el lider salia, y el descendiente sobrevivia para siempre.
+//
+// POSIX unicamente: en Windows `killTree` ya usa `taskkill /F` desde la
+// primera accion (no hay una fase de gracia real que observar), y no hay
+// grupos de procesos POSIX que forzar.
+if (process.platform !== "win32") {
+  const dir = fs.mkdtempSync(path.join(tempRoot, "arbol-"));
+  const pidFile = path.join(dir, "nieto.pid");
+  const script = path.join(dir, "padre.mjs");
+  // `spawnCapture` no reenvia `env` al hijo, asi que la ruta del pidfile se
+  // incrusta LITERAL en el codigo del nieto. Dos capas de `JSON.stringify`
+  // porque el codigo del nieto (que a su vez contiene la ruta como literal) se
+  // vuelve a incrustar, literal, en el script del lider: asi ninguna capa
+  // depende de escapar backslashes de Windows a mano.
+  const codigoNieto = `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  fs.writeFileSync(
+    script,
+    [
+      "import { spawn } from 'node:child_process';",
+      // El nieto ignora SIGTERM y deja constancia de su PID.
+      `const codigoNieto = ${JSON.stringify(codigoNieto)};`,
+      "spawn(process.execPath, ['-e', codigoNieto], { stdio: 'ignore' });",
+      // El lider desborda de inmediato. El SIGTERM que `killTree` manda al
+      // GRUPO llega tambien al lider (sin handler propio: muere) y al nieto
+      // (con handler propio: lo ignora) casi al mismo tiempo.
+      "process.stdout.write('x'.repeat(2 * 1024 * 1024));"
+    ].join("\n"),
+    "utf8"
+  );
+
+  await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 300 }).catch(() => null);
+
+  for (let i = 0; i < 50 && !fs.existsSync(pidFile); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(fs.existsSync(pidFile), "el nieto llego a escribir su pid: el escenario se monto de verdad");
+  const nietoPid = Number(fs.readFileSync(pidFile, "utf8"));
+
+  // Se da tiempo a que venza killGraceMs y a que la escalada, si dispara, mate
+  // al nieto.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+
+  let vivo = true;
+  try {
+    process.kill(nietoPid, 0);
+  } catch {
+    vivo = false;
+  }
+  if (vivo) {
+    try {
+      process.kill(nietoPid, "SIGKILL");
+    } catch {
+      /* limpieza best-effort */
+    }
+  }
+  assert.equal(vivo, false, "el nieto tiene que estar muerto: la escalada fuerza el GRUPO aunque el lider ya saliera");
+}
+
+console.log(
+  process.platform === "win32"
+    ? "watchdog fuerza el grupo tras salir el lider: SKIP (Windows no tiene grupos POSIX que ejercitar)"
+    : "watchdog fuerza el grupo tras salir el lider: PASS"
+);
