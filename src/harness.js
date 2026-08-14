@@ -908,7 +908,7 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
   // El motivo es medido: la auditoria costaba ~485 ms por atestacion, y de esos,
   // recalcular el arbol de HEAD una vez POR atestacion era puro desperdicio: es
   // el mismo valor en todas.
-  const memo = cache ?? { contract: undefined, maintainers: undefined, trees: new Map() };
+  const memo = cache ?? { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
 
   if (memo.contract === undefined) memo.contract = loadQualityContract(target);
   if (!memo.contract.ok) {
@@ -931,14 +931,26 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
     return memo.trees.get(ref);
   };
 
+  // `HEAD` se resuelve a OID UNA vez y se usa como clave de cache Y como
+  // `headRef`. Con la clave literal "HEAD", si otro proceso movia la rama a
+  // mitad de pasada la cache servia el arbol del HEAD viejo mientras
+  // `merge-base` leia el HEAD vivo: la entrada dejaba de ser un hecho
+  // inmutable, que es la unica cosa que esta cache tiene permitido guardar.
+  if (memo.headOid === undefined) {
+    const resolved = spawnSync("git", ["rev-parse", "HEAD^{commit}"], { cwd: target, encoding: "utf8" });
+    memo.headOid = resolved.status === 0 ? (resolved.stdout ?? "").trim() : null;
+  }
+  const headRef = memo.headOid ?? "HEAD";
+
   const approved = treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
-  const current = treeAt("HEAD");
+  const current = treeAt(headRef);
   return verifySignoff({
     target,
     commitSha,
     subject: { slice, phase, tree_hash: approved.hash },
     maintainers: memo.maintainers,
+    headRef,
     currentTreeHash: current.ok ? current.hash : null
   });
 }
@@ -979,7 +991,7 @@ export function auditAttestations(target) {
 
   // Una sola cache para toda la pasada: contrato, maintainers y arboles por ref.
   // Vive y muere con esta llamada, asi que no hay nada que invalidar.
-  const cache = { contract: undefined, maintainers: undefined, trees: new Map() };
+  const cache = { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
 
   for (const sliceEntry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!sliceEntry.isDirectory()) continue;

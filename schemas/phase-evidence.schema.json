@@ -126,7 +126,8 @@
             "string",
             "null"
           ],
-          "description": "SHA del commit de atestacion firmado (`sdlc signoff --create`). Se re-verifica en phase-gate."
+          "pattern": "^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$",
+          "description": "OID COMPLETO (SHA-1 o SHA-256) del commit de atestacion firmado. No se admite una expresion de revision (`HEAD`, `main~2`): lo que se verifica tiene que ser inmutable, y `HEAD` apunta a cosas distintas segun cuando se lea."
         },
         "review_id": {
           "type": [

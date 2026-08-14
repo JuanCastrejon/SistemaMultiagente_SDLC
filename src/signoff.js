@@ -89,6 +89,29 @@ export function signerMatches(declared, observed) {
   return Boolean(leftEmail && rightEmail && leftEmail === rightEmail);
 }
 
+// Emparejar por HUELLA, que es lo unico que identifica una CLAVE.
+//
+// Por que hace falta ademas de `signerMatches`: con SSH, `%GS` es el principal
+// de `allowed_signers`, y ese archivo ya ata identidad a clave. Con GPG no hay
+// nada equivalente — `%GS` es el UID que la propia clave declara —, asi que
+// cualquiera puede generar una clave con UID `maintainer@example.com`, meterla
+// en su keyring y firmar: `verify-commit` la da por buena (`%G?` = U con el
+// trust por defecto) y el email coincide. Autorizar por email NO autoriza una
+// clave.
+//
+// `fingerprint` en el maintainer cierra eso. Se compara contra `%GF` (la clave
+// que firmo) y `%GP` (su clave primaria), sin distinguir mayusculas ni el
+// prefijo `SHA256:` que usa SSH.
+function normalizeFingerprint(value) {
+  return String(value ?? "").trim().replace(/^SHA256:/i, "").replace(/\s+/g, "").toLowerCase();
+}
+
+export function fingerprintMatches(declared, signingKey, primaryKey) {
+  const wanted = normalizeFingerprint(declared);
+  if (!wanted) return false;
+  return [signingKey, primaryKey].map(normalizeFingerprint).some((actual) => actual && actual === wanted);
+}
+
 /**
  * @param {object} input
  * @param {string} input.target
@@ -119,13 +142,17 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     };
   }
 
-  const exists = git(["cat-file", "-e", commitSha], target);
-  if (!exists.ok) {
-    return { ok: false, code: "signoff-commit-not-found", detail: `no existe el commit ${commitSha}` };
-  }
-
+  // `merge-base --is-ancestor` PRIMERO: si pasa, ya probo que el objeto resuelve
+  // a un commit y que esta en la historia, asi que `cat-file -e` sobra. Solo
+  // cuando falla hace falta distinguir "no existe" de "existe pero no es
+  // antepasado". Ahorra un spawn —unos 60 ms— en todas las atestaciones validas,
+  // que son la mayoria y el caso caro de la auditoria.
   const ancestry = git(["merge-base", "--is-ancestor", commitSha, headRef], target);
   if (!ancestry.ok) {
+    const exists = git(["cat-file", "-e", commitSha], target);
+    if (!exists.ok) {
+      return { ok: false, code: "signoff-commit-not-found", detail: `no existe el commit ${commitSha}` };
+    }
     return {
       ok: false,
       code: "signoff-not-ancestor",
@@ -144,14 +171,24 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
   // atestacion, de los que estos tres spawns eran una tercera parte. El
   // separador NUL no puede aparecer en ninguno de los campos, y `%B` va ultimo
   // porque es el unico multilinea.
-  const commitFacts = git(["log", "-1", "--format=%G?%x00%GS%x00%B", commitSha], target).stdout.split("\0");
+  const commitFacts = git(["log", "-1", "--format=%G?%x00%GS%x00%GF%x00%GP%x00%B", commitSha], target).stdout.split("\0");
   const validity = (commitFacts[0] ?? "").trim();
   if (validity !== "G" && validity !== "U") {
     return { ok: false, code: "signoff-signature-not-good", detail: `git reporta validez '${validity}', no 'G' ni 'U'` };
   }
 
   const signer = (commitFacts[1] ?? "").trim();
-  const allowed = maintainers.some((maintainer) => signerMatches(maintainer.signer, signer));
+  const signingKey = (commitFacts[2] ?? "").trim();
+  const primaryKey = (commitFacts[3] ?? "").trim();
+
+  // Si el maintainer declara huella, MANDA la huella: es lo unico que identifica
+  // la clave. El nombre/principal solo se acepta cuando no hay huella declarada,
+  // y en ese caso la union queda marcada como debil para que se vea.
+  const byFingerprint = maintainers.find((maintainer) => fingerprintMatches(maintainer.fingerprint, signingKey, primaryKey));
+  const byPrincipal = maintainers.find(
+    (maintainer) => !maintainer.fingerprint && signerMatches(maintainer.signer, signer)
+  );
+  const allowed = Boolean(byFingerprint || byPrincipal);
   if (!allowed) {
     const declared = maintainers.map((maintainer) => `'${maintainer.signer}'`).join(", ") || "(lista vacia)";
     return {
@@ -164,7 +201,7 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     };
   }
 
-  const message = (commitFacts[2] ?? "").trim();
+  const message = (commitFacts[4] ?? "").trim();
   const parsed = parseAttestationMessage(message);
   if (!parsed) {
     return { ok: false, code: "signoff-message-invalid", detail: `el commit no trae el trailer ${ATTESTATION_TRAILER}` };
@@ -185,7 +222,21 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
   // que una atestacion dejara de verificarse al commit siguiente.
   const fresh = currentTreeHash === null ? null : currentTreeHash === subject.tree_hash;
 
-  return { ok: true, code: null, signer, commitSha, subjectSha256: expected, fresh, currentTreeHash };
+  // `identityBinding` dice CON QUE se autorizo: `fingerprint` ata a una clave;
+  // `principal` ata a un nombre que la propia clave declara, y con GPG eso lo
+  // puede fabricar cualquiera. Quien lea el resultado tiene que poder saber cual
+  // de las dos garantias tiene delante.
+  return {
+    ok: true,
+    code: null,
+    signer,
+    signingKey: signingKey || null,
+    identityBinding: byFingerprint ? "fingerprint" : "principal",
+    commitSha,
+    subjectSha256: expected,
+    fresh,
+    currentTreeHash
+  };
 }
 
 /**
