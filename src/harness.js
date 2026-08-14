@@ -899,29 +899,46 @@ export function commandGovernanceCheck(options) {
  * el sha del commit y nada mas. Cualquier otro dato que trajera declarado seria
  * exactamente el hueco que la atestacion cierra.
  */
-function verifyEvidenceAttestation(target, { slice, phase, commitSha }) {
-  const loaded = loadQualityContract(target);
-  if (!loaded.ok) {
+function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = null) {
+  // La cache guarda HECHOS INMUTABLES dentro de una misma corrida —el contrato,
+  // los maintainers y el hash de un arbol en un ref—, nunca veredictos. Un
+  // veredicto cacheado seria una respuesta que ya no se recomputa, que es
+  // justo lo que este modulo existe para no hacer.
+  //
+  // El motivo es medido: la auditoria costaba ~485 ms por atestacion, y de esos,
+  // recalcular el arbol de HEAD una vez POR atestacion era puro desperdicio: es
+  // el mismo valor en todas.
+  const memo = cache ?? { contract: undefined, maintainers: undefined, trees: new Map() };
+
+  if (memo.contract === undefined) memo.contract = loadQualityContract(target);
+  if (!memo.contract.ok) {
     return { ok: false, code: "quality-contract-missing", detail: "sin quality-contract.yaml no hay superficies con las que recomputar el sujeto" };
   }
-  let maintainers = [];
-  try {
-    maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
-  } catch {
-    maintainers = [];
+  if (memo.maintainers === undefined) {
+    try {
+      memo.maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
+    } catch {
+      memo.maintainers = [];
+    }
   }
-  if (maintainers.length === 0) {
+  if (memo.maintainers.length === 0) {
     return { ok: false, code: "governance-maintainers-missing", detail: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida" };
   }
-  const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
-  const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
+
+  const surfacePaths = (memo.contract.contract.surfaces ?? []).map((surface) => surface.path);
+  const treeAt = (ref) => {
+    if (!memo.trees.has(ref)) memo.trees.set(ref, computeTreeHashAtRef(target, surfacePaths, ref));
+    return memo.trees.get(ref);
+  };
+
+  const approved = treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
-  const current = computeTreeHashAtRef(target, surfacePaths, "HEAD");
+  const current = treeAt("HEAD");
   return verifySignoff({
     target,
     commitSha,
     subject: { slice, phase, tree_hash: approved.hash },
-    maintainers,
+    maintainers: memo.maintainers,
     currentTreeHash: current.ok ? current.hash : null
   });
 }
@@ -960,6 +977,10 @@ export function auditAttestations(target) {
   const result = { checked: 0, findings: [] };
   if (!pathExists(root)) return result;
 
+  // Una sola cache para toda la pasada: contrato, maintainers y arboles por ref.
+  // Vive y muere con esta llamada, asi que no hay nada que invalidar.
+  const cache = { contract: undefined, maintainers: undefined, trees: new Map() };
+
   for (const sliceEntry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!sliceEntry.isDirectory()) continue;
     const sliceDir = path.join(root, sliceEntry.name);
@@ -971,7 +992,7 @@ export function auditAttestations(target) {
       if (!commitSha) continue;
 
       result.checked += 1;
-      const verification = verifyEvidenceAttestation(target, { slice: sliceEntry.name, phase, commitSha });
+      const verification = verifyEvidenceAttestation(target, { slice: sliceEntry.name, phase, commitSha }, cache);
       if (verification.ok) continue;
 
       const unverifiable = ATTESTATION_UNVERIFIABLE.has(verification.code);

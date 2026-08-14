@@ -138,15 +138,19 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     return { ok: false, code: "signoff-signature-invalid", detail: verify.stderr || "git verify-commit rechazo la firma" };
   }
 
-  // %G?: N sin firma, B mala, U buena pero de confianza no verificada, G
-  // buena y de confianza total. Se acepta G y U: lo que importa aca es
-  // identidad (el firmante esta en maintainers), no una cadena de confianza.
-  const validity = git(["log", "-1", "--format=%G?", commitSha], target).stdout;
+  // Los tres datos que hacen falta del commit —validez, firmante y mensaje— se
+  // piden en UNA sola invocacion. Eran tres, y cada proceso de git cuesta unos
+  // 60 ms en Windows: medido, la auditoria completa gastaba ~485 ms por
+  // atestacion, de los que estos tres spawns eran una tercera parte. El
+  // separador NUL no puede aparecer en ninguno de los campos, y `%B` va ultimo
+  // porque es el unico multilinea.
+  const commitFacts = git(["log", "-1", "--format=%G?%x00%GS%x00%B", commitSha], target).stdout.split("\0");
+  const validity = (commitFacts[0] ?? "").trim();
   if (validity !== "G" && validity !== "U") {
     return { ok: false, code: "signoff-signature-not-good", detail: `git reporta validez '${validity}', no 'G' ni 'U'` };
   }
 
-  const signer = git(["log", "-1", "--format=%GS", commitSha], target).stdout;
+  const signer = (commitFacts[1] ?? "").trim();
   const allowed = maintainers.some((maintainer) => signerMatches(maintainer.signer, signer));
   if (!allowed) {
     const declared = maintainers.map((maintainer) => `'${maintainer.signer}'`).join(", ") || "(lista vacia)";
@@ -160,7 +164,7 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     };
   }
 
-  const message = git(["log", "-1", "--format=%B", commitSha], target).stdout;
+  const message = (commitFacts[2] ?? "").trim();
   const parsed = parseAttestationMessage(message);
   if (!parsed) {
     return { ok: false, code: "signoff-message-invalid", detail: `el commit no trae el trailer ${ATTESTATION_TRAILER}` };
