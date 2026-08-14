@@ -1,6 +1,6 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (28 commits sobre `develop`).
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (30 commits sobre `develop`).
 `npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
@@ -69,19 +69,17 @@ partir sin dejar hueco explotable, así que van juntas.
       SIGTERM, espera `killGraceMs + margen` y comprueba que ya no existe. Solo
       cubre el escenario del nieto (POSIX); el caso viejo (test 6, lider suelto)
       sigue sin ejercitar la escalada en Windows por la misma razón de siempre.
-- [ ] **Cuatro hallazgos SERIOS/MENORES de la ronda 5, dejados fuera del commit
-      a propósito por no ser bloqueantes** (Codex + contraste propio,
-      `src/file-utils.js`):
-      - `taskkill` se lanza sin listener de `error`: si no está en PATH, el
-        ENOENT es asíncrono, el `try/catch` no lo atrapa, y tumba el proceso
-        Node entero en vez de fallar limpio.
-      - `detached: true` cambia la semántica de Ctrl-C: el terminal señala al
-        grupo original de Node, no al hijo detached: puede quedar huérfano.
-      - El presupuesto cuenta bloques de crecimiento (≥8 MiB) reservados por
-        adelantado, no bytes realmente retenidos: puede cortar por
-        "presupuesto" con margen real de sobra.
-      - `createCaptureBudget(-1 | NaN)` dejan la cola bloqueada para siempre en
-        vez de rechazar el total inválido en la creación.
+- [x] ~~Cuatro hallazgos SERIOS/MENORES de la ronda 5.~~ Resueltos
+      (`fix(async): los cuatro SERIOS/MENORES...`): listener de `error` en los
+      dos `spawn("taskkill", ...)` (antes tumbaba Node entero con un ENOENT sin
+      atrapar); `killAllActiveChildren` + registro de hijos detached + listener
+      de SIGINT/SIGTERM para que Ctrl-C alcance al grupo POSIX, no solo al
+      proceso original de Node; `ensureBudget` pide el delta exacto en vez de
+      redondear a bloques de 8 MiB; `createCaptureBudget` rechaza total
+      inválido (`NaN`/negativo) en la creación en vez de dejar la cola
+      bloqueada para siempre. El de Ctrl-C/detached no se pudo ejercitar por
+      mutación en esta máquina (Windows, sin grupos POSIX) — mismo límite que
+      ya tenían los tests del watchdog y del árbol de procesos.
 - [ ] **`run()` cambió de contrato** (devolvía objeto o Promise según comando;
       ahora siempre Promise). El binario está cubierto por `await`, pero es
       cambio de API que merece nota de migración si alguien lo consume.
