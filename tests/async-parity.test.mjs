@@ -20,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { AUDIT_CONCURRENCY as HARNESS_AUDIT_CONCURRENCY } from "../src/harness.js";
-import { DEFAULT_BUDGET_BYTES, TREE_HASH_MAX_BUFFER, createCaptureBudget, decodeCapture, spawnCapture } from "../src/file-utils.js";
+import { CAPTURE_CEILING_BYTES, MAX_KILL_GRACE_MS, TREE_HASH_MAX_BUFFER, decodeCapture, spawnCapture } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-parity-"));
@@ -179,31 +179,48 @@ console.log("tope de stderr: PASS");
 // un tope de 10 MiB, la via sincrona daba ENOBUFS y la asincrona aceptaba: el
 // mismo sujeto, dos veredictos. Se prueba por COMPARACION DIRECTA entre las
 // dos vias, que es la unica forma de que no vuelvan a divergir en silencio.
+// LOS DOS ORDENES, y no por simetria decorativa: el handler que cruza el
+// umbral es el del stream que escribe SEGUNDO. Con un solo orden, revertir a
+// "por stream" el otro handler pasaba la prueba sin que nadie se enterara --
+// comprobado por mutacion, sobrevivio.
 {
-  const script = path.join(tempRoot, "dos-streams.mjs");
-  fs.writeFileSync(
-    script,
-    [
-      "process.stdout.write('o'.repeat(6 * 1024 * 1024));",
-      "process.stderr.write('e'.repeat(6 * 1024 * 1024));"
-    ].join("\n"),
-    "utf8"
-  );
-
-  // Ninguno de los dos streams supera el tope por si solo (6 < 10); juntos, si.
   const maxBuffer = 10 * 1024 * 1024;
-  const sync = spawnSync(process.execPath, [script], { maxBuffer, encoding: "buffer" });
-  const async_ = await spawnCapture(process.execPath, [script], { maxBuffer });
+  // Ninguno de los dos streams supera el tope por si solo (6 < 10); juntos, si.
+  const casos = [
+    { nombre: "stdout primero (cruza el umbral el handler de stderr)", primero: "stdout", segundo: "stderr" },
+    { nombre: "stderr primero (cruza el umbral el handler de stdout)", primero: "stderr", segundo: "stdout" }
+  ];
 
-  assert.ok(sync.error, "spawnSync corta con ENOBUFS: gasta UN presupuesto entre los dos streams");
-  assert.equal(sync.error.code, "ENOBUFS");
-  assert.equal(
-    async_.ok,
-    false,
-    "la via async tiene que cortar TAMBIEN: si limita cada stream por separado, acepta lo que la sincrona rechaza"
-  );
-  assert.equal(async_.overflow, true);
-  assert.equal(async_.reason, "maxBuffer");
+  for (const caso of casos) {
+    const script = path.join(tempRoot, `dos-streams-${caso.primero}.mjs`);
+    // Las dos escrituras van SEPARADAS EN EL TIEMPO. Emitidas seguidas, los dos
+    // pipes entregan intercalado y el umbral acaba cruzandose siempre en el
+    // handler del stream que mas chunks mueve -- daba igual el orden, y el
+    // mutante que revertia el OTRO handler sobrevivia. Con la pausa, el primer
+    // stream esta enteramente consumido antes de que el segundo empiece, asi
+    // que quien cruza el umbral es exactamente el handler del segundo.
+    fs.writeFileSync(
+      script,
+      [
+        `process.${caso.primero}.write('a'.repeat(6 * 1024 * 1024));`,
+        `setTimeout(() => process.${caso.segundo}.write('b'.repeat(6 * 1024 * 1024)), 400);`
+      ].join("\n"),
+      "utf8"
+    );
+
+    const sync = spawnSync(process.execPath, [script], { maxBuffer, encoding: "buffer" });
+    const async_ = await spawnCapture(process.execPath, [script], { maxBuffer });
+
+    assert.ok(sync.error, `${caso.nombre}: spawnSync corta con ENOBUFS -- gasta UN presupuesto entre los dos streams`);
+    assert.equal(sync.error.code, "ENOBUFS", caso.nombre);
+    assert.equal(
+      async_.ok,
+      false,
+      `${caso.nombre}: la via async tiene que cortar TAMBIEN -- si limita cada stream por separado, acepta lo que la sincrona rechaza`
+    );
+    assert.equal(async_.overflow, true, caso.nombre);
+    assert.equal(async_.reason, "maxBuffer", caso.nombre);
+  }
 }
 
 console.log("maxBuffer combinado entre stdout y stderr: PASS");
@@ -311,122 +328,56 @@ console.log(
 
 console.log("orden de hallazgos por bytes: PASS");
 
-// --- 8. la fuga de presupuesto tras un corte -------------------------------
-// Tras `trip()` la promesa resuelve y el `finally` devuelve la reserva, pero los
-// listeners SIGUEN vivos hasta que el hijo cierre. Un chunk tardio del otro
-// stream volvia a crecer el ledger y descontaba presupuesto que ya nadie iba a
-// devolver: fuga PERMANENTE, y la cola esperando para siempre. Se prueba con un
-// presupuesto pequeño inyectado, sin generar cientos de MiB.
+// --- 11. topes invalidos se rechazan ANTES de arrancar el hijo -------------
 {
-  const budget = createCaptureBudget(4 * 1024 * 1024);
-  const antes = budget.availableBytes();
-
-  const script = path.join(tempRoot, "tardio.mjs");
-  fs.writeFileSync(
-    script,
-    [
-      // Desborda por stdout y DESPUES sigue escribiendo por stderr.
-      "process.stdout.write('x'.repeat(300 * 1024));",
-      "let n = 0;",
-      "const t = setInterval(() => { process.stderr.write('e'.repeat(64 * 1024)); if (++n > 20) { clearInterval(t); } }, 5);"
-    ].join("\n"),
-    "utf8"
-  );
-
-  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 128 * 1024, killGraceMs: 200, budget });
-  assert.equal(resultado.ok, false);
-  assert.equal(resultado.overflow, true);
-
-  // Se da tiempo a que lleguen los chunks tardios que antes provocaban la fuga.
-  await new Promise((resolve) => setTimeout(resolve, 400));
-
-  assert.equal(budget.availableBytes(), antes, "el presupuesto vuelve INTACTO: ni un byte perdido tras el corte");
-  assert.equal(budget.waiting(), 0, "y nadie se queda esperando en la cola");
-}
-
-console.log("sin fuga de presupuesto tras corte: PASS");
-
-// --- 9. el motivo del corte no miente --------------------------------------
-{
-  const budget = createCaptureBudget(64 * 1024);
-  const script = path.join(tempRoot, "mediano.mjs");
-  fs.writeFileSync(script, "process.stdout.write('y'.repeat(2 * 1024 * 1024));", "utf8");
-
-  // maxBuffer holgado: lo que se agota es el presupuesto GLOBAL, y el mensaje
-  // tiene que decir eso y no acusar a maxBuffer.
-  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024 * 1024, killGraceMs: 200, budget });
-  assert.equal(resultado.ok, false);
-  assert.equal(resultado.reason, "presupuesto");
-  assert.match(resultado.stderr, /presupuesto global/);
-}
-
-console.log("motivo del corte correcto: PASS");
-
-// --- 10. sin barging: quien llega despues no se cuela ----------------------
-// Permitir que una captura pequeña adquiriera presupuesto habiendo alguien en
-// cola dejaba a la cabeza en inanicion indefinida bajo trafico continuo.
-{
-  const budget = createCaptureBudget(10 * 1024 * 1024);
-  const primera = budget.acquire(8 * 1024 * 1024);
-  assert.equal(primera.wait, null, "la primera cabe");
-
-  const segunda = budget.acquire(8 * 1024 * 1024);
-  assert.ok(segunda.wait, "la segunda no cabe y espera");
-
-  const tercera = budget.acquire(1024);
-  assert.ok(tercera.wait, "la tercera cabria por tamaño, pero hay cola: no se cuela");
-
-  budget.release(primera.need);
-  await segunda.wait;
-  budget.release(segunda.need);
-  await tercera.wait;
-  budget.release(tercera.need);
-  assert.equal(budget.availableBytes(), budget.total, "todo devuelto");
-}
-
-console.log("cola sin barging: PASS");
-
-// --- 11. maxBuffer invalido se rechaza antes de tocar nada -----------------
-{
-  const budget = createCaptureBudget(1024 * 1024);
   for (const malo of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
     await assert.rejects(
-      () => spawnCapture(process.execPath, ["-e", "0"], { maxBuffer: malo, budget }),
+      () => spawnCapture(process.execPath, ["-e", "0"], { maxBuffer: malo }),
       /maxBuffer/,
-      `${malo} tiene que rechazarse`
+      `maxBuffer ${malo} tiene que rechazarse`
     );
   }
-  assert.equal(budget.availableBytes(), budget.total, "un rechazo no puede descuadrar el contador");
+  // `0` es valido y NO es un rechazo: significa "cualquier salida desborda".
+  const cero = await spawnCapture(process.execPath, ["-e", "process.stdout.write('x')"], { maxBuffer: 0, killGraceMs: 200 });
+  assert.equal(cero.overflow, true, "con maxBuffer 0 cualquier byte desborda, pero no es un error de argumento");
+
+  // La gracia esta ACOTADA ARRIBA a proposito: el SIGKILL de la escalada va al
+  // grupo por pgid, y ese pgid solo sigue siendo el nuestro mientras la ventana
+  // sea corta. Sin tope, el argumento de riesgo escrito en `trip` deja de
+  // sostenerse sin que nadie lo note (lo señalo la ronda 7).
+  for (const malo of [Number.NaN, Number.POSITIVE_INFINITY, -1, MAX_KILL_GRACE_MS + 1]) {
+    await assert.rejects(
+      () => spawnCapture(process.execPath, ["-e", "0"], { killGraceMs: malo }),
+      /killGraceMs/,
+      `killGraceMs ${malo} tiene que rechazarse`
+    );
+  }
 }
 
-console.log("validacion de maxBuffer: PASS");
+console.log("validacion de maxBuffer y killGraceMs: PASS");
 
-// --- 12. paridad bajo carga: el veredicto ya no lo decide una carrera ------
-// BLOQUEANTE de la ronda 5 de revision adversarial. `computeTreeHashAtRefAsync`
-// pasaba el presupuesto GLOBAL entero como tope POR LLAMADA; con
-// AUDIT_CONCURRENCY en vuelo a la vez, la primera en crecer podia agotarlo
-// para las otras tres. Reproducido: con un presupuesto de 64 MiB, tope SIN
-// dividir y cuatro capturas de 20 MiB en paralelo, el resultado cambiaba de
-// corrida en corrida -- ["presupuesto","ok","ok","presupuesto"], luego
-// ["presupuesto","presupuesto","ok","ok"] -- la MISMA entrada, veredictos
-// distintos segun quien ganara la carrera de memoria.
+// --- 12. el veredicto no depende de cuantas capturas haya en vuelo ---------
+// Historia de tres rondas, y por eso este caso existe. Hubo un presupuesto de
+// memoria GLOBAL compartido entre capturas: la misma entrada podia salir `ok`
+// o cortada segun quien ganara la carrera por ese estado compartido (ronda 5),
+// y el intento de arreglarlo bajando solo una via convirtio la carrera en una
+// divergencia fija (ronda 6). El presupuesto se quito: el unico tope es el de
+// cada llamada, que es una propiedad LOCAL y no puede depender de las vecinas.
 {
-  // La relacion entre los dos numeros vive partida en dos archivos porque
-  // evidence-writer.js no puede importar AUDIT_CONCURRENCY de harness.js sin
-  // cerrar un ciclo (harness.js ya importa de evidence-writer.js). Esta
-  // asercion es lo que evita que diverjan sin que nadie se entere.
+  // El tope por llamada se deriva del techo de diseño y de la concurrencia
+  // esperada. Ese "4" vive duplicado en file-utils.js porque importar
+  // AUDIT_CONCURRENCY desde ahi cerraria un ciclo con evidence-writer.js. Esta
+  // asercion es lo unico que impide que los dos numeros diverjan en silencio.
   assert.equal(
     TREE_HASH_MAX_BUFFER * HARNESS_AUDIT_CONCURRENCY,
-    DEFAULT_BUDGET_BYTES,
-    "TREE_HASH_MAX_BUFFER tiene que ser DEFAULT_BUDGET_BYTES / AUDIT_CONCURRENCY exacto"
+    CAPTURE_CEILING_BYTES,
+    "el tope por llamada por AUDIT_CONCURRENCY tiene que dar exactamente el techo de diseño"
   );
 
-  // LAS DOS vias tienen que declarar el MISMO tope. La ronda 6 encontro que
-  // bajar solo la asincrona a presupuesto/4 no arreglaba la divergencia: la
-  // volvia determinista. Un `ls-tree` de entre 64 y 256 MiB pasaba por la via
-  // sincrona y fallaba SIEMPRE por la asincrona. Se comprueba leyendo el
-  // codigo porque el desacuerdo esta en las DECLARACIONES, y montar un arbol
-  // real de 64 MiB en una prueba costaria minutos.
+  // Y LAS DOS vias del hash de arbol tienen que declarar el MISMO tope: es lo
+  // que hace que acepten y rechacen las mismas entradas. Se comprueba sobre
+  // las declaraciones porque el desacuerdo vive ahi, y montar un arbol real de
+  // 64 MiB costaria minutos por corrida.
   const fuente = fs.readFileSync(new URL("../src/evidence-writer.js", import.meta.url), "utf8");
   const topes = [...fuente.matchAll(/maxBuffer:\s*([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
   assert.ok(topes.length >= 2, `se esperaban las dos vias del hash de arbol declarando tope, y se vieron ${topes.length}`);
@@ -436,40 +387,42 @@ console.log("validacion de maxBuffer: PASS");
     `las dos vias tienen que declarar EL MISMO tope y ser TREE_HASH_MAX_BUFFER; se vio ${JSON.stringify(topes)}`
   );
 
-  const dir = fs.mkdtempSync(path.join(tempRoot, "paridad-pool-"));
+  const dir = fs.mkdtempSync(path.join(tempRoot, "carga-"));
   const script = path.join(dir, "lento.mjs");
-  // Escritura PACEADA: streaming real, no un solo `write` que termina antes de
-  // que las otras tres capturas lleguen a competir por el mismo presupuesto.
-  // 20 MiB por proceso, a proposito POR ENCIMA de la cuota justa (16 MiB con
-  // este presupuesto de prueba): asi el desenlace deja de depender del
-  // presupuesto COMPARTIDO (racy) y pasa a depender solo del tope INDIVIDUAL
-  // (determinista), que es exactamente la propiedad que este fix entrega.
+  // Escritura PACEADA: streaming real, para que las capturas esten vivas a la
+  // vez. Con el presupuesto compartido, ese solape era justo lo que hacia
+  // variar el resultado entre corridas.
   fs.writeFileSync(
     script,
     [
       "const b = Buffer.alloc(1024 * 1024, 0x61);",
       "let i = 0;",
-      "const t = setInterval(() => { if (i++ >= 20) { clearInterval(t); return; } process.stdout.write(b); }, 4);"
+      "const t = setInterval(() => { if (i++ >= 12) { clearInterval(t); return; } process.stdout.write(b); }, 4);"
     ].join("\n"),
     "utf8"
   );
 
+  // La MISMA entrada, primero sola y luego con cuatro en vuelo. El tope se
+  // elige por encima de lo que escribe el hijo (12 MiB), asi que la respuesta
+  // correcta es `ok` en los dos casos: si la concurrencia cambiara el
+  // desenlace, es que volvio a haber estado compartido.
+  const maxBuffer = 16 * 1024 * 1024;
+  const sola = await spawnCapture(process.execPath, [script], { maxBuffer, killGraceMs: 500 });
+  assert.equal(sola.ok, true, "una sola captura de 12 MiB cabe en un tope de 16 MiB");
+
   for (let intento = 1; intento <= 3; intento += 1) {
-    const budget = createCaptureBudget(64 * 1024 * 1024);
-    const cuotaJusta = Math.floor(budget.total / 4);
-    const resultados = await Promise.all(
-      Array.from({ length: 4 }, () => spawnCapture(process.execPath, [script], { maxBuffer: cuotaJusta, killGraceMs: 500, budget }))
+    const enParalelo = await Promise.all(
+      Array.from({ length: 4 }, () => spawnCapture(process.execPath, [script], { maxBuffer, killGraceMs: 500 }))
     );
     assert.deepEqual(
-      resultados.map((r) => r.reason),
-      ["maxBuffer", "maxBuffer", "maxBuffer", "maxBuffer"],
-      `intento ${intento}: las cuatro tienen que cortar por su propio tope, SIEMPRE la misma razon -- no por una carrera de presupuesto compartido`
+      enParalelo.map((r) => r.ok),
+      [true, true, true, true],
+      `intento ${intento}: las cuatro tienen que salir igual que la que corrio sola -- el veredicto no puede depender de las vecinas`
     );
-    assert.equal(budget.availableBytes(), budget.total, `intento ${intento}: el presupuesto vuelve completo`);
   }
 }
 
-console.log("paridad bajo carga del pool: PASS");
+console.log("el veredicto no depende de la concurrencia: PASS");
 
 // --- 13. el watchdog fuerza el GRUPO aunque el lider ya haya salido --------
 // BLOQUEANTE de la ronda 5. El lider muere por el SIGTERM del propio corte
@@ -549,77 +502,6 @@ console.log(
     ? "watchdog fuerza el grupo tras salir el lider: SKIP (Windows no tiene grupos POSIX que ejercitar)"
     : "watchdog fuerza el grupo tras salir el lider: PASS"
 );
-
-// --- 14. createCaptureBudget rechaza totales invalidos ---------------------
-// MENOR de la ronda 5. Con `-1`, `available` arrancaba negativo y ningun
-// `need` (siempre >= 0) podia satisfacer `available >= need`; con `NaN`, toda
-// comparacion es falsa. En los dos casos quien esperara en la cola no se
-// drenaba NUNCA -- un worker del pool de la auditoria colgado sin veredicto.
-{
-  for (const malo of [-1, Number.NaN, Number.NEGATIVE_INFINITY]) {
-    assert.throws(() => createCaptureBudget(malo), /totalBytes/, `${malo} tiene que rechazarse al crear el presupuesto`);
-  }
-  // Y que de verdad rechaza ANTES de dejar nada a medio construir: cero es
-  // valido (cola vacia desde el principio, nunca se drena porque nunca hay
-  // nada que drenar, no porque este roto).
-  const vacio = createCaptureBudget(0);
-  assert.equal(vacio.total, 0);
-}
-
-console.log("createCaptureBudget rechaza totales invalidos: PASS");
-
-// --- 15. el presupuesto reservado es EXACTO, no redondeado a bloques -------
-// SERIO de la ronda 5. `ensureBudget` redondeaba cada crecimiento al bloque de
-// `INITIAL_RESERVE_BYTES` (8 MiB): dos capturas concurrentes que solo
-// necesitaban ~2 MiB mas alla de su reserva inicial reclamaban 8 MiB cada una
-// igual, y la segunda en pedir se quedaba sin presupuesto compartido aunque la
-// suma de lo REALMENTE necesitado cupiera de sobra. No se puede observar el
-// redondeo espiando `availableBytes()` desde fuera (la reserva inicial de
-// `acquire` ya usa ese mismo tamaño de bloque, y confundiria las dos cosas):
-// se prueba por el desenlace, con dos capturas cuyo defecto real (~10 MiB cada
-// una, 2 MiB por encima del bloque de 8) solo cabe junto si el crecimiento
-// posterior es exacto.
-{
-  const dir = fs.mkdtempSync(path.join(tempRoot, "goteo-"));
-  const script = path.join(dir, "goteo.mjs");
-  // ~10 MiB por proceso, en chunks de 300 KiB, paceado -- streaming real, no
-  // un solo `write` que ya haya terminado antes de que la otra capture llegue
-  // a competir por el presupuesto compartido.
-  fs.writeFileSync(
-    script,
-    [
-      "const b = Buffer.alloc(300 * 1024, 0x61);",
-      "let i = 0;",
-      "const t = setInterval(() => { if (i++ >= 34) { clearInterval(t); return; } process.stdout.write(b); }, 6);"
-    ].join("\n"),
-    "utf8"
-  );
-
-  // Aritmetica exacta (la ronda 6 corrigio la primera version de este
-  // comentario, que redondeaba y no cuadraba):
-  //   - cada captura escribe 34 x 307 200 = 10 444 800 B;
-  //   - reserva inicial 8 388 608 B (8 MiB), asi que crece 2 056 192 B;
-  //   - las dos juntas necesitan crecer 4 112 384 B;
-  //   - presupuesto 25 165 824 B (24 MiB) - 16 777 216 B de reservas
-  //     iniciales = 8 388 608 B de holgura.
-  // Con crecimiento exacto sobran 4 276 224 B y las dos caben. Con el redondeo
-  // viejo, la PRIMERA en crecer pide un bloque de 8 388 608 B y se lleva la
-  // holgura entera; a la segunda no le queda nada y corta por "presupuesto".
-  for (let intento = 1; intento <= 3; intento += 1) {
-    const budget = createCaptureBudget(24 * 1024 * 1024);
-    const resultados = await Promise.all(
-      Array.from({ length: 2 }, () => spawnCapture(process.execPath, [script], { maxBuffer: 16 * 1024 * 1024, killGraceMs: 500, budget }))
-    );
-    assert.deepEqual(
-      resultados.map((r) => r.ok),
-      [true, true],
-      `intento ${intento}: las dos tienen que caber -- si alguna corto, el crecimiento volvio a redondear a bloques`
-    );
-    assert.equal(budget.availableBytes(), budget.total, `intento ${intento}: el presupuesto vuelve completo`);
-  }
-}
-
-console.log("presupuesto exacto, sin redondeo a bloques: PASS");
 
 // --- 16. taskkill sin PATH no tumba el proceso Node -------------------------
 // SERIO de la ronda 5, Windows unicamente (la rama POSIX de `killTree` no usa

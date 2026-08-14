@@ -132,9 +132,9 @@ function isUnderSurface(relativePath, prefixes) {
 export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
   // EL MISMO tope que la via asincrona, a proposito. Ver `TREE_HASH_MAX_BUFFER`
   // en file-utils.js: mientras el numero sea el mismo, las dos vias aceptan y
-  // rechazan las mismas entradas. Esta via no necesita el limite (nunca compite
-  // por el presupuesto global: `spawnSync` bloquea el hilo), pero tener margen
-  // de sobra aqui no vale lo que cuesta que las dos discrepen.
+  // rechazan las mismas entradas. Esta via no necesita el limite por memoria
+  // (`spawnSync` bloquea el hilo: nunca hay dos a la vez), pero tener margen de
+  // sobra aqui no vale lo que cuesta que las dos discrepen.
   const listed = spawnSync("git", ["ls-tree", "-r", "-z", ref], {
     cwd: target,
     encoding: "buffer",
@@ -157,12 +157,12 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
  * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.
  */
 export async function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
-  // EL MISMO tope que la via sincrona. Aqui SI hace falta: esta via corre en
-  // el pool de la auditoria (AUDIT_CONCURRENCY llamadas en vuelo, harness.js),
-  // y `TREE_HASH_MAX_BUFFER` esta dimensionado para que todas quepan a la vez
-  // dentro del presupuesto global sin pelearse por el. Ver el comentario del
-  // propio `TREE_HASH_MAX_BUFFER` en file-utils.js para las dos versiones
-  // anteriores de este numero y por que las dos estaban mal.
+  // EL MISMO tope que la via sincrona. Aqui SI acota memoria de verdad: esta
+  // via corre en el pool de la auditoria (AUDIT_CONCURRENCY en vuelo,
+  // harness.js), y `TREE_HASH_MAX_BUFFER` esta dimensionado para que todas
+  // juntas no pasen del techo de diseño. Ver el comentario del propio
+  // `TREE_HASH_MAX_BUFFER` en file-utils.js: el numero salio de tres intentos,
+  // y los dos primeros rompian la paridad.
   const listed = await spawnCapture("git", ["ls-tree", "-r", "-z", ref], { cwd: target, maxBuffer: TREE_HASH_MAX_BUFFER });
   if (!listed.ok) {
     return {

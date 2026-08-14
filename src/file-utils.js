@@ -47,125 +47,63 @@ export function sha256Text(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Presupuesto de memoria para capturas concurrentes.
+// Techo de memoria de las capturas.
 //
-// El tope por captura evita que UNA salida crezca sin fin; no protege al
-// proceso. Cuatro `ls-tree` de 256 MiB son 1 GiB solo en chunks retenidos, y
-// `Buffer.concat` + `toString` + `split` multiplican el pico. Este presupuesto
-// acota los chunks RETENIDOS, que es lo unico que este modulo controla — el
-// transitorio de decodificacion queda fuera y esta declarado como limite.
+// El unico mecanismo es el tope POR LLAMADA (`maxBuffer`). Hubo ademas un
+// presupuesto GLOBAL compartido entre capturas concurrentes, y se quito: era
+// la causa raiz de tres bloqueantes seguidos, y no acotaba nada que el tope
+// por llamada no acotara ya.
 //
-// Se reserva poco y se crece bajo demanda: reservar el maximo declarado por
-// adelantado acotaba igual la memoria pero serializaba el pool en su parte
-// cara. Medido: el coste marginal por atestacion pasaba de 67 a 99 ms.
+// El argumento, porque volver a meterlo seria facil: el pico de bytes
+// RETENIDOS es (tope por llamada) x (capturas en vuelo). Con el consumidor
+// caliente -- la auditoria de atestaciones, AUDIT_CONCURRENCY en vuelo -- eso
+// da exactamente `CAPTURE_CEILING_BYTES`, el mismo numero que el presupuesto
+// hacia cumplir. La diferencia es que el tope por llamada es una propiedad
+// LOCAL de cada captura, y el presupuesto era estado COMPARTIDO: dos capturas
+// con la misma entrada podian terminar distinto segun el orden de llegada de
+// sus chunks. Eso rompia la paridad sync/async, que es la propiedad que este
+// modulo existe para sostener, y encima traia cola, inanicion, barging,
+// crecimiento por bloques y una fuga permanente -- todo para acotar lo que ya
+// estaba acotado.
+//
+// Lo que se pierde: el presupuesto permitia que UNA captura sola usara los
+// 256 MiB enteros mientras cuatro juntas seguian sin pasar de 256 MiB. Ahora
+// el tope es fijo. Es capacidad de verdad perdida, y se acepta a cambio de que
+// las dos vias no puedan discrepar.
+//
+// El transitorio de decodificacion (`Buffer.concat` + `toString` + `split`)
+// sigue fuera de esta cuenta y sigue declarado como limite conocido.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_BUDGET_BYTES = 256 * 1024 * 1024;
-const INITIAL_RESERVE_BYTES = 8 * 1024 * 1024;
+// Techo de diseño: cuanta memoria retenida se acepta con el pool caliente al
+// completo. No se aplica en ningun sitio; es de donde sale el tope por llamada.
+export const CAPTURE_CEILING_BYTES = 256 * 1024 * 1024;
+
+// Concurrencia esperada del consumidor caliente. Es AUDIT_CONCURRENCY
+// (harness.js), duplicado aqui porque harness.js importa de evidence-writer.js,
+// que importaria de aqui: cerrar el ciclo importando el valor de vuelta no es
+// posible. La prueba de paridad fija la relacion entre los dos numeros.
+const EXPECTED_CONCURRENCY = 4;
 
 // Techo por llamada del hash de arbol. Lo usan LAS DOS vias, la sincrona y la
 // asincrona, y esa es toda la idea: mientras el numero sea el mismo, las dos
 // aceptan y rechazan exactamente las mismas entradas.
 //
-// Historia, porque el numero solo no lo explica y ya nos equivocamos dos veces:
-//
-//  1. Las dos vias declaraban 256 MiB, que ademas era el presupuesto GLOBAL
-//     entero. La sincrona nunca compite (`spawnSync` bloquea el hilo, jamas hay
-//     dos a la vez) y siempre lo tenia disponible; la asincrona corre en el
-//     pool de la auditoria (AUDIT_CONCURRENCY en vuelo), asi que UNA podia
-//     reclamarlo entero y dejar sin nada a las otras tres. Mismo arbol, dos
-//     veredictos, decididos por quien ganara la carrera de memoria.
-//  2. Se bajo SOLO la asincrona a presupuesto/4. Eso quito la carrera, pero
-//     dejo una divergencia peor por ser silenciosa y estable: un `ls-tree` de
-//     entre 64 y 256 MiB pasaba por la via sincrona y fallaba por la
-//     asincrona, SIEMPRE. Cambiar una divergencia aleatoria por una
-//     determinista no es arreglarla.
-//
-// Ahora el tope es uno solo y las dos vias lo comparten. Se dimensiona por el
-// caso peor de la asincrona (AUDIT_CONCURRENCY capturas reteniendo su tope a
-// la vez sin superar el presupuesto global), y la sincrona lo adopta aunque no
-// lo necesite: capacidad de sobra en una via no vale lo que cuesta que las dos
-// discrepen.
-//
 // Cuanto es en la practica: `git ls-tree -r -z` gasta ~94 bytes por entrada
 // (medido sobre este repo: 37 402 bytes / 399 archivos), asi que 64 MiB dan
-// para ~715 000 archivos en un solo arbol. Chromium ronda los 400 000.
-//
-// El "4" es AUDIT_CONCURRENCY (harness.js); vive duplicado aqui porque
-// harness.js importa de evidence-writer.js, que importaria de aqui: cerrar el
-// ciclo importando AUDIT_CONCURRENCY de vuelta no es posible. La prueba de
-// paridad fija la relacion entre los dos numeros.
-export const TREE_HASH_MAX_BUFFER = Math.floor(DEFAULT_BUDGET_BYTES / 4);
+// para ~715 000 archivos en un solo arbol. Esa media es de ESTE repo: rutas
+// mas largas la suben y bajan el numero de archivos que caben. Quien necesite
+// mas puede pasar su propio `maxBuffer`, que es un parametro publico de
+// `spawnCapture` -- pero entonces le toca subirlo en LAS DOS vias.
+export const TREE_HASH_MAX_BUFFER = Math.floor(CAPTURE_CEILING_BYTES / EXPECTED_CONCURRENCY);
 
-/**
- * Crea un presupuesto aislado. Existe para poder probarlo con cifras pequeñas
- * sin generar cientos de MiB, y para que dos usos concurrentes puedan no
- * compartir techo cuando eso importe.
- */
-export function createCaptureBudget(totalBytes = DEFAULT_BUDGET_BYTES) {
-  // Un total invalido dejaba la cola bloqueada para siempre: con `-1`,
-  // `available` arrancaba negativo y ningun `need` (siempre >= 0) podia
-  // satisfacer `available >= need`; con `NaN`, toda comparacion es falsa por
-  // definicion. En los dos casos quien esperara nunca se drenaba. Se valida
-  // aqui, no en cada `acquire`, con el mismo criterio que ya usa `spawnCapture`
-  // para `maxBuffer`.
-  if (!Number.isFinite(totalBytes) || totalBytes < 0) {
-    throw new TypeError(`totalBytes tiene que ser un numero finito >= 0, y llego ${totalBytes}`);
-  }
-  let available = totalBytes;
-  const queue = [];
+// Tope de la fase de gracia entre el SIGTERM al grupo y el SIGKILL. Existe
+// porque la escalada identifica al grupo por pgid, y un pgid solo sigue siendo
+// el nuestro mientras la ventana sea corta. Treinta segundos es holgado para
+// cualquier hijo que este cerrando de verdad y sigue siendo despreciable frente
+// al tiempo que tarda un sistema en reciclar el espacio de PIDs entero.
+export const MAX_KILL_GRACE_MS = 30_000;
 
-  const drain = () => {
-    while (queue.length > 0 && available >= queue[0].need) {
-      const next = queue.shift();
-      available -= next.need;
-      next.grant();
-    }
-  };
-
-  return {
-    total: totalBytes,
-    // Reserva inicial. SIN barging: si ya hay alguien esperando, el que llega
-    // se pone a la cola aunque quepa. Permitir colarse dejaba a la cabeza de la
-    // cola en inanicion indefinida bajo trafico continuo de capturas pequeñas.
-    acquire(bytes) {
-      const need = Math.max(0, Math.min(bytes, INITIAL_RESERVE_BYTES, totalBytes));
-      if (queue.length === 0 && available >= need) {
-        available -= need;
-        return { need, wait: null };
-      }
-      let grant;
-      const wait = new Promise((resolve) => {
-        grant = resolve;
-      });
-      queue.push({ need, grant });
-      return { need, wait };
-    },
-    // Crecimiento bajo demanda. NO espera: el hijo ya esta escribiendo y nadie
-    // drenaria mientras tanto, que es justo lo que este tope existe para
-    // impedir. Tampoco respeta la cola, porque bloquear aqui a quien ya tiene
-    // memoria reservada mientras espera a quien espera memoria es un abrazo
-    // mortal de manual.
-    grow(extra) {
-      if (available < extra) return false;
-      available -= extra;
-      return true;
-    },
-    release(bytes) {
-      available += bytes;
-      drain();
-    },
-    // Solo para pruebas y diagnostico.
-    availableBytes() {
-      return available;
-    },
-    waiting() {
-      return queue.length;
-    }
-  };
-}
-
-const globalBudget = createCaptureBudget();
 
 /**
  * Decodifica los trozos capturados como UN solo buffer.
@@ -209,32 +147,21 @@ export function decodeCapture(chunks) {
  * que se independiza de su grupo (`setsid()`) en cualquiera de las dos
  * plataformas.
  */
-export async function spawnCapture(
-  command,
-  args,
-  { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000, budget = globalBudget } = {}
-) {
-  // Un `maxBuffer` no finito o negativo dejaba una entrada de cola imposible de
-  // satisfacer, o descuadraba el contador. Se valida antes de tocar nada.
+export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
+  // Se valida antes de arrancar el hijo: un tope no finito o negativo no puede
+  // cumplirse, y arrancar un proceso para matarlo acto seguido es peor que
+  // fallar rapido. `0` es valido: significa "cualquier salida desborda".
   if (!Number.isFinite(maxBuffer) || maxBuffer < 0) {
     throw new TypeError(`maxBuffer tiene que ser un numero finito >= 0, y llego ${maxBuffer}`);
   }
-
-  const reservation = budget.acquire(maxBuffer);
-  if (reservation.wait) await reservation.wait;
-  // La reserva CRECE con la captura; al final se devuelve lo que de verdad se
-  // llego a reservar, no lo que se pidio al empezar.
-  const ledger = { reserved: reservation.need };
-  try {
-    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget });
-  } finally {
-    budget.release(ledger.reserved);
-    // Se congela para que un chunk tardio —los listeners siguen vivos tras un
-    // corte— no pueda descontar presupuesto que ya nadie va a devolver. Esa
-    // fuga vaciaba el presupuesto global de forma permanente y dejaba la cola
-    // esperando para siempre.
-    ledger.closed = true;
+  // La gracia tiene tope por seguridad, no por gusto: el SIGKILL de la escalada
+  // va al GRUPO por pgid, y ese pgid solo sigue siendo el nuestro mientras la
+  // ventana sea corta (ver el comentario del temporizador en `trip`). Una
+  // gracia larga convierte un riesgo despreciable en uno real.
+  if (!Number.isFinite(killGraceMs) || killGraceMs < 0 || killGraceMs > MAX_KILL_GRACE_MS) {
+    throw new TypeError(`killGraceMs tiene que estar entre 0 y ${MAX_KILL_GRACE_MS} ms, y llego ${killGraceMs}`);
   }
+  return captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
 }
 
 // Terminar el ARBOL, no solo el hijo. `child.kill()` no alcanza a los nietos, y
@@ -358,7 +285,7 @@ function installSignalCleanupOnce() {
   process.on("exit", killAllActiveChildren);
 }
 
-function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget }) {
+function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
   return new Promise((resolve) => {
     // `detached` en POSIX crea grupo de procesos propio, que es lo que permite
     // matar a los nietos. En Windows no aplica y se usa `taskkill /T`.
@@ -420,11 +347,17 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       // RIESGO ACEPTADO, no resuelto: si el grupo SI murio limpio y el SO
       // recicla ese pgid dentro de la ventana de gracia, este SIGKILL cae
       // sobre un grupo ajeno. Para que ocurra, el SO tiene que dar la vuelta
-      // al espacio de PIDs entero en menos de `killGraceMs` (2 s por defecto)
-      // y aterrizar justo en este numero. Se acepta porque la alternativa
-      // -no escalar- deja descendientes de git/GPG vivos indefinidamente, que
-      // es un fallo seguro y frecuente frente a uno improbable. Cerrarlo de
-      // verdad pide una contencion del SO (cgroup, job object), no un pgid.
+      // al espacio de PIDs entero DENTRO de la gracia y aterrizar justo en
+      // este numero. Se acepta porque la alternativa -no escalar- deja
+      // descendientes de git/GPG vivos indefinidamente: fallo frecuente y
+      // seguro frente a uno improbable. Cerrarlo de verdad pide una contencion
+      // del SO (cgroup, job object), no un pgid.
+      //
+      // Ese argumento SOLO vale con una gracia corta, asi que la gracia esta
+      // acotada arriba (`MAX_KILL_GRACE_MS`): sin tope, quien pasara diez
+      // minutos convertiria un riesgo despreciable en uno real, y la
+      // justificacion escrita aqui dejaria de sostenerse sin que nadie lo
+      // notara.
       killTimer = setTimeout(() => {
         killTimer = null;
         killTreeForce(child);
@@ -434,28 +367,9 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       settle({ ok: false, stdout: "", stderr: detalle, overflow: true, reason: motivo });
     };
 
-    // El presupuesto global se pide EXACTO conforme la salida crece: el delta
-    // entre lo reservado y lo realmente retenido, ni un byte de mas. Redondear
-    // a bloques de `INITIAL_RESERVE_BYTES` (como hacia antes) sobre-contaba:
-    // con cuatro capturas reteniendo 56 MiB cada una, la reserva total podia
-    // llegar a 256 MiB por el redondeo solo, y el siguiente byte se cortaba
-    // por "presupuesto agotado" pese a caber en el limite declarado. `grow` es
-    // sincrono y barato (comparar y restar); pedirlo mas seguido no cuesta lo
-    // que costaba reservar el maximo por adelantado (eso si serializaba el
-    // pool, ver arriba).
-    const ensureBudget = (usados) => {
-      if (usados <= ledger.reserved) return true;
-      const extra = usados - ledger.reserved;
-      if (!budget.grow(extra)) return false;
-      ledger.reserved += extra;
-      return true;
-    };
-
-    // Tras un corte los listeners SIGUEN vivos hasta que el hijo cierre. Todo
-    // lo que llegue despues se descarta sin tocar contadores: si no, un chunk
-    // tardio del otro stream crecia el ledger despues de que el `finally` ya
-    // hubiera devuelto la reserva, y ese presupuesto se perdia para siempre.
-    const acepta = () => !settled && !overflow && !ledger.closed;
+    // Tras un corte los listeners SIGUEN vivos hasta que el hijo cierre: todo
+    // lo que llegue despues se descarta en vez de seguir acumulandose.
+    const acepta = () => !settled && !overflow;
 
     child.stdout.on("data", (chunk) => {
       if (!acepta()) return;
@@ -470,11 +384,6 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       if (outSize + errSize > maxBuffer) {
         return trip("maxBuffer", `la salida (stdout) de ${command} supero maxBuffer (${maxBuffer} bytes contando stdout+stderr, como spawnSync)`);
       }
-      if (!ensureBudget(outSize + errSize)) {
-        // El motivo es OTRO y se dice: culpar a `maxBuffer` cuando lo que se
-        // agoto fue la capacidad global manda a mirar donde no es.
-        return trip("presupuesto", `la captura de ${command} se corto: presupuesto global de memoria agotado`);
-      }
       out.push(chunk);
     });
 
@@ -484,9 +393,6 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       // Combinado con stdout, igual que arriba y que `spawnSync`.
       if (outSize + errSize > maxBuffer) {
         return trip("maxBuffer", `la salida (stderr) de ${command} supero maxBuffer (${maxBuffer} bytes contando stdout+stderr, como spawnSync)`);
-      }
-      if (!ensureBudget(outSize + errSize)) {
-        return trip("presupuesto", `la captura de ${command} se corto: presupuesto global de memoria agotado`);
       }
       err.push(chunk);
     });

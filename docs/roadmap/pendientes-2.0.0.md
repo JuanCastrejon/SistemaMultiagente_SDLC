@@ -1,6 +1,6 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (31 commits sobre `develop`).
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (33 commits sobre `develop`).
 `npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
@@ -58,11 +58,29 @@ partir sin dejar hueco explotable, así que van juntas.
 
 ## Deuda técnica conocida
 
-- [ ] **El transitorio de decodificación queda fuera del presupuesto.**
-      `spawnCapture` acota los chunks *retenidos*; `Buffer.concat` + `toString`
-      + `split` asignan memoria extra que nadie contabiliza, y la reserva se
-      libera antes de que `hashLsTree` termine. El pico real de RSS sigue sin
+- [ ] **El transitorio de decodificación queda fuera del tope.** `spawnCapture`
+      acota los chunks *retenidos*; `Buffer.concat` + `toString` + `split`
+      asignan memoria extra que nadie contabiliza. El pico real de RSS sigue sin
       acotar.
+- [x] ~~El SIGKILL al grupo usa un pgid que pudo reciclarse.~~ Acotado en la
+      ronda 7: `killGraceMs` se valida contra `MAX_KILL_GRACE_MS` (30 s). El
+      riesgo no se elimina —cerrarlo pide cgroup o job object, no un pgid— pero
+      el argumento de por qué es despreciable ya no depende de un parámetro sin
+      límite, que era la objeción real: la prueba usaba 30 s mientras la
+      justificación escrita hablaba de 2 s.
+- [x] ~~El presupuesto global de memoria.~~ **Eliminado** en la ronda 7, y con
+      él la cola, el barging, `grow()`, el crecimiento por bloques y la
+      validación de total inválido: −212 líneas netas entre código y pruebas.
+      Era la causa raíz de tres bloqueantes seguidos y no acotaba nada que el
+      tope por llamada no acotara ya — el pico retenido es (tope por llamada) ×
+      (capturas en vuelo), que con `AUDIT_CONCURRENCY` da exactamente el mismo
+      techo. La diferencia: el tope por llamada es **local**, el presupuesto era
+      **estado compartido**, y por eso dos capturas con la misma entrada podían
+      terminar distinto.
+      **Lo que se perdió, y es real:** el presupuesto permitía que una captura
+      sola usara los 256 MiB enteros. Ahora el tope es fijo en 64 MiB por
+      llamada. Quien necesite más pasa su propio `maxBuffer` — en **las dos**
+      vías.
 - [x] ~~El test POSIX del watchdog no demuestra el SIGKILL.~~ Resuelto, pero en
       la **ronda 6**, no en la 5 como se anotó primero. Lo que la ronda 5 dejó
       escrito era falso por partida doble: el test no llegaba a montar el
@@ -96,13 +114,6 @@ partir sin dejar hueco explotable, así que van juntas.
       entrada del CLI (`src/cli.js`), con el módulo limpiando y dejando decidir
       a quien llama. Se deja abierto a propósito: moverlo es un cambio de
       arquitectura, no un parche, y no bloquea la publicación.
-- [ ] **El SIGKILL al grupo usa un pgid que pudo reciclarse** (SERIO de la ronda
-      6, riesgo aceptado y documentado en el código). Si el grupo murió limpio y
-      el SO da la vuelta al espacio de PIDs dentro de `killGraceMs`, la escalada
-      cae sobre un grupo ajeno. Cerrarlo de verdad pide una contención del SO
-      (cgroup, job object), no un pgid. Se acepta porque no escalar deja
-      descendientes de git/GPG vivos indefinidamente: fallo frecuente y seguro
-      frente a uno improbable.
 - [ ] **`run()` cambió de contrato** (devolvía objeto o Promise según comando;
       ahora siempre Promise). El binario está cubierto por `await`, pero es
       cambio de API que merece nota de migración si alguien lo consume.
