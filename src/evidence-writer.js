@@ -11,12 +11,12 @@
 // La frescura de la evidencia se decide comparando arboles, nunca relojes.
 // ---------------------------------------------------------------------------
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { ensureDir, listIgnoredPaths, pathExists, readTextIfExists, writeText } from "./file-utils.js";
+import { ensureDir, listIgnoredPaths, pathExists, readTextIfExists, spawnCapture, writeText } from "./file-utils.js";
 
 function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
@@ -151,30 +151,22 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
  * Igual, sin bloquear el hilo: la usa el pool de la auditoria. Comparte con la
  * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.
  */
-export function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
-  return new Promise((resolve) => {
-    const child = spawn("git", ["ls-tree", "-r", "-z", ref], { cwd: target });
-    const chunks = [];
-    let stderr = "";
-    child.stdout.on("data", (chunk) => chunks.push(chunk));
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => resolve({ ok: false, hash: null, files: 0, code: "tree-ref-unreadable", detail: error.message }));
-    child.on("close", (code) => {
-      if (code !== 0) {
-        resolve({
-          ok: false,
-          hash: null,
-          files: 0,
-          code: "tree-ref-unreadable",
-          detail: stderr.trim() || `git ls-tree fallo sobre '${ref}'`
-        });
-        return;
-      }
-      resolve(hashLsTree(Buffer.concat(chunks).toString("utf8"), surfacePaths));
-    });
-  });
+export async function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
+  // El mismo tope de 256 MiB que la version sincrona. Sin el, un repo grande
+  // retenia la salida completa sin limite y con cuatro arboles en vuelo a la
+  // vez: una via real de agotar memoria, y ademas una divergencia con el camino
+  // sincrono, que ahi si habria fallado.
+  const listed = await spawnCapture("git", ["ls-tree", "-r", "-z", ref], { cwd: target, maxBuffer: 256 * 1024 * 1024 });
+  if (!listed.ok) {
+    return {
+      ok: false,
+      hash: null,
+      files: 0,
+      code: "tree-ref-unreadable",
+      detail: listed.stderr.trim() || `git ls-tree fallo sobre '${ref}'`
+    };
+  }
+  return hashLsTree(listed.stdout, surfacePaths);
 }
 
 // Parte PURA del hash de arbol: recibe la salida de `ls-tree -r -z` y decide.

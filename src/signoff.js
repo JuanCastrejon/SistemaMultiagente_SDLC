@@ -22,8 +22,8 @@
 //    no este modulo.
 // ---------------------------------------------------------------------------
 
-import { spawn, spawnSync } from "node:child_process";
-import { sha256Text, stableJson } from "./file-utils.js";
+import { spawnSync } from "node:child_process";
+import { sha256Text, spawnCapture, stableJson } from "./file-utils.js";
 
 export const ATTESTATION_TRAILER = "Signed-Attestation-Subject";
 
@@ -50,24 +50,14 @@ function git(args, cwd) {
   return { ok: result.status === 0, stdout: (result.stdout ?? "").trim(), stderr: result.stderr ?? "" };
 }
 
-// Misma invocacion sin bloquear el hilo. Devuelve la MISMA forma que `git()`
-// para que el juicio no tenga que saber por cual de las dos vino.
-export function gitAsync(args, cwd) {
-  return new Promise((resolve) => {
-    const child = spawn("git", args, { cwd });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    // `error` cubre el caso de que git no exista o no se pueda lanzar: sin esto
-    // la promesa quedaria colgada para siempre y el pool entero con ella.
-    child.on("error", (error) => resolve({ ok: false, stdout: "", stderr: error.message }));
-    child.on("close", (code) => resolve({ ok: code === 0, stdout: stdout.trim(), stderr }));
-  });
+// Misma invocacion sin bloquear el hilo, y con la MISMA semantica que `git()`:
+// `spawnCapture` acumula buffers, decodifica una sola vez y aplica el mismo
+// limite de 1 MiB que `spawnSync` trae por defecto. Que las dos vias coincidan
+// no es cosmetico — si difieren, la auditoria y el gate pueden juzgar distinto
+// la misma firma, y eso es un fallo de seguridad silencioso.
+export async function gitAsync(args, cwd) {
+  const result = await spawnCapture("git", args, { cwd });
+  return { ok: result.ok, stdout: result.stdout.trim(), stderr: result.stderr };
 }
 
 // El SHA-256 de la cadena vacia. Es lo que devuelve un hash de arbol cuando

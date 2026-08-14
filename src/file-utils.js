@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 /**
  * Pregunta a git cuales de estas rutas estan ignoradas. Es la unica fuente
@@ -44,6 +44,65 @@ export function toPosixPath(value) {
 
 export function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+/**
+ * Lanza un proceso y captura su salida SIN bloquear el hilo, con la misma
+ * semantica que `spawnSync`: acumula BUFFERS y decodifica una sola vez al
+ * cerrar, y aplica un limite de tamaño explicito.
+ *
+ * Las dos cosas son correcciones de defectos medidos, no precaucion:
+ *
+ *  - Concatenar `stdout += chunk` decodifica cada trozo por separado, asi que un
+ *    caracter UTF-8 partido entre dos chunks se convierte en `?`. Reproducido
+ *    con `A` acentuada: la via sincrona la conserva y la concatenacion async
+ *    devolvia dos caracteres de reemplazo. En este framework eso llega hasta el
+ *    firmante (`%GS`) y el mensaje del commit (`%B`), asi que la auditoria podia
+ *    rechazar a un maintainer con tilde que el gate aceptaba.
+ *  - `spawnSync` trae `maxBuffer` de 1 MiB por defecto y falla con `ENOBUFS` al
+ *    excederlo; sin limite en la via async, la misma entrada daba resultados
+ *    distintos por cada camino. Dos verificadores que no coinciden son peores
+ *    que uno solo.
+ */
+export function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024 } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { cwd });
+    const out = [];
+    const err = [];
+    let size = 0;
+    let overflow = false;
+
+    child.stdout.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > maxBuffer) {
+        if (!overflow) {
+          overflow = true;
+          child.kill();
+        }
+        return;
+      }
+      out.push(chunk);
+    });
+    child.stderr.on("data", (chunk) => err.push(chunk));
+    child.on("error", (error) => resolve({ ok: false, stdout: "", stderr: error.message, overflow: false }));
+    child.on("close", (code) => {
+      if (overflow) {
+        resolve({
+          ok: false,
+          stdout: "",
+          stderr: `la salida de ${command} supero maxBuffer (${maxBuffer} bytes)`,
+          overflow: true
+        });
+        return;
+      }
+      resolve({
+        ok: code === 0,
+        stdout: Buffer.concat(out).toString("utf8"),
+        stderr: Buffer.concat(err).toString("utf8"),
+        overflow: false
+      });
+    });
+  });
 }
 
 export function sha256File(filePath) {

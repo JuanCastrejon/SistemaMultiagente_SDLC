@@ -1027,9 +1027,9 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
 // lanza varios procesos de git, y un `Promise.all` sin limite sobre un repo con
 // cincuenta firmas abriria cientos de procesos y pelearia por el agente de
 // GPG/SSH. Medido, cuatro basta para bajar el orden de magnitud.
-const AUDIT_CONCURRENCY = 4;
+export const AUDIT_CONCURRENCY = 4;
 
-async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
+export async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
   const results = new Array(items.length);
   let next = 0;
   const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -1037,7 +1037,20 @@ async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
       const index = next;
       next += 1;
       if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
+      // Cada tarea atrapa lo suyo. Sin esto, `Promise.all` rechazaba con la
+      // PRIMERA excepcion, `auditAttestations` abortaba entera y los demas
+      // corredores seguian trabajando en segundo plano sobre un informe que ya
+      // nadie iba a leer. Peor en `upgrade`, donde eso ocurre despues de haber
+      // escrito la migracion: el resultado estructurado se perdia y salia el
+      // error generico del CLI.
+      //
+      // Una excepcion se convierte en veredicto FAIL-CLOSED, no en silencio:
+      // una atestacion que no se pudo juzgar no puede contar como buena.
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        results[index] = { ok: false, code: "attestation-audit-failed", detail: error?.message ?? String(error) };
+      }
     }
   });
   await Promise.all(runners);
@@ -1073,11 +1086,17 @@ export async function auditAttestations(target) {
   // Primero se recoge QUE hay que verificar —lectura de YAML, barata y
   // secuencial— y despues se verifica en paralelo. Mezclarlo daria un orden de
   // hallazgos dependiente de quien termine antes.
+  // Se ordena explicitamente: `readdirSync` no garantiza orden entre sistemas de
+  // archivos, y dos corridas sobre el mismo repo tienen que producir el mismo
+  // informe. Prometer "orden de lectura" sin fijarlo era prometer nada.
   const pendientes = [];
-  for (const sliceEntry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!sliceEntry.isDirectory()) continue;
+  const sliceEntries = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const sliceEntry of sliceEntries) {
     const sliceDir = path.join(root, sliceEntry.name);
-    for (const file of fs.readdirSync(sliceDir)) {
+    for (const file of fs.readdirSync(sliceDir).sort((a, b) => a.localeCompare(b))) {
       if (!file.endsWith(".yaml")) continue;
       const phase = file.replace(/\.yaml$/, "");
       const read = readEvidenceFile(path.join(sliceDir, file));
