@@ -498,3 +498,177 @@ console.log(
     ? "watchdog fuerza el grupo tras salir el lider: SKIP (Windows no tiene grupos POSIX que ejercitar)"
     : "watchdog fuerza el grupo tras salir el lider: PASS"
 );
+
+// --- 14. createCaptureBudget rechaza totales invalidos ---------------------
+// MENOR de la ronda 5. Con `-1`, `available` arrancaba negativo y ningun
+// `need` (siempre >= 0) podia satisfacer `available >= need`; con `NaN`, toda
+// comparacion es falsa. En los dos casos quien esperara en la cola no se
+// drenaba NUNCA -- un worker del pool de la auditoria colgado sin veredicto.
+{
+  for (const malo of [-1, Number.NaN, Number.NEGATIVE_INFINITY]) {
+    assert.throws(() => createCaptureBudget(malo), /totalBytes/, `${malo} tiene que rechazarse al crear el presupuesto`);
+  }
+  // Y que de verdad rechaza ANTES de dejar nada a medio construir: cero es
+  // valido (cola vacia desde el principio, nunca se drena porque nunca hay
+  // nada que drenar, no porque este roto).
+  const vacio = createCaptureBudget(0);
+  assert.equal(vacio.total, 0);
+}
+
+console.log("createCaptureBudget rechaza totales invalidos: PASS");
+
+// --- 15. el presupuesto reservado es EXACTO, no redondeado a bloques -------
+// SERIO de la ronda 5. `ensureBudget` redondeaba cada crecimiento al bloque de
+// `INITIAL_RESERVE_BYTES` (8 MiB): dos capturas concurrentes que solo
+// necesitaban ~2 MiB mas alla de su reserva inicial reclamaban 8 MiB cada una
+// igual, y la segunda en pedir se quedaba sin presupuesto compartido aunque la
+// suma de lo REALMENTE necesitado cupiera de sobra. No se puede observar el
+// redondeo espiando `availableBytes()` desde fuera (la reserva inicial de
+// `acquire` ya usa ese mismo tamaño de bloque, y confundiria las dos cosas):
+// se prueba por el desenlace, con dos capturas cuyo defecto real (~10 MiB cada
+// una, 2 MiB por encima del bloque de 8) solo cabe junto si el crecimiento
+// posterior es exacto.
+{
+  const dir = fs.mkdtempSync(path.join(tempRoot, "goteo-"));
+  const script = path.join(dir, "goteo.mjs");
+  // ~10 MiB por proceso, en chunks de 300 KiB, paceado -- streaming real, no
+  // un solo `write` que ya haya terminado antes de que la otra capture llegue
+  // a competir por el presupuesto compartido.
+  fs.writeFileSync(
+    script,
+    [
+      "const b = Buffer.alloc(300 * 1024, 0x61);",
+      "let i = 0;",
+      "const t = setInterval(() => { if (i++ >= 34) { clearInterval(t); return; } process.stdout.write(b); }, 6);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  // 24 MiB de presupuesto: 16 MiB se van en las dos reservas iniciales (8 MiB
+  // cada una), dejando 8 MiB de holgura -- exactamente lo que las dos
+  // capturas necesitan crecer (2 MiB cada una) si el crecimiento es exacto.
+  // Con el redondeo viejo, la primera en crecer ya pide sus 8 MiB de bloque y
+  // agota la holgura entera; a la segunda no le queda nada.
+  for (let intento = 1; intento <= 3; intento += 1) {
+    const budget = createCaptureBudget(24 * 1024 * 1024);
+    const resultados = await Promise.all(
+      Array.from({ length: 2 }, () => spawnCapture(process.execPath, [script], { maxBuffer: 16 * 1024 * 1024, killGraceMs: 500, budget }))
+    );
+    assert.deepEqual(
+      resultados.map((r) => r.ok),
+      [true, true],
+      `intento ${intento}: las dos tienen que caber -- si alguna corto, el crecimiento volvio a redondear a bloques`
+    );
+    assert.equal(budget.availableBytes(), budget.total, `intento ${intento}: el presupuesto vuelve completo`);
+  }
+}
+
+console.log("presupuesto exacto, sin redondeo a bloques: PASS");
+
+// --- 16. taskkill sin PATH no tumba el proceso Node -------------------------
+// SERIO de la ronda 5, Windows unicamente (la rama POSIX de `killTree` no usa
+// `taskkill`). Un `spawn` de `taskkill` que falla con ENOENT emite su `error`
+// de forma ASINCRONA: el `try/catch` alrededor del `spawn` no lo ve, y sin un
+// listener de `error` propio ese evento sin manejar tumba el proceso Node
+// ENTERO -- reproducido antes de este fix con un binario inexistente.
+if (process.platform === "win32") {
+  const PATH_ORIGINAL = process.env.PATH ?? process.env.Path;
+  const dir = fs.mkdtempSync(path.join(tempRoot, "sin-taskkill-"));
+  try {
+    // PATH vacio: ni System32 (donde vive taskkill.exe) queda visible.
+    process.env.PATH = dir;
+    process.env.Path = dir;
+
+    const script = path.join(tempRoot, "corto.mjs");
+    fs.writeFileSync(script, "process.stdout.write('x'.repeat(2 * 1024 * 1024));", "utf8");
+
+    // Si el listener de `error` faltara, este `await` ni siquiera llegaria a
+    // resolver: el proceso de prueba entero moriria por el evento sin atrapar
+    // antes de que el test pudiera afirmar nada.
+    const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 300 });
+    assert.equal(resultado.ok, false);
+    assert.equal(resultado.overflow, true);
+  } finally {
+    if (PATH_ORIGINAL === undefined) {
+      delete process.env.PATH;
+      delete process.env.Path;
+    } else {
+      process.env.PATH = PATH_ORIGINAL;
+      process.env.Path = PATH_ORIGINAL;
+    }
+  }
+}
+
+console.log(
+  process.platform === "win32"
+    ? "taskkill sin PATH no tumba el proceso: PASS"
+    : "taskkill sin PATH no tumba el proceso: SKIP (POSIX no depende de taskkill)"
+);
+
+// --- 17. limpieza de hijos detached (Ctrl-C) alcanza al GRUPO --------------
+// SERIO de la ronda 5. `detached: true` pone al hijo en su PROPIO grupo:
+// Ctrl-C en la terminal señala al grupo ORIGINAL de Node, no a este. Sin un
+// registro y limpieza explicita, un `git`/GPG de verificacion interrumpido a
+// mitad de auditoria puede quedar huerfano y vivo. Se prueba la funcion de
+// limpieza DIRECTAMENTE, no mandando la señal de verdad: eso terminaria al
+// propio proceso de la prueba antes de poder afirmar nada.
+//
+// POSIX unicamente: en Windows `captureProcess` no detacha (no hay grupos
+// POSIX que registrar ni limpiar).
+if (process.platform !== "win32") {
+  const { killAllActiveChildren } = await import("../src/file-utils.js");
+
+  const dir = fs.mkdtempSync(path.join(tempRoot, "ctrlc-"));
+  const pidFile = path.join(dir, "nieto.pid");
+  const script = path.join(dir, "padre.mjs");
+  const codigoNieto = `process.on('SIGTERM', () => {}); require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+  fs.writeFileSync(
+    script,
+    [
+      "import { spawn } from 'node:child_process';",
+      `const codigoNieto = ${JSON.stringify(codigoNieto)};`,
+      "spawn(process.execPath, ['-e', codigoNieto], { stdio: 'ignore' });",
+      // El lider NO desborda ni sale por su cuenta: sigue vivo, para que la
+      // captura siga "en vuelo" cuando se dispare la limpieza.
+      "setInterval(() => {}, 1000);"
+    ].join("\n"),
+    "utf8"
+  );
+
+  const captura = spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 2000 });
+
+  for (let i = 0; i < 50 && !fs.existsSync(pidFile); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(fs.existsSync(pidFile), "el nieto llego a escribir su pid: el escenario se monto de verdad");
+  const nietoPid = Number(fs.readFileSync(pidFile, "utf8"));
+
+  // Todavia en vuelo: ni desbordo ni el lider salio por su cuenta. Es el
+  // momento en que Ctrl-C, de verdad, tendria que alcanzar a este arbol.
+  killAllActiveChildren();
+
+  const resultado = await captura;
+  assert.equal(resultado.ok, false, "el lider murio por la limpieza forzada, no por salir limpio");
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  let vivo = true;
+  try {
+    process.kill(nietoPid, 0);
+  } catch {
+    vivo = false;
+  }
+  if (vivo) {
+    try {
+      process.kill(nietoPid, "SIGKILL");
+    } catch {
+      /* limpieza best-effort */
+    }
+  }
+  assert.equal(vivo, false, "el nieto tiene que estar muerto: la limpieza alcanza al GRUPO detached, no solo al lider");
+}
+
+console.log(
+  process.platform === "win32"
+    ? "limpieza de hijos detached: SKIP (Windows no detacha, no hay grupos POSIX que limpiar)"
+    : "limpieza de hijos detached: PASS"
+);

@@ -87,6 +87,15 @@ export const TREE_HASH_MAX_BUFFER = Math.floor(DEFAULT_BUDGET_BYTES / 4);
  * compartir techo cuando eso importe.
  */
 export function createCaptureBudget(totalBytes = DEFAULT_BUDGET_BYTES) {
+  // Un total invalido dejaba la cola bloqueada para siempre: con `-1`,
+  // `available` arrancaba negativo y ningun `need` (siempre >= 0) podia
+  // satisfacer `available >= need`; con `NaN`, toda comparacion es falsa por
+  // definicion. En los dos casos quien esperara nunca se drenaba. Se valida
+  // aqui, no en cada `acquire`, con el mismo criterio que ya usa `spawnCapture`
+  // para `maxBuffer`.
+  if (!Number.isFinite(totalBytes) || totalBytes < 0) {
+    throw new TypeError(`totalBytes tiene que ser un numero finito >= 0, y llego ${totalBytes}`);
+  }
   let available = totalBytes;
   const queue = [];
 
@@ -177,9 +186,12 @@ export function decodeCapture(chunks) {
  * escalada a SIGKILL fuerza el GRUPO al vencer `killGraceMs` sin mirar si el
  * lider ya salio (ronda 5 de revision adversarial -- antes, el `exit` del
  * lider cancelaba el watchdog y un nieto que ignorara SIGTERM sobrevivia para
- * siempre). Sigue sin cubrirse: un descendiente que se independiza de su
- * grupo (`setsid()`) en cualquiera de las dos plataformas, y el `spawn` de
- * `taskkill` no tiene listener de `error` propio.
+ * siempre). Si el CLI se interrumpe (Ctrl-C) a mitad de una captura, el hijo
+ * detached se limpia via `killAllActiveChildren` (registro + listener de
+ * SIGINT/SIGTERM instalado una vez por proceso), no solo si la captura llega
+ * a su propio corte por tiempo o tamaño. Sigue sin cubrirse: un descendiente
+ * que se independiza de su grupo (`setsid()`) en cualquiera de las dos
+ * plataformas.
  */
 export async function spawnCapture(
   command,
@@ -217,7 +229,15 @@ function killTree(child) {
     // En Windows no hay grupos de procesos POSIX; `taskkill /T` recorre el
     // arbol. Se lanza y se olvida: es limpieza, no camino critico.
     try {
-      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+      const tk = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      // Sin este listener, un ENOENT (taskkill ausente del PATH: PATH
+      // recortado, cuenta de servicio) llega ASINCRONO y el try/catch de
+      // arriba no lo ve -- reproducido: revienta el proceso Node ENTERO con
+      // un 'Unhandled error event', no solo deja nietos vivos. El fallback ya
+      // corre incondicionalmente despues (`child.kill()`), asi que aqui solo
+      // hace falta no dejar que el evento tumbe el proceso.
+      tk.on("error", () => {});
+      tk.unref();
     } catch {
       /* si taskkill no esta, queda el kill directo de abajo */
     }
@@ -241,9 +261,24 @@ function killTree(child) {
 function killTreeForce(child) {
   if (process.platform === "win32") {
     try {
-      spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+      const tk = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      // Mismo defecto que en `killTree`. Aqui no hay fallback incondicional
+      // despues: si `taskkill` no arranca, lo unico que queda es forzar al
+      // menos al lider.
+      tk.on("error", () => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* ya se fue */
+        }
+      });
+      tk.unref();
     } catch {
-      /* nada mas que hacer */
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ya se fue */
+      }
     }
     return;
   }
@@ -258,11 +293,59 @@ function killTreeForce(child) {
   }
 }
 
+// Registro de hijos DETACHED en vuelo (POSIX unicamente: en Windows no se
+// detacha, ver mas abajo). `detached: true` pone al hijo en su PROPIO grupo de
+// procesos -- Ctrl-C en la terminal señala al grupo ORIGINAL de Node, no a
+// este grupo nuevo. Si Node termina sin limpiar explicitamente, el hijo -y sus
+// descendientes: un `git`/GPG de verificacion, o un `pinentry` esperando
+// entrada que ya nadie va a dar- puede quedar huerfano y vivo.
+const activeChildren = new Set();
+
+/**
+ * Fuerza el arbol de TODOS los hijos detached que sigan en vuelo. Separada de
+ * los listeners de señal para poder probarla directamente: mandar la señal de
+ * verdad al proceso de la prueba lo terminaria a el tambien, antes de poder
+ * afirmar nada.
+ */
+export function killAllActiveChildren() {
+  for (const child of activeChildren) {
+    try {
+      killTreeForce(child);
+    } catch {
+      /* best effort: un hijo no puede impedir que se limpien los demas */
+    }
+  }
+}
+
+let signalHandlersInstalled = false;
+
+function installSignalCleanupOnce() {
+  if (signalHandlersInstalled) return;
+  signalHandlersInstalled = true;
+  // Node deja de auto-salir con SIGINT/SIGTERM en cuanto se registra un
+  // listener propio; se replica la salida por defecto (128 + numero de señal)
+  // despues de limpiar, para no cambiar el codigo de salida que ya esperaba
+  // quien invoca el CLI.
+  process.on("SIGINT", () => {
+    killAllActiveChildren();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    killAllActiveChildren();
+    process.exit(143);
+  });
+}
+
 function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, budget }) {
   return new Promise((resolve) => {
     // `detached` en POSIX crea grupo de procesos propio, que es lo que permite
     // matar a los nietos. En Windows no aplica y se usa `taskkill /T`.
-    const child = spawn(command, args, { cwd, detached: process.platform !== "win32" });
+    const detached = process.platform !== "win32";
+    const child = spawn(command, args, { cwd, detached });
+    if (detached) {
+      installSignalCleanupOnce();
+      activeChildren.add(child);
+    }
     const out = [];
     const err = [];
     let outSize = 0;
@@ -282,6 +365,7 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
     const settle = (result) => {
       if (settled) return;
       settled = true;
+      activeChildren.delete(child); // no-op si nunca se registro (Windows)
       resolve(result);
     };
 
@@ -314,10 +398,18 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
       settle({ ok: false, stdout: "", stderr: detalle, overflow: true, reason: motivo });
     };
 
-    // El presupuesto global se pide EN BLOQUES conforme la salida crece.
+    // El presupuesto global se pide EXACTO conforme la salida crece: el delta
+    // entre lo reservado y lo realmente retenido, ni un byte de mas. Redondear
+    // a bloques de `INITIAL_RESERVE_BYTES` (como hacia antes) sobre-contaba:
+    // con cuatro capturas reteniendo 56 MiB cada una, la reserva total podia
+    // llegar a 256 MiB por el redondeo solo, y el siguiente byte se cortaba
+    // por "presupuesto agotado" pese a caber en el limite declarado. `grow` es
+    // sincrono y barato (comparar y restar); pedirlo mas seguido no cuesta lo
+    // que costaba reservar el maximo por adelantado (eso si serializaba el
+    // pool, ver arriba).
     const ensureBudget = (usados) => {
       if (usados <= ledger.reserved) return true;
-      const extra = Math.max(usados - ledger.reserved, INITIAL_RESERVE_BYTES);
+      const extra = usados - ledger.reserved;
       if (!budget.grow(extra)) return false;
       ledger.reserved += extra;
       return true;
