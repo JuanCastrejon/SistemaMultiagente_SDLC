@@ -74,10 +74,21 @@ const CAPTURE_BUDGET_BYTES = 256 * 1024 * 1024;
 let availableBudget = CAPTURE_BUDGET_BYTES;
 const budgetQueue = [];
 
+// Reserva INICIAL por captura. Reservar el maximo declarado por adelantado era
+// correcto de memoria y desastroso de rendimiento: con presupuesto de 256 MiB y
+// un `ls-tree` que declara 256 MiB, solo UNO podia correr a la vez y el pool
+// quedaba serializado justo en su parte cara. Medido: el coste marginal por
+// atestacion subio de 67 a 99 ms.
+//
+// La memoria no se consume al declarar el tope, se consume cuando llegan los
+// bytes. Asi que se reserva poco y se crece bajo demanda: en el caso normal
+// —arboles de unos pocos MiB— todas las capturas caben a la vez.
+const INITIAL_RESERVE_BYTES = 8 * 1024 * 1024;
+
 function acquireBudget(bytes) {
   // Una peticion mayor que el presupuesto entero esperaria para siempre: se
   // acota al total, de modo que corre sola pero corre.
-  const need = Math.min(bytes, CAPTURE_BUDGET_BYTES);
+  const need = Math.min(bytes, INITIAL_RESERVE_BYTES, CAPTURE_BUDGET_BYTES);
   if (availableBudget >= need) {
     availableBudget -= need;
     return { need, wait: null };
@@ -88,6 +99,18 @@ function acquireBudget(bytes) {
   });
   budgetQueue.push({ need, grant: release });
   return { need, wait };
+}
+
+/**
+ * Amplia la reserva de una captura que crecio mas de lo previsto. No espera: si
+ * el presupuesto global esta agotado devuelve `false` y quien llama corta la
+ * captura. Esperar aqui seria peor — el proceso hijo seguiria escribiendo
+ * mientras nadie drena, y esto existe justamente para acotar memoria.
+ */
+function growBudget(extra) {
+  if (availableBudget < extra) return false;
+  availableBudget -= extra;
+  return true;
 }
 
 function releaseBudget(need) {
@@ -104,10 +127,13 @@ function releaseBudget(need) {
 export async function spawnCapture(command, args, { cwd, maxBuffer = 1024 * 1024, killGraceMs = 2000 } = {}) {
   const reservation = acquireBudget(maxBuffer);
   if (reservation.wait) await reservation.wait;
+  // La reserva CRECE con la captura; al final se devuelve lo que de verdad se
+  // llego a reservar, no lo que se pidio al empezar.
+  const ledger = { reserved: reservation.need };
   try {
-    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs });
+    return await captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger });
   } finally {
-    releaseBudget(reservation.need);
+    releaseBudget(ledger.reserved);
   }
 }
 
@@ -123,7 +149,7 @@ export function decodeCapture(chunks) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
+function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger }) {
   return new Promise((resolve) => {
     const child = spawn(command, args, { cwd });
     const out = [];
@@ -192,14 +218,28 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
       });
     };
 
+    // El presupuesto global se pide EN BLOQUES conforme la salida crece. Pedir
+    // el maximo declarado por adelantado acotaba la memoria pero serializaba el
+    // pool en su parte cara; pedirlo bajo demanda deja convivir a las capturas
+    // normales, que son pequeñas, y solo estorba a las que de verdad crecen.
+    const ensureBudget = (usados) => {
+      if (usados <= ledger.reserved) return true;
+      const extra = Math.max(usados - ledger.reserved, INITIAL_RESERVE_BYTES);
+      if (!growBudget(extra)) return false;
+      ledger.reserved += extra;
+      return true;
+    };
+
     child.stdout.on("data", (chunk) => {
       outSize += chunk.length;
       if (outSize > maxBuffer) return trip("stdout");
+      if (!ensureBudget(outSize + errSize)) return trip("presupuesto global");
       out.push(chunk);
     });
     child.stderr.on("data", (chunk) => {
       errSize += chunk.length;
       if (errSize > maxBuffer) return trip("stderr");
+      if (!ensureBudget(outSize + errSize)) return trip("presupuesto global");
       err.push(chunk);
     });
     child.on("error", (error) => settle({ ok: false, stdout: "", stderr: error.message, overflow }));
