@@ -95,6 +95,11 @@ jobs:
             c.surfaces = [{ id: 'src', path: 'src', owner: 'regression', tier: 'standard' }];
             fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
           "
+          # `quality-contract.yaml` se GENERA desde config.surfaces. Editar el
+          # config y no regenerar deja el contrato desincronizado -- drift, que
+          # es lo que `diff` reporta. Es tambien lo que la migracion le dice al
+          # consumidor que haga, asi que la regresion tiene que hacer lo mismo.
+          node ./bin/sdlc.js upgrade --target ./tmp-consumer --json
 
       - name: Doctor ya configurado
         run: |

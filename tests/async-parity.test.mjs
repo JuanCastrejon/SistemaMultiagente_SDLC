@@ -530,6 +530,26 @@ console.log(
     [...desordenado].sort((x, y) => x.localeCompare(y)),
     "ni como `localeCompare`, que depende del ICU de la maquina"
   );
+
+  // Y que el comparador SE USE de verdad en `auditAttestations`. Probar el
+  // helper aislado no basta: la ronda 11 quito el comparador del sitio de
+  // llamada y la suite siguio 20/20 verde, porque `readdirSync` ya devolvia
+  // ese orden en esa maquina. La salida verificaba una CASUALIDAD del sistema
+  // de archivos, no el criterio.
+  //
+  // Se comprueba sobre el codigo porque el orden de `readdirSync` no se puede
+  // forzar desde aqui: es del sistema de archivos, no nuestro.
+  const fuenteHarness = fs.readFileSync(new URL("../src/harness.js", import.meta.url), "utf8");
+  const bloqueAudit = fuenteHarness.slice(fuenteHarness.indexOf("export async function auditAttestations"));
+  const usos = (bloqueAudit.match(/compareByUtf8Bytes/g) ?? []).length;
+  assert.ok(
+    usos >= 2,
+    `auditAttestations tiene que ordenar CON el comparador tanto los slices como sus archivos; se vieron ${usos} usos`
+  );
+  assert.ok(
+    !/\.sort\(\)\s*[;)\n]/.test(bloqueAudit),
+    "ningun `.sort()` sin comparador dentro de auditAttestations: eso ordena por UTF-16 o no ordena nada"
+  );
 }
 
 console.log("orden de hallazgos por bytes: PASS");

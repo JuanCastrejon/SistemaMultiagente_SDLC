@@ -12,7 +12,10 @@
 //   1. Las atestaciones emitidas antes de 2.0.0 NO verifican: el sujeto de la
 //      firma cambio de formato (object id de git por blob, en vez de sha256 del
 //      contenido del working tree). Hay que volver a firmar con
-//      `sdlc signoff --slice <id> --phase <F> --create`.
+//      `sdlc signoff --slice <id> --phase <F> --create --record`.
+//      SIN `--record` se crea el commit firmado pero NO se toca la evidencia,
+//      asi que el gate sigue bloqueando y parece que no funciono. Es el mismo
+//      defecto que 2.0.0 arregla, y esta nota lo repetia.
 //   2. `doctor` empieza a reportar `config-surfaces-empty` y
 //      `config-stack-placeholder` como ERROR. Un consumidor que conserve
 //      `apps/api`/`apps/web` o `<BACKEND_STACK>` de la plantilla los vera desde
@@ -25,7 +28,9 @@ export function up(files = {}) {
       "BREAKING 1: las atestaciones firmadas antes de 2.0.0 no verifican.",
       "  El sujeto de la firma se computa ahora sobre el arbol de git en el commit",
       "  firmado, no sobre el working tree. Volver a firmar:",
-      "    sdlc signoff --slice <id> --phase <F> --create",
+      "    sdlc signoff --slice <id> --phase <F> --create --record",
+      "  SIN --record se crea el commit firmado pero NO se enlaza con la",
+      "  evidencia de la fase, y el gate sigue bloqueando.",
       "",
       "BREAKING 2: doctor reporta como ERROR las superficies vacias y los",
       "  placeholders de stack (config-surfaces-empty, config-stack-placeholder).",
