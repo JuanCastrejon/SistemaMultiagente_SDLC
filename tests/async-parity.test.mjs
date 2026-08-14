@@ -173,6 +173,41 @@ console.log("pool: excepcion aislada, tope y orden: PASS");
 
 console.log("tope de stderr: PASS");
 
+// --- 5b. `maxBuffer` es UN presupuesto entre los dos streams ---------------
+// BLOQUEANTE de la ronda 7. `spawnSync` gasta un solo `maxBuffer` entre stdout
+// y stderr; `spawnCapture` los limitaba por separado. Con 6 MiB por stream y
+// un tope de 10 MiB, la via sincrona daba ENOBUFS y la asincrona aceptaba: el
+// mismo sujeto, dos veredictos. Se prueba por COMPARACION DIRECTA entre las
+// dos vias, que es la unica forma de que no vuelvan a divergir en silencio.
+{
+  const script = path.join(tempRoot, "dos-streams.mjs");
+  fs.writeFileSync(
+    script,
+    [
+      "process.stdout.write('o'.repeat(6 * 1024 * 1024));",
+      "process.stderr.write('e'.repeat(6 * 1024 * 1024));"
+    ].join("\n"),
+    "utf8"
+  );
+
+  // Ninguno de los dos streams supera el tope por si solo (6 < 10); juntos, si.
+  const maxBuffer = 10 * 1024 * 1024;
+  const sync = spawnSync(process.execPath, [script], { maxBuffer, encoding: "buffer" });
+  const async_ = await spawnCapture(process.execPath, [script], { maxBuffer });
+
+  assert.ok(sync.error, "spawnSync corta con ENOBUFS: gasta UN presupuesto entre los dos streams");
+  assert.equal(sync.error.code, "ENOBUFS");
+  assert.equal(
+    async_.ok,
+    false,
+    "la via async tiene que cortar TAMBIEN: si limita cada stream por separado, acepta lo que la sincrona rechaza"
+  );
+  assert.equal(async_.overflow, true);
+  assert.equal(async_.reason, "maxBuffer");
+}
+
+console.log("maxBuffer combinado entre stdout y stderr: PASS");
+
 // --- 6. un hijo que ignora SIGTERM no cuelga la promesa --------------------
 // `kill()` manda SIGTERM y no garantiza nada. Si `spawnCapture` esperara a
 // `close` para resolver, un hijo que lo ignore dejaria la promesa colgada para

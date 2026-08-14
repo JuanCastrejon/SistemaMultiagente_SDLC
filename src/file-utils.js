@@ -460,8 +460,15 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
     child.stdout.on("data", (chunk) => {
       if (!acepta()) return;
       outSize += chunk.length;
-      if (outSize > maxBuffer) {
-        return trip("maxBuffer", `la salida (stdout) de ${command} supero maxBuffer (${maxBuffer} bytes)`);
+      // COMBINADO, no por stream: `spawnSync` gasta un solo `maxBuffer` entre
+      // stdout y stderr. Medido (ronda 7): con maxBuffer de 10 MiB y 6 MiB por
+      // cada stream, `spawnSync` da ENOBUFS y entrega stderr truncado a
+      // 4 259 840 B -- justo 10 MiB entre los dos. Limitar aqui cada stream por
+      // separado aceptaba entradas que la via sincrona rechazaba: el mismo
+      // sujeto, dos veredictos, que es exactamente lo que este modulo existe
+      // para impedir.
+      if (outSize + errSize > maxBuffer) {
+        return trip("maxBuffer", `la salida (stdout) de ${command} supero maxBuffer (${maxBuffer} bytes contando stdout+stderr, como spawnSync)`);
       }
       if (!ensureBudget(outSize + errSize)) {
         // El motivo es OTRO y se dice: culpar a `maxBuffer` cuando lo que se
@@ -474,8 +481,9 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs, ledger, bu
     child.stderr.on("data", (chunk) => {
       if (!acepta()) return;
       errSize += chunk.length;
-      if (errSize > maxBuffer) {
-        return trip("maxBuffer", `la salida (stderr) de ${command} supero maxBuffer (${maxBuffer} bytes)`);
+      // Combinado con stdout, igual que arriba y que `spawnSync`.
+      if (outSize + errSize > maxBuffer) {
+        return trip("maxBuffer", `la salida (stderr) de ${command} supero maxBuffer (${maxBuffer} bytes contando stdout+stderr, como spawnSync)`);
       }
       if (!ensureBudget(outSize + errSize)) {
         return trip("presupuesto", `la captura de ${command} se corto: presupuesto global de memoria agotado`);
