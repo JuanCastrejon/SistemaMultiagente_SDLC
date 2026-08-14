@@ -62,12 +62,19 @@ incremental salvó 5 hallazgos antes de morir.
       con solo un warning (`Detected unsettled top-level await`). Ahora hay un
       vigilante global que sale con **código 1** y mensaje. Esto valía más que el
       mutante que lo destapó.
-- [ ] **SERIO abierto — el pgid sigue sin identidad segura.** Bajar la gracia a
-      5 s reduce la ventana pero no la cierra, y Codex midió además que un hijo
-      legítimo que necesite 5,5 s de limpieza recibe `SIGKILL`. Cierre real:
-      cgroup en POSIX y Job Object en Windows. **Hasta entonces, 5 s es
-      mitigación de riesgo residual, no cierre** — y así está escrito en el
-      código.
+- [x] ~~SERIO — el pgid sin identidad segura.~~ **Cerrado para el caso que
+      importa.** Ya no se dispara contra un número: `killTreeForce` compara el
+      `starttime` del líder (campo 22 de `/proc/<pid>/stat`) con el anotado al
+      arrancarlo. Un pid reciclado trae otro `starttime`, así que **se detecta y
+      no se manda nada**. Verificado en WSL: dos encarnaciones distintas dan
+      `starttime` distinto, un pid inexistente devuelve `null` sin lanzar, y un
+      nombre con paréntesis y espacios no rompe el parseo (se corta desde el
+      último `)`, que es el error clásico al leer ese archivo).
+      **Ventana residual declarada, no oculta:** si el líder ya fue recogido no
+      hay `/proc` que leer, y ahí solo queda el sondeo con la señal 0 — que
+      confirma que el grupo existe, no que sea nuestro. Cerrar *eso* pide
+      contención del SO (cgroup, Job Object), que es un slice propio. En
+      Windows no aplica: no hay `/proc` ni grupos POSIX.
 
 ## Ronda 8 — los tres SERIOS, atacados
 
@@ -97,19 +104,29 @@ Registro completo de la ronda en `.codex-out/ronda-8/hallazgos.md`.
 
 También cerrado de los mutantes supervivientes: el de `+1 KiB` al límite
 combinado (caso nuevo 5c, corte exacto sin margen — mutación verificada) y el
-de `MAX_KILL_GRACE_MS` (arriba). **Quedan cinco MENORES sin atacar**, todos
-ejecutados y confirmados por Codex sobre la copia POSIX — ninguno bloquea:
+de `MAX_KILL_GRACE_MS` (arriba).
 
-- [ ] `.normalize("NFC")` en `decodeCapture` → 14/14 verde. Un principal de
-      firma en NFD podría juzgarse distinto en las dos vías.
-- [ ] `Math.min(4, …)` en vez de `Math.min(concurrency, …)` en `runPool` →
-      14/14 verde. El grado de paralelismo que pida un consumidor se ignora.
-- [ ] Orden por bytes: cambiar `Buffer.compare` por comparación UTF-16 → 14/14
-      verde. `Z`, `a`, `ñ` ordenan igual por ambos criterios.
-- [ ] Detalle de error del `ls-tree` async → 14/14 verde: el caso del ref
-      inexistente compara solo `ok` y `code`, no el diagnóstico.
-- [ ] `trip` con resolución retrasada 1 s → 14/14 verde: el caso 6 solo exige
-      <10 s, no la propiedad comentada de liberar el hueco del pool de inmediato.
+**Los cinco MENORES: cerrados.** Se atacaron todos antes de publicar 2.0.0, para
+no arrastrar deuda a una 2.0.1. Cada uno se verificó **volviendo a aplicar el
+mutante que Codex dejó vivo**: los cinco mueren ahora.
+
+- [x] ~~`.normalize("NFC")` en `decodeCapture`.~~ Caso nuevo con una cadena en
+      **NFD** real: se comprueba que async y sync entregan los mismos bytes y
+      que el texto llega **literal**. Normalizar aquí cambiaría el sujeto de una
+      firma.
+- [x] ~~`runPool` ignoraba la concurrencia pedida.~~ Se ejercita con **dos
+      valores distintos del default** (1 y 2) y se afirma el máximo simultáneo
+      exacto. Probar solo el default no probaba nada del parámetro.
+- [x] ~~Orden por bytes indistinguible de UTF-16.~~ `Z`, `a` y `ñ` ordenan
+      **igual** por ambos criterios. Se añadieron `！` (U+FF01) y `😀`
+      (U+1F600), que ordenan **al revés** — en UTF-16 el emoji usa surrogates
+      menores que FF01. El caso afirma además que el conjunto discrimina.
+- [x] ~~Detalle de error del `ls-tree` async.~~ Ahora se compara también el
+      diagnóstico, no solo `ok` y `code`. Es lo único que le dice a quien opera
+      *por qué* no se pudo leer la referencia.
+- [x] ~~`trip` con resolución retrasada.~~ El umbral se mide **contra la
+      gracia** (debe resolver en menos de la mitad), no contra un 10 s flojo que
+      dejaba pasar un retraso de 1 s.
 
 ## Espera decisión del mantenedor
 

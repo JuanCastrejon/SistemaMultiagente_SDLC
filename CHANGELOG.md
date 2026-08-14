@@ -6,7 +6,7 @@
 
 Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
 
-> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **tres** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
+> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **cuatro** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
 
 ### Fixed — firma humana (P5, ADR 0007)
 
@@ -71,6 +71,10 @@ Los defectos de esta versión salieron de **operar** el framework en el consumid
 - El `tree_hash` del sujeto de firma cambia de formato (object id de git por blob, en lugar de sha256 del contenido en disco). Las atestaciones emitidas con versiones anteriores no verifican; hay que volver a firmar. `computeTreeHash` (frescura de evidencia de calidad, P7) **no** cambia.
 - `install` deja de escribir superficies y stack de ejemplo. Un repo recién instalado sale en **error** en `doctor` hasta que se declaren las superficies reales. Los consumidores existentes no cambian: su configuración ya está en disco.
 - `.github/agents/surface-traceability.json` se genera desde `config.surfaces` y cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; un consumidor que lo consuma a mano debe revisarlo.
+
+- **El hash de árbol pasa a tener un tope de 64 MiB por llamada, y antes eran 256 MiB.** Un repositorio cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol con la media medida (~94 bytes por entrada), así que no alcanza a ningún repo normal — pero es un cambio de comportamiento real y silencioso para un monorepo grande, y por eso se declara.
+
+  El tope existe porque la vía asíncrona corre en un pool: el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*, y las dos vías tienen que declarar **el mismo número** o la auditoría y el gate pueden juzgar distinto el mismo sujeto. Quien necesite más lo sube con `SDLC_TREE_HASH_MAX_BUFFER_BYTES`, que se lee una sola vez y comparten ambas vías; subirlo **reduce la concurrencia, no el techo de memoria**.
 
 ## [1.8.2] — 2026-08-09
 

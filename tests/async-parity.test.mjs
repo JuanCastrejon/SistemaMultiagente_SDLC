@@ -14,7 +14,7 @@
 //     asi que la misma entrada podia fallar en un camino y pasar en el otro.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +28,7 @@ import {
   captureQueueDepth,
   captureReservedBytes,
   decodeCapture,
+  leerIdentidadDeProceso,
   spawnCapture
 } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
@@ -81,6 +82,29 @@ const vigilanteGlobal = setTimeout(() => {
   assert.ok(!async_.stdout.includes("�"), "ningun caracter de reemplazo");
 }
 
+{
+  // MENOR de la ronda 8: añadir `.normalize("NFC")` a `decodeCapture` dejaba la
+  // suite entera verde. Nada probaba que el texto llegara LITERAL. Importa
+  // porque un principal de firma o un mensaje de commit en forma DESCOMPUESTA
+  // (NFD) se normalizaria en la via async y no en la sincrona -- y entonces la
+  // auditoria y el gate juzgarian distinto al mismo firmante.
+  //
+  // "ñ" tiene dos formas: NFC (U+00F1, un code point) y NFD (n + U+0303). Se
+  // ven igual y NO son la misma cadena.
+  const nfd = "Nũñez"; // "Nuñnñez" descompuesto, a proposito
+  assert.notEqual(nfd, nfd.normalize("NFC"), "el caso de prueba tiene que estar de verdad en NFD");
+
+  const script = path.join(tempRoot, "nfd.mjs");
+  fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(nfd)});`, "utf8");
+
+  const sync = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  const async_ = await spawnCapture(process.execPath, [script]);
+
+  assert.equal(async_.stdout, sync.stdout, "async y sync tienen que entregar los MISMOS bytes");
+  assert.equal(async_.stdout, nfd, "y tienen que entregarlo LITERAL: normalizar aqui cambiaria el sujeto de una firma");
+  assert.notEqual(async_.stdout, nfd.normalize("NFC"), "si esto falla, alguien metio una normalizacion en el camino");
+}
+
 console.log("paridad utf-8 entre chunks: PASS");
 
 // --- 2. limite de tamaño: mismo criterio en las dos vias --------------------
@@ -131,6 +155,18 @@ console.log("paridad de limite de salida: PASS");
   assert.equal(syncMal.ok, false);
   assert.equal(asyncMal.ok, false);
   assert.equal(asyncMal.code, syncMal.code);
+
+  // El DIAGNOSTICO tambien tiene que coincidir, no solo el codigo. MENOR de la
+  // ronda 8: sustituir el detalle de la via async por un texto cualquiera
+  // dejaba la suite verde, porque este caso solo miraba `ok` y `code`. Y el
+  // detalle es lo unico que le dice a quien opera POR QUE no se pudo leer la
+  // referencia: si las dos vias explican distinto el mismo fallo, `doctor` y
+  // el phase-gate dan diagnosticos que no se pueden contrastar.
+  assert.ok(asyncMal.detail, "la via async tiene que traer un detalle, no solo un codigo");
+  assert.ok(
+    asyncMal.detail.includes("no-existe") || asyncMal.detail === syncMal.detail,
+    `el detalle async tiene que nombrar el ref o coincidir con el sincrono.\n  sync : ${JSON.stringify(syncMal.detail)}\n  async: ${JSON.stringify(asyncMal.detail)}`
+  );
 }
 
 console.log("paridad de hash de arbol: PASS");
@@ -173,6 +209,29 @@ console.log("paridad de hash de arbol: PASS");
 
   assert.ok(maximoSimultaneo <= AUDIT_CONCURRENCY, `nunca mas de ${AUDIT_CONCURRENCY} a la vez: hubo ${maximoSimultaneo}`);
   assert.ok(maximoSimultaneo > 1, "y de verdad concurre: con 1 no habria paralelismo");
+
+  // MENOR de la ronda 8: sustituir `Math.min(concurrency, …)` por
+  // `Math.min(4, …)` dejaba la suite verde. `runPool` es exportada y recibe la
+  // concurrencia como PARAMETRO, asi que un consumidor que pida otro grado de
+  // paralelismo se lo estaba comiendo en silencio. Se comprueban dos valores
+  // distintos del default, porque probar solo el default no prueba nada del
+  // parametro.
+  for (const pedida of [1, 2]) {
+    let enVueloN = 0;
+    let maxN = 0;
+    await runPool(
+      Array.from({ length: 8 }, (_, i) => i),
+      async () => {
+        enVueloN += 1;
+        maxN = Math.max(maxN, enVueloN);
+        await new Promise((r) => setTimeout(r, 8));
+        enVueloN -= 1;
+        return { ok: true };
+      },
+      pedida
+    );
+    assert.equal(maxN, pedida, `con concurrencia ${pedida} tienen que correr EXACTAMENTE ${pedida} a la vez, y hubo ${maxN}`);
+  }
 }
 
 console.log("pool: excepcion aislada, tope y orden: PASS");
@@ -296,13 +355,22 @@ console.log("corte exacto, sin margen: PASS");
     "utf8"
   );
 
+  // La gracia se elige LARGA (2 s) a proposito. El umbral de abajo se mide
+  // contra ella, no contra un numero absoluto: la propiedad es "resuelve SIN
+  // esperar al hijo", y con un umbral flojo de 10 s la ronda 8 metio una
+  // resolucion retrasada 1 s y la suite siguio verde. Ahora tiene que resolver
+  // en una fraccion de la gracia, que es lo que significa "de inmediato".
+  const gracia = 2000;
   const t0 = Date.now();
-  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 200 });
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: gracia });
   const transcurrido = Date.now() - t0;
 
   assert.equal(resultado.ok, false);
   assert.equal(resultado.overflow, true);
-  assert.ok(transcurrido < 10_000, `tiene que resolver sin esperar al hijo: tardo ${transcurrido} ms`);
+  assert.ok(
+    transcurrido < gracia / 2,
+    `tiene que resolver de INMEDIATO, no esperar al hijo ni a la escalada: tardo ${transcurrido} ms con una gracia de ${gracia} ms`
+  );
 }
 
 // En Windows este caso NO prueba lo que su nombre dice: alli SIGTERM no es una
@@ -344,7 +412,23 @@ console.log(
 
   // "Z" y "a" ordenan al reves por bytes que por locale ingles, y la eñe
   // desempata a la vez el caso no-ASCII.
-  const slices = ["a-slice", "Z-slice", "ñ-slice"];
+  //
+  // Y dos mas que la ronda 8 señalo como imprescindibles: con solo `Z`, `a` y
+  // `ñ`, cambiar `Buffer.compare` por comparacion normal de strings (UTF-16)
+  // dejaba la suite verde, porque esos tres ordenan IGUAL por ambos criterios.
+  // `！` (U+FF01, BMP alto) y `😀` (U+1F600, suplementario) ordenan AL REVES:
+  // en UTF-16 el emoji usa surrogates (D83D…) que son menores que FF01, y en
+  // bytes UTF-8 no. Verificado antes de escribirlo.
+  const slices = ["a-slice", "Z-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"];
+  {
+    const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
+    const porUtf16Tmp = [...slices].sort();
+    assert.notDeepEqual(
+      porBytesTmp,
+      porUtf16Tmp,
+      "el conjunto tiene que DISCRIMINAR: si ordena igual por bytes y por UTF-16, este caso no prueba nada"
+    );
+  }
   for (const slice of slices) {
     const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
     fs.mkdirSync(dir, { recursive: true });
@@ -377,7 +461,16 @@ console.log(
   // El orden esperado se escribe LITERAL, no derivado de otra ordenacion: si se
   // compara contra `localeCompare`, el propio test pasa a depender del locale
   // que intenta descartar.
-  assert.deepEqual(orden, ["Z-slice", "a-slice", "ñ-slice"], "orden por bytes UTF-8, escrito a mano");
+  assert.deepEqual(
+    orden,
+    ["Z-slice", "a-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"],
+    "orden por bytes UTF-8, escrito a mano"
+  );
+
+  // Y explicitamente: NO es el orden de UTF-16. Sin esto, la asercion de arriba
+  // se puede satisfacer con el comparador equivocado el dia que alguien cambie
+  // el conjunto de nombres.
+  assert.notDeepEqual([...slices].sort(), orden, "el orden de UTF-16 es OTRO: por eso el codigo compara bytes");
 }
 
 console.log("orden de hallazgos por bytes: PASS");
@@ -935,5 +1028,59 @@ console.log("fallo sincrono de spawn no fuga presupuesto: PASS");
 }
 
 console.log("override validado en import fresco: PASS");
+
+// --- 23. la identidad del grupo se comprueba antes de matarlo --------------
+// SERIO que estuvo abierto dos rondas. El pgid es el pid del lider, y un pid se
+// RECICLA: si el grupo murio limpio y el SO reasigno ese numero, un
+// `kill(-pgid, SIGKILL)` caeria sobre un grupo AJENO. `killTreeForce` compara
+// ahora el `starttime` del lider (campo 22 de /proc/<pid>/stat) con el anotado
+// al arrancarlo: un pid reciclado trae otro `starttime`, asi que se distingue.
+//
+// Aqui se prueba el PRIMITIVO de identidad. Que `killTreeForce` lo use esta
+// cubierto por los casos 13, 17 y 18, que siguen matando a sus nietos.
+if (process.platform !== "win32") {
+  const vivo = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const id = leerIdentidadDeProceso(vivo.pid);
+  assert.ok(id, "se tiene que poder leer la identidad de un proceso vivo");
+  assert.equal(id.pgid, vivo.pid, "con `detached` el lider es su propio grupo, asi que pgid === pid");
+  assert.match(id.starttime, /^\d+$/, "el starttime es el campo que identifica la ENCARNACION, no solo el pid");
+
+  // Un pid que no existe no puede reventar: devuelve null y quien llama decide.
+  assert.equal(leerIdentidadDeProceso(0x7ffffff), null, "un pid inexistente devuelve null, no lanza");
+
+  // DISCRIMINA: dos procesos distintos tienen starttime distinto. Es
+  // exactamente lo que separa "nuestro grupo" de "un pid reciclado".
+  const otro = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const id2 = leerIdentidadDeProceso(otro.pid);
+  assert.ok(id2, "y del segundo tambien");
+  assert.notEqual(id.starttime, id2.starttime, "dos encarnaciones distintas TIENEN que dar starttime distinto");
+
+  // El nombre del ejecutable va entre parentesis en /proc y puede contener
+  // parentesis y espacios. Partir por espacios desde el principio es el error
+  // clasico al leer este archivo; se corta desde el ULTIMO ')'.
+  const raro = path.join(tempRoot, "pro(ce) so.mjs");
+  fs.writeFileSync(raro, "setTimeout(() => {}, 3000);", "utf8");
+  const conParentesis = spawn(process.execPath, [raro], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const idRaro = leerIdentidadDeProceso(conParentesis.pid);
+  assert.ok(idRaro && Number.isFinite(idRaro.pgid), "un nombre con parentesis y espacios no puede romper el parseo");
+
+  for (const p of [vivo, otro, conParentesis]) {
+    try {
+      process.kill(-p.pid, "SIGKILL");
+    } catch {
+      /* limpieza best-effort */
+    }
+  }
+}
+
+console.log(
+  process.platform === "win32"
+    ? "identidad del grupo antes de matarlo: SKIP (Windows no tiene /proc ni grupos POSIX)"
+    : "identidad del grupo antes de matarlo: PASS"
+);
 
 clearTimeout(vigilanteGlobal);

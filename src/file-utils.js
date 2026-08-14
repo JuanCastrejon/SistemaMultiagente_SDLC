@@ -359,6 +359,38 @@ function killTreeForce(child) {
     }
     return;
   }
+  // IDENTIDAD ANTES DE MATAR. El pgid es el pid del lider, y un pid se recicla:
+  // si el grupo murio limpio y el SO reasigno ese numero, un `kill(-pgid)`
+  // caeria sobre un grupo AJENO. Es el riesgo que la revision adversarial marco
+  // como SERIO durante dos rondas.
+  //
+  // Se cierra comprobando que el lider sigue siendo EL NUESTRO, no solo que
+  // exista algo con ese numero: `/proc/<pid>/stat` trae el `starttime` (campo
+  // 22), que junto al pid identifica una encarnacion concreta. Un pid reciclado
+  // tiene otro `starttime`, asi que la comprobacion los distingue.
+  const identidad = leerIdentidadDeProceso(child.pid);
+  if (identidad && child.__sdlcStarttime && identidad.starttime !== child.__sdlcStarttime) {
+    // El pid existe pero YA NO ES el nuestro: se reciclo. No se manda nada.
+    return;
+  }
+  if (!identidad) {
+    // Sin `/proc` legible (lider ya recogido, o un POSIX sin procfs) no se puede
+    // probar identidad. Queda el sondeo con la señal 0, que al menos confirma
+    // que el grupo existe antes de disparar. NO prueba que sea nuestro: es la
+    // ventana residual, y esta declarada en docs/roadmap/pendientes-2.0.0.md.
+    // Cerrarla del todo pide contencion del SO (cgroup, Job Object), que es un
+    // slice propio y no un parche.
+    try {
+      process.kill(-child.pid, 0);
+    } catch {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ya se fue */
+      }
+      return;
+    }
+  }
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch {
@@ -367,6 +399,29 @@ function killTreeForce(child) {
     } catch {
       /* ya se fue */
     }
+  }
+}
+
+/**
+ * Lee pgid y `starttime` de `/proc/<pid>/stat`. Devuelve `null` si no se puede
+ * (Windows, un POSIX sin procfs, o un proceso que ya no existe).
+ *
+ * El nombre del ejecutable va entre parentesis y PUEDE CONTENER espacios y
+ * parentesis, asi que los campos se cuentan a partir del ULTIMO `)`. Partir por
+ * espacios desde el principio es el error clasico al leer este archivo.
+ */
+export function leerIdentidadDeProceso(pid) {
+  if (process.platform === "win32" || !pid) return null;
+  try {
+    const crudo = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const resto = crudo.slice(crudo.lastIndexOf(") ") + 2).split(" ");
+    // Tras el `)`: [0]=state, [1]=ppid, [2]=pgrp ... el campo 22 global es [19].
+    const pgid = Number(resto[2]);
+    const starttime = resto[19];
+    if (!Number.isFinite(pgid) || !starttime) return null;
+    return { pgid, starttime };
+  } catch {
+    return null;
   }
 }
 
@@ -446,6 +501,13 @@ function captureProcess(command, args, { cwd, maxBuffer, killGraceMs }) {
     if (detached) {
       installSignalCleanupOnce();
       activeChildren.add(child);
+      // Se anota la ENCARNACION del lider, no solo su pid: `starttime` + pid
+      // identifican un proceso concreto, y un pid reciclado trae otro
+      // `starttime`. Es lo que permite a `killTreeForce` no disparar sobre un
+      // grupo ajeno. Se lee AQUI, con el hijo recien nacido y seguro vivo --
+      // hacerlo en la escalada seria tarde: para entonces puede estar recogido.
+      const identidad = leerIdentidadDeProceso(child.pid);
+      if (identidad) child.__sdlcStarttime = identidad.starttime;
     }
     const out = [];
     const err = [];
