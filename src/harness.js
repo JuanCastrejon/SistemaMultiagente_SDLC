@@ -8,8 +8,8 @@ import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
-import { computeTreeHashAtRef } from "./evidence-writer.js";
-import { verifySignoff } from "./signoff.js";
+import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "./evidence-writer.js";
+import { gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -973,6 +973,78 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
 const ATTESTATION_UNVERIFIABLE = new Set(["tree-ref-unreadable", "signoff-commit-not-found"]);
 
 /**
+ * Verificacion asincrona de UNA atestacion, compartiendo cache con el resto de
+ * la pasada. La cache guarda PROMESAS, no valores: con el pool corriendo, dos
+ * tareas pueden pedir el mismo arbol a la vez, y guardar la promesa hace que la
+ * segunda espere a la primera en vez de lanzar otro `ls-tree` identico.
+ */
+async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha }, memo) {
+  if (memo.contract === undefined) memo.contract = loadQualityContract(target);
+  if (!memo.contract.ok) {
+    return { ok: false, code: "quality-contract-missing", detail: "sin quality-contract.yaml no hay superficies con las que recomputar el sujeto" };
+  }
+  if (memo.maintainers === undefined) {
+    try {
+      memo.maintainers = JSON.parse(readTextIfExists(path.join(target, ".sdlc", "config.json")) ?? "{}").governance?.maintainers ?? [];
+    } catch {
+      memo.maintainers = [];
+    }
+  }
+  if (memo.maintainers.length === 0) {
+    return { ok: false, code: "governance-maintainers-missing", detail: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida" };
+  }
+
+  const surfacePaths = (memo.contract.contract.surfaces ?? []).map((surface) => surface.path);
+  const treeAt = (ref) => {
+    if (!memo.trees.has(ref)) memo.trees.set(ref, computeTreeHashAtRefAsync(target, surfacePaths, ref));
+    return memo.trees.get(ref);
+  };
+
+  // `HEAD` se resuelve a OID UNA vez y se usa como clave de cache Y como
+  // `headRef`. Con la clave literal "HEAD", si otro proceso movia la rama a
+  // mitad de pasada la cache servia el arbol del HEAD viejo mientras
+  // `merge-base` leia el HEAD vivo: la entrada dejaba de ser un hecho inmutable,
+  // que es la unica cosa que esta cache tiene permitido guardar.
+  if (memo.headOid === undefined) {
+    memo.headOid = gitAsync(["rev-parse", "HEAD^{commit}"], target).then((result) => (result.ok ? result.stdout : null));
+  }
+  const headRef = (await memo.headOid) ?? "HEAD";
+
+  const approved = await treeAt(commitSha);
+  if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
+  const current = await treeAt(headRef);
+  return verifySignoffAsync({
+    target,
+    commitSha,
+    subject: { slice, phase, tree_hash: approved.hash },
+    maintainers: memo.maintainers,
+    headRef,
+    currentTreeHash: current.ok ? current.hash : null
+  });
+}
+
+// Cuantas atestaciones se verifican a la vez. Cuatro y no "todas": cada una
+// lanza varios procesos de git, y un `Promise.all` sin limite sobre un repo con
+// cincuenta firmas abriria cientos de procesos y pelearia por el agente de
+// GPG/SSH. Medido, cuatro basta para bajar el orden de magnitud.
+const AUDIT_CONCURRENCY = 4;
+
+async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+/**
  * Recorre la evidencia escrita y re-verifica TODA atestacion declarada.
  *
  * Existe porque una atestacion rota se descubria tarde: al llegar al gate humano
@@ -980,19 +1052,28 @@ const ATTESTATION_UNVERIFIABLE = new Set(["tree-ref-unreadable", "signoff-commit
  * formato del sujeto, "tarde" puede ser semanas despues. `doctor` y `upgrade`
  * la usan para que el descubrimiento ocurra cuando todavia es barato.
  *
+ * Es ASINCRONA porque el coste medido lo exigia: ~280 ms por atestacion en
+ * serie, o sea 14 s en un repo con cincuenta firmas, en CADA `doctor`. El
+ * trabajo es esperar a procesos de git, no calcular, asi que se solapa.
+ *
  * No intenta atribuir la causa: un `subject-mismatch` puede venir de una
  * actualizacion del framework o de un cambio posterior del contrato, y el sujeto
  * no guarda la lista historica de superficies con la que se emitio.
  */
-export function auditAttestations(target) {
+export async function auditAttestations(target) {
   const root = path.join(target, ".github", "agent-state", "evidence");
   const result = { checked: 0, findings: [] };
   if (!pathExists(root)) return result;
 
-  // Una sola cache para toda la pasada: contrato, maintainers y arboles por ref.
-  // Vive y muere con esta llamada, asi que no hay nada que invalidar.
-  const cache = { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
+  // Una sola cache para toda la pasada: contrato, maintainers, OID de HEAD y
+  // arboles por ref. Vive y muere con esta llamada, asi que no hay nada que
+  // invalidar.
+  const memo = { contract: undefined, maintainers: undefined, headOid: undefined, trees: new Map() };
 
+  // Primero se recoge QUE hay que verificar —lectura de YAML, barata y
+  // secuencial— y despues se verifica en paralelo. Mezclarlo daria un orden de
+  // hallazgos dependiente de quien termine antes.
+  const pendientes = [];
   for (const sliceEntry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!sliceEntry.isDirectory()) continue;
     const sliceDir = path.join(root, sliceEntry.name);
@@ -1002,30 +1083,38 @@ export function auditAttestations(target) {
       const read = readEvidenceFile(path.join(sliceDir, file));
       const commitSha = read.ok ? read.evidence?.human_gate_signoff?.attestation_commit ?? null : null;
       if (!commitSha) continue;
-
-      result.checked += 1;
-      const verification = verifyEvidenceAttestation(target, { slice: sliceEntry.name, phase, commitSha }, cache);
-      if (verification.ok) continue;
-
-      const unverifiable = ATTESTATION_UNVERIFIABLE.has(verification.code);
-      result.findings.push({
-        level: unverifiable ? "warning" : "error",
-        // El veredicto es lo que consumen `upgrade` y los gates; el `level` solo
-        // dice como pintarlo. Un `unverifiable` que se leyera por su nivel
-        // pasaria por aviso inocuo.
-        verdict: unverifiable ? "unverifiable" : "invalid",
-        code: `attestation-${verification.code}`,
-        slice: sliceEntry.name,
-        phase,
-        commit: commitSha,
-        detail: verification.detail ?? null,
-        // Re-firmar NO repara una firma buena que el clon no puede leer: ahi lo
-        // que falta es la historia, no la firma.
-        hint: unverifiable
-          ? `traer la historia que falta (\`git fetch --unshallow\` o el objeto ${String(commitSha).slice(0, 12)}) y repetir; si el commit no existe de verdad, \`sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record\``
-          : `sdlc signoff --slice ${sliceEntry.name} --phase ${phase} --create --record`
-      });
+      pendientes.push({ slice: sliceEntry.name, phase, commitSha });
     }
+  }
+
+  result.checked = pendientes.length;
+  if (pendientes.length === 0) return result;
+
+  const verificaciones = await runPool(pendientes, (item) => verifyEvidenceAttestationAsync(target, item, memo));
+
+  // Los hallazgos salen en el orden de LECTURA, no en el de terminacion: dos
+  // corridas sobre el mismo repo tienen que producir la misma salida.
+  for (const [index, verification] of verificaciones.entries()) {
+    if (verification.ok) continue;
+    const { slice, phase, commitSha } = pendientes[index];
+    const unverifiable = ATTESTATION_UNVERIFIABLE.has(verification.code);
+    result.findings.push({
+      level: unverifiable ? "warning" : "error",
+      // El veredicto es lo que consumen `upgrade` y los gates; el `level` solo
+      // dice como pintarlo. Un `unverifiable` que se leyera por su nivel pasaria
+      // por aviso inocuo.
+      verdict: unverifiable ? "unverifiable" : "invalid",
+      code: `attestation-${verification.code}`,
+      slice,
+      phase,
+      commit: commitSha,
+      detail: verification.detail ?? null,
+      // Re-firmar NO repara una firma buena que el clon no puede leer: ahi lo
+      // que falta es la historia, no la firma.
+      hint: unverifiable
+        ? `traer la historia que falta (\`git fetch --unshallow\` o el objeto ${String(commitSha).slice(0, 12)}) y repetir; si el commit no existe de verdad, \`sdlc signoff --slice ${slice} --phase ${phase} --create --record\``
+        : `sdlc signoff --slice ${slice} --phase ${phase} --create --record`
+    });
   }
   return result;
 }

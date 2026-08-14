@@ -22,7 +22,7 @@
 //    no este modulo.
 // ---------------------------------------------------------------------------
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { sha256Text, stableJson } from "./file-utils.js";
 
 export const ATTESTATION_TRAILER = "Signed-Attestation-Subject";
@@ -48,6 +48,26 @@ export function parseAttestationMessage(message) {
 function git(args, cwd) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
   return { ok: result.status === 0, stdout: (result.stdout ?? "").trim(), stderr: result.stderr ?? "" };
+}
+
+// Misma invocacion sin bloquear el hilo. Devuelve la MISMA forma que `git()`
+// para que el juicio no tenga que saber por cual de las dos vino.
+export function gitAsync(args, cwd) {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    // `error` cubre el caso de que git no exista o no se pueda lanzar: sin esto
+    // la promesa quedaria colgada para siempre y el pool entero con ella.
+    child.on("error", (error) => resolve({ ok: false, stdout: "", stderr: error.message }));
+    child.on("close", (code) => resolve({ ok: code === 0, stdout: stdout.trim(), stderr }));
+  });
 }
 
 // El SHA-256 de la cadena vacia. Es lo que devuelve un hash de arbol cuando
@@ -126,11 +146,22 @@ export function fingerprintMatches(declared, signingKey, primaryKey) {
  *                                    difiere del aprobado, la firma sigue siendo VALIDA pero se
  *                                    reporta `fresh: false`: quien llama decide si eso basta.
  */
-export function verifySignoff({ target, commitSha, subject, maintainers = [], headRef = "HEAD", currentTreeHash = null }) {
+// ---------------------------------------------------------------------------
+// La verificacion se parte en dos: RECOGER los hechos de git (habla con el
+// mundo) y JUZGARLOS (funcion pura). El motivo no es estetico: la auditoria
+// necesita verificar muchas atestaciones a la vez, y con `spawnSync` un pool de
+// concurrencia no concurre nada — bloquea el hilo. Con la recogida separada hay
+// dos versiones, sincrona y asincrona, que comparten EXACTAMENTE el mismo
+// juicio. Duplicar la logica de decision seria la forma segura de que las dos
+// se separen sin que nadie lo note.
+// ---------------------------------------------------------------------------
+
+const COMMIT_FACTS_FORMAT = "--format=%G?%x00%GS%x00%GF%x00%GP%x00%B";
+
+function precheckSignoff({ commitSha, subject }) {
   if (!commitSha) {
     return { ok: false, code: "signoff-commit-missing", detail: "no se declaro que commit firma la aprobacion" };
   }
-
   if (isEmptySubjectTree(subject?.tree_hash)) {
     return {
       ok: false,
@@ -141,16 +172,47 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
         "Revisar `surfaces` en quality-contract.yaml."
     };
   }
+  return null;
+}
 
-  // `merge-base --is-ancestor` PRIMERO: si pasa, ya probo que el objeto resuelve
-  // a un commit y que esta en la historia, asi que `cat-file -e` sobra. Solo
-  // cuando falla hace falta distinguir "no existe" de "existe pero no es
-  // antepasado". Ahorra un spawn —unos 60 ms— en todas las atestaciones validas,
-  // que son la mayoria y el caso caro de la auditoria.
+// `merge-base --is-ancestor` PRIMERO: si pasa, ya probo que el objeto resuelve
+// a un commit y que esta en la historia, asi que `cat-file -e` sobra. Solo
+// cuando falla hace falta distinguir "no existe" de "existe pero no es
+// antepasado". Ahorra un spawn —unos 60 ms— en toda atestacion valida.
+function collectSignoffFacts(target, commitSha, headRef) {
   const ancestry = git(["merge-base", "--is-ancestor", commitSha, headRef], target);
   if (!ancestry.ok) {
-    const exists = git(["cat-file", "-e", commitSha], target);
-    if (!exists.ok) {
+    return { ancestor: false, exists: git(["cat-file", "-e", commitSha], target).ok };
+  }
+  const verify = git(["verify-commit", commitSha], target);
+  return {
+    ancestor: true,
+    exists: true,
+    verifyOk: verify.ok,
+    verifyStderr: verify.stderr,
+    log: verify.ok ? git(["log", "-1", COMMIT_FACTS_FORMAT, commitSha], target).stdout : ""
+  };
+}
+
+async function collectSignoffFactsAsync(target, commitSha, headRef) {
+  const ancestry = await gitAsync(["merge-base", "--is-ancestor", commitSha, headRef], target);
+  if (!ancestry.ok) {
+    return { ancestor: false, exists: (await gitAsync(["cat-file", "-e", commitSha], target)).ok };
+  }
+  const verify = await gitAsync(["verify-commit", commitSha], target);
+  return {
+    ancestor: true,
+    exists: true,
+    verifyOk: verify.ok,
+    verifyStderr: verify.stderr,
+    log: verify.ok ? (await gitAsync(["log", "-1", COMMIT_FACTS_FORMAT, commitSha], target)).stdout : ""
+  };
+}
+
+/** Funcion PURA: no habla con git. Todo lo que decide sale de `facts`. */
+export function judgeSignoff({ facts, commitSha, subject, maintainers = [], headRef = "HEAD", currentTreeHash = null }) {
+  if (!facts.ancestor) {
+    if (!facts.exists) {
       return { ok: false, code: "signoff-commit-not-found", detail: `no existe el commit ${commitSha}` };
     }
     return {
@@ -160,18 +222,15 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     };
   }
 
-  const verify = git(["verify-commit", commitSha], target);
-  if (!verify.ok) {
-    return { ok: false, code: "signoff-signature-invalid", detail: verify.stderr || "git verify-commit rechazo la firma" };
+  if (!facts.verifyOk) {
+    return { ok: false, code: "signoff-signature-invalid", detail: facts.verifyStderr || "git verify-commit rechazo la firma" };
   }
 
-  // Los tres datos que hacen falta del commit —validez, firmante y mensaje— se
-  // piden en UNA sola invocacion. Eran tres, y cada proceso de git cuesta unos
-  // 60 ms en Windows: medido, la auditoria completa gastaba ~485 ms por
-  // atestacion, de los que estos tres spawns eran una tercera parte. El
-  // separador NUL no puede aparecer en ninguno de los campos, y `%B` va ultimo
-  // porque es el unico multilinea.
-  const commitFacts = git(["log", "-1", "--format=%G?%x00%GS%x00%GF%x00%GP%x00%B", commitSha], target).stdout.split("\0");
+  // Validez, firmante, huella de la clave, huella primaria y mensaje, en UNA
+  // sola invocacion. Eran tres llamadas separadas, y cada proceso de git cuesta
+  // unos 60 ms en Windows. El separador NUL no puede aparecer en ninguno de los
+  // campos, y `%B` va ultimo porque es el unico multilinea.
+  const commitFacts = String(facts.log ?? "").split("\0");
   const validity = (commitFacts[0] ?? "").trim();
   if (validity !== "G" && validity !== "U") {
     return { ok: false, code: "signoff-signature-not-good", detail: `git reporta validez '${validity}', no 'G' ni 'U'` };
@@ -185,11 +244,8 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
   // la clave. El nombre/principal solo se acepta cuando no hay huella declarada,
   // y en ese caso la union queda marcada como debil para que se vea.
   const byFingerprint = maintainers.find((maintainer) => fingerprintMatches(maintainer.fingerprint, signingKey, primaryKey));
-  const byPrincipal = maintainers.find(
-    (maintainer) => !maintainer.fingerprint && signerMatches(maintainer.signer, signer)
-  );
-  const allowed = Boolean(byFingerprint || byPrincipal);
-  if (!allowed) {
+  const byPrincipal = maintainers.find((maintainer) => !maintainer.fingerprint && signerMatches(maintainer.signer, signer));
+  if (!byFingerprint && !byPrincipal) {
     const declared = maintainers.map((maintainer) => `'${maintainer.signer}'`).join(", ") || "(lista vacia)";
     return {
       ok: false,
@@ -218,14 +274,12 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
 
   // Frescura: eje SEPARADO de la validez. La firma aprobo un arbol concreto y
   // eso no caduca; que el arbol se haya movido despues es otra pregunta, y la
-  // responde quien llama segun la fase. Confundir las dos cosas es lo que hacia
-  // que una atestacion dejara de verificarse al commit siguiente.
+  // responde quien llama segun la fase.
   const fresh = currentTreeHash === null ? null : currentTreeHash === subject.tree_hash;
 
   // `identityBinding` dice CON QUE se autorizo: `fingerprint` ata a una clave;
   // `principal` ata a un nombre que la propia clave declara, y con GPG eso lo
-  // puede fabricar cualquiera. Quien lea el resultado tiene que poder saber cual
-  // de las dos garantias tiene delante.
+  // puede fabricar cualquiera.
   return {
     ok: true,
     code: null,
@@ -237,6 +291,21 @@ export function verifySignoff({ target, commitSha, subject, maintainers = [], he
     fresh,
     currentTreeHash
   };
+}
+
+export function verifySignoff({ target, commitSha, subject, maintainers = [], headRef = "HEAD", currentTreeHash = null }) {
+  const pre = precheckSignoff({ commitSha, subject });
+  if (pre) return pre;
+  const facts = collectSignoffFacts(target, commitSha, headRef);
+  return judgeSignoff({ facts, commitSha, subject, maintainers, headRef, currentTreeHash });
+}
+
+/** Misma verificacion sin bloquear el hilo: es la que usa el pool de la auditoria. */
+export async function verifySignoffAsync({ target, commitSha, subject, maintainers = [], headRef = "HEAD", currentTreeHash = null }) {
+  const pre = precheckSignoff({ commitSha, subject });
+  if (pre) return pre;
+  const facts = await collectSignoffFactsAsync(target, commitSha, headRef);
+  return judgeSignoff({ facts, commitSha, subject, maintainers, headRef, currentTreeHash });
 }
 
 /**

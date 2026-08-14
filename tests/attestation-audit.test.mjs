@@ -110,7 +110,7 @@ if (ready) {
   // Un commit ausente puede ser un clon superficial. Se reporta, pero como
   // warning: tratarlo como firma invalida daria falsos positivos en cualquier
   // CI con fetch-depth 1.
-  const ausente = auditAttestations(target);
+  const ausente = await auditAttestations(target);
   assert.equal(ausente.checked, 1);
   assert.equal(ausente.findings.length, 1);
   // El codigo exacto depende de donde se tropiece primero con el commit ausente
@@ -130,7 +130,7 @@ if (ready) {
   doc.human_gate_signoff.attestation_commit = otroCommit;
   fs.writeFileSync(evidencePath, YAML.stringify(doc), "utf8");
 
-  const invalida = auditAttestations(target);
+  const invalida = await auditAttestations(target);
   assert.equal(invalida.findings.length, 1);
   assert.equal(invalida.findings[0].level, "error", "un commit real sin firma valida SI es error");
   assert.match(invalida.findings[0].code, /^attestation-signoff-/);
@@ -163,7 +163,7 @@ if (ready) {
   assert.equal(tras.history.length, 1);
   assert.equal(tras.history[0].human_gate_signoff.attestation_commit, otroCommit);
 
-  const limpio = auditAttestations(target);
+  const limpio = await auditAttestations(target);
   assert.deepEqual(limpio.findings, [], "tras la reparacion no queda ningun hallazgo");
   assert.equal(limpio.checked, 1);
 

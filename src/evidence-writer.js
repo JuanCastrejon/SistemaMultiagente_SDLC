@@ -11,7 +11,7 @@
 // La frescura de la evidencia se decide comparando arboles, nunca relojes.
 // ---------------------------------------------------------------------------
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -144,10 +144,46 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
       detail: (listed.stderr?.toString("utf8") ?? "").trim() || `git ls-tree fallo sobre '${ref}'`
     };
   }
+  return hashLsTree(listed.stdout.toString("utf8"), surfacePaths);
+}
 
+/**
+ * Igual, sin bloquear el hilo: la usa el pool de la auditoria. Comparte con la
+ * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.
+ */
+export function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
+  return new Promise((resolve) => {
+    const child = spawn("git", ["ls-tree", "-r", "-z", ref], { cwd: target });
+    const chunks = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => resolve({ ok: false, hash: null, files: 0, code: "tree-ref-unreadable", detail: error.message }));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        resolve({
+          ok: false,
+          hash: null,
+          files: 0,
+          code: "tree-ref-unreadable",
+          detail: stderr.trim() || `git ls-tree fallo sobre '${ref}'`
+        });
+        return;
+      }
+      resolve(hashLsTree(Buffer.concat(chunks).toString("utf8"), surfacePaths));
+    });
+  });
+}
+
+// Parte PURA del hash de arbol: recibe la salida de `ls-tree -r -z` y decide.
+// Vive separada para que las dos variantes de IO no puedan divergir en el
+// criterio, que es lo unico que importa aqui.
+function hashLsTree(stdout, surfacePaths) {
   const prefixes = [...new Set((surfacePaths ?? []).map(normalizeSurfacePrefix))].sort();
   const parts = [];
-  for (const entry of listed.stdout.toString("utf8").split("\0")) {
+  for (const entry of String(stdout ?? "").split("\0")) {
     if (!entry) continue;
     // `<mode> SP <type> SP <object> TAB <path>`
     const tab = entry.indexOf("\t");

@@ -681,7 +681,7 @@ function collectDoctorEnhancements(target, config) {
   return findings;
 }
 
-function commandDoctor(options) {
+async function commandDoctor(options) {
   const target = requireTarget(options);
   const findings = [];
   let config = null;
@@ -724,7 +724,7 @@ function commandDoctor(options) {
   // al gate. Una firma que dejo de valer —por una actualizacion que cambio el
   // formato del sujeto, o por un cambio posterior del contrato— se descubria
   // semanas despues, con el trabajo ya hecho.
-  findings.push(...auditAttestations(target).findings);
+  findings.push(...(await auditAttestations(target)).findings);
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
   findings.push(...checkRetentionPolicy(target));
@@ -1118,7 +1118,7 @@ function commandDiff(options) {
   };
 }
 
-function commandUpgrade(options) {
+async function commandUpgrade(options) {
   const target = requireTarget(options);
   const toVersion = options["to-version"] ?? FRAMEWORK_VERSION;
   const dryRun = Boolean(options["dry-run"]);
@@ -1264,7 +1264,7 @@ function commandUpgrade(options) {
   // Pero el upgrade no puede terminar en verde dejando atestaciones muertas: el
   // consumidor se enteraria al llegar al siguiente gate humano, semanas
   // despues. Sale `action-required` con la lista y el comando de reparacion.
-  const attestations = auditAttestations(target);
+  const attestations = await auditAttestations(target);
   // Un `unverifiable` cuenta igual que un `invalid` para decidir si el upgrade
   // puede terminar en verde. Filtrar solo por `level === "error"` dejaba pasar
   // como exito un repo cuyas atestaciones nadie habia podido comprobar, que es
