@@ -1,7 +1,7 @@
 # ADR 0008: Modelo de riesgos de autorización — la firma humana deja de colgar del tier
 
-- Estado: Propuesta
-- Fecha: 2026-08-13
+- Estado: Aceptada — **entra en 2.0.0**, no en una ruptura posterior
+- Fecha: 2026-08-13 (propuesta) / 2026-08-14 (aceptada y asignada a 2.0.0)
 - Extiende: ADR 0007 (quality-gauntlet-f0-f17), decisión P5
 - Origen: contraste adversarial entre dos agentes (Claude Opus 5 y Codex GPT-5.6) sobre los hallazgos de operar el framework en `manga-translator-mvp`
 - Consumidor de referencia: `manga-translator-mvp`
@@ -176,8 +176,17 @@ gate humano.
 
 **Es ruptura, y mayor que la de 2.0.0.** Una superficie sin clasificar pasa a
 exigir firma, así que todo consumidor existente queda bloqueado en su siguiente
-gate humano hasta clasificar sus superficies. El número de versión se fija al
-implementar; por magnitud, no cabe en una minor.
+gate humano hasta clasificar sus superficies.
+
+**Esa ruptura se absorbe dentro de 2.0.0**, que aún no está publicada. La
+alternativa —dejarla para una 3.0.0— obligaría al consumidor a atravesar **dos
+majors seguidas**, y la segunda tocaría el mismo mecanismo que la primera acaba
+de mover: sujeto de atestación, `signoff` y `phase-gate`. Migrar dos veces el
+mismo control, con dos notas de migración que se contradicen en el mismo
+trimestre, cuesta más que clasificar superficies una vez. Una versión sin
+publicar puede crecer en alcance; una publicada no. Consecuencia directa y
+asumida: **2.0.0 no se publica hasta que D1–D7 estén implementados**, y su lista
+de rupturas deja de ser cuatro.
 
 **Coste para equipos pequeños.** Un repo sin riesgos declarados como críticos no
 paga nada: `declarative` con etiqueta visible. El coste aparece exactamente donde
@@ -217,12 +226,14 @@ conservan como regresión de la ruta v2.
 | Obligación anclada solo a `money_path`/`regulated_data` | Deja fuera seguridad y máquina de estados, dos de los riesgos escondidos hoy dentro de `core`. |
 | Unión de tier + riesgos declarados | Conserva cobertura pero no arregla la confusión: los tres campos están bajo el mismo control y se apagan en el mismo diff. |
 | Confiar en el guard de frontera para el downgrade | Decide por ruta; no compara semántica ni prueba revisión humana. |
+| Diferir el ADR entero a una 3.0.0 | Fue la posición previa y se revierte. Obliga al consumidor a dos majors seguidas sobre el **mismo** mecanismo —sujeto, `signoff`, `phase-gate`— con dos migraciones que se pisan. 2.0.0 sigue sin publicar: es la última ventana en la que esta ruptura sale gratis en número de versión. |
 | Partir el diseño entre 2.0.0 y una minor posterior | Clasificación sin comparación contra BASE permite desclasificar en el mismo commit; comparación sin contrato en el sujeto permite mutar la política sin invalidar evidencia; sujeto anclado sin las otras dos certifica una política que aún puede auto-debilitarse. |
 
 ## Estado de la implementación
 
-**Nada de este ADR está implementado en 2.0.0, y conviene no confundirlo con lo
-que sí lo está.** 2.0.0 lleva el sujeto anclado al commit
+**Nada de este ADR está implementado TODAVÍA, y conviene no confundirlo con lo
+que sí lo está.** Desde 2026-08-14 esto no es roadmap: es **deuda bloqueante de
+2.0.0**. La rama de 2.0.0 lleva hoy el sujeto anclado al commit
 (`{ slice, phase, tree_hash }`), la verificación de la atestación declarada en
 `phase-gate`, y la auditoría de atestaciones en `doctor`/`upgrade`. Eso es la
 ruta v1: no computa `contract_sha256` (D3), no distingue sujetos v1 de v2 (D6),
@@ -247,9 +258,6 @@ Lo que falta para poder implementar sin reabrir el diseño:
 
 ## Lo que este ADR NO decide
 
-- **El número de versión de este modelo.** 2.0.0 es la rama actual, que no lo
-  implementa; este ADR describe la siguiente ruptura y su número se fija al
-  implementarla.
 - Si el fail-closed retroactivo admite un período de gracia para consumidores ya
   instalados, o bloquea desde el primer gate. La recomendación del contraste fue
   bloquear; el coste de migración lo decide el mantenedor al implementar.

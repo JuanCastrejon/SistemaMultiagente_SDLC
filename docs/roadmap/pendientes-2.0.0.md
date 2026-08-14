@@ -166,18 +166,25 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
       la revisión humana, el merge, y decidir si se publica a npm. El gate local
       (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
       `-Strict`.
-      Tras seis rondas adversariales (5 a 10) no queda ningún BLOQUEANTE
-      abierto. Sí quedan un SERIO declarado (pgid) y cinco MENORES, todos
-      anotados abajo y ninguno bloqueante.
+      Tras seis rondas adversariales (5 a 10) no quedaba ningún BLOQUEANTE
+      **de código**. Pero desde el 2026-08-14 **sí hay un bloqueante de
+      alcance**: el ADR 0008 entra en esta versión, y no está implementado. No
+      se publica 2.0.0 hasta que D1–D7 estén dentro.
 - [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
       mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
       aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
       primer push. Hoy nada en el repo lo garantiza: en Windows esos casos se
       saltan con `SKIP` y el verde es engañoso.
-- [ ] **Número de versión del modelo de riesgos** (ADR 0008). No cabe en una
-      minor: «superficie sin clasificar ⇒ firma obligatoria» bloquea a todo
-      consumidor existente en su siguiente gate humano. Probablemente 3.0.0; se
-      fija al implementarlo.
+- [x] ~~**Número de versión del modelo de riesgos** (ADR 0008).~~ **Decidido el
+      2026-08-14: entra en 2.0.0.** Se descarta la 3.0.0 que se venía asumiendo.
+      Razón: 2.0.0 sigue sin publicar, y diferirlo obligaría al consumidor a dos
+      majors seguidas sobre el **mismo** mecanismo (sujeto de atestación,
+      `signoff`, `phase-gate`), con dos migraciones que se pisan. Consecuencia
+      que hay que mirar de frente: **la publicación de 2.0.0 pasa a estar
+      bloqueada** por la sección de abajo, y el CHANGELOG deja de tener cuatro
+      rupturas. Las rupturas nuevas se declaran **al implementarlas**, no ahora
+      — declarar una ruptura que el código no ejerce es el defecto que esta
+      misma rama ya cometió dos veces.
 - [ ] **Periodo de gracia del fail-closed retroactivo.** El contraste
       adversarial recomendó bloquear desde el primer gate. El coste de
       migración de los consumidores ya instalados es decisión de producto.
@@ -187,11 +194,19 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
       insatisfacible con un solo maintainer. ¿Addendum o revisión propia del
       ADR?
 
-## Implementar el ADR 0008 — modelo de riesgos de autorización
+## Implementar el ADR 0008 — modelo de riesgos de autorización · **BLOQUEA 2.0.0**
 
 Diseño cerrado y escrito en `docs/adr/0008-modelo-de-riesgos-de-autorizacion.md`.
-**Nada de esto está implementado en 2.0.0.** Sus siete decisiones no se pueden
+**Nada de esto está implementado todavía**, y desde el 2026-08-14 esto ya no es
+roadmap posterior: es el alcance de 2.0.0. Sus siete decisiones no se pueden
 partir sin dejar hueco explotable, así que van juntas.
+
+Antes de escribir código hay que cerrar los siete huecos de diseño que el propio
+ADR lista en «Estado de la implementación» (`required()` canónico, match
+BASE/HEAD, definición de BASE/HEAD y códigos de salida, precedencia con
+`phase.human_gate`, alcance de `humanGate.policy`, migración de evidencia v1 y
+matriz de enforcement por comando). Implementar con esos huecos abiertos es
+reabrir el diseño a mitad de camino.
 
 - [ ] `required(surface, contract)` como función pura y canónica, con tipos
       válidos, valores desconocidos, duplicados y superficie vacía.
