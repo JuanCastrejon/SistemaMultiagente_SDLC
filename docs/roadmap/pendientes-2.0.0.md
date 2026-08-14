@@ -1,6 +1,6 @@
 # Pendientes tras 2.0.0
 
-Estado a 2026-08-13, rama `fix/hallazgos-consumidor-mvp` (26 commits sobre `develop`).
+Estado a 2026-08-14, rama `fix/hallazgos-consumidor-mvp` (28 commits sobre `develop`).
 `npm test` y `npm run validate` en verde. **Sin push, sin PR y sin publicar.**
 
 Cada punto trae por dónde empezar. Lo que espera una decisión del mantenedor va
@@ -63,11 +63,25 @@ partir sin dejar hueco explotable, así que van juntas.
       + `split` asignan memoria extra que nadie contabiliza, y la reserva se
       libera antes de que `hashLsTree` termine. El pico real de RSS sigue sin
       acotar.
-- [ ] **El test POSIX del watchdog no demuestra el SIGKILL.** Solo comprueba
-      que la promesa retorna rápido, cosa que también hacía la versión donde el
-      temporizador se cancelaba. Debería escribir el PID, esperar
-      `killGraceMs + margen` y comprobar que el proceso ya no existe. No se hizo
-      porque en Windows el caso no se puede ejercitar.
+- [x] ~~El test POSIX del watchdog no demuestra el SIGKILL.~~ Resuelto en la
+      ronda 5 (`fix(async): dos bloqueantes...`): el caso nuevo de
+      `tests/async-parity.test.mjs` escribe el PID de un nieto que ignora
+      SIGTERM, espera `killGraceMs + margen` y comprueba que ya no existe. Solo
+      cubre el escenario del nieto (POSIX); el caso viejo (test 6, lider suelto)
+      sigue sin ejercitar la escalada en Windows por la misma razón de siempre.
+- [ ] **Cuatro hallazgos SERIOS/MENORES de la ronda 5, dejados fuera del commit
+      a propósito por no ser bloqueantes** (Codex + contraste propio,
+      `src/file-utils.js`):
+      - `taskkill` se lanza sin listener de `error`: si no está en PATH, el
+        ENOENT es asíncrono, el `try/catch` no lo atrapa, y tumba el proceso
+        Node entero en vez de fallar limpio.
+      - `detached: true` cambia la semántica de Ctrl-C: el terminal señala al
+        grupo original de Node, no al hijo detached: puede quedar huérfano.
+      - El presupuesto cuenta bloques de crecimiento (≥8 MiB) reservados por
+        adelantado, no bytes realmente retenidos: puede cortar por
+        "presupuesto" con margen real de sobra.
+      - `createCaptureBudget(-1 | NaN)` dejan la cola bloqueada para siempre en
+        vez de rechazar el total inválido en la creación.
 - [ ] **`run()` cambió de contrato** (devolvía objeto o Promise según comando;
       ahora siempre Promise). El binario está cubierto por `await`, pero es
       cambio de API que merece nota de migración si alguien lo consume.
