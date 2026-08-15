@@ -91,6 +91,28 @@ jobs:
       - name: Gobernanza
         run: ${{ steps.pm.outputs.exec }} sdlc governance-check --target . --json
 
+      # El eje de AUTORIZACION (ADR 0008), adjudicado donde el evaluado no
+      # manda.
+      #
+      # Hasta 2.0.0 este workflow corria `governance-check` y `quality-gate`, y
+      # ninguno de los dos mira el gate humano ni las atestaciones: el modelo
+      # entero quedaba adjudicado unicamente en la maquina del agente — la misma
+      # que la cabecera de este archivo declara *advisory*. Sin este paso, el ADR
+      # 0008 describe un acuerdo de caballeros y no un control: no hay evasion
+      # que inventar, basta no correr el comando.
+      #
+      # `phase-gate` es el UNICO que adjudica downgrades (D5). Se le da
+      # `--exit-code` porque sin el es informativo, que es justo lo contrario de
+      # lo que hace falta aqui.
+      - name: Autorizacion (gate humano y downgrades)
+        run: >
+          ${{ steps.pm.outputs.exec }} sdlc phase-gate
+          --target .
+          --slice "${{ steps.state.outputs.slice }}"
+          --phase "${{ steps.state.outputs.phase }}"
+          --exit-code
+          --json
+
       # Aqui esta la diferencia con el harness local: se vuelve a medir.
       - name: Recomputar calidad
         run: >

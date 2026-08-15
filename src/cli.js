@@ -47,6 +47,7 @@ import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudi
 import { commandCoverageDiff } from "./coverage-diff.js";
 import { computeTreeHashAtRef, evidencePath as evidencePathFor, recordAttestation } from "./evidence-writer.js";
 import { buildSubject, createAttestationCommit, verifySignoff, worktreeDirtyForSurfaces } from "./signoff.js";
+import { auditarAutorizacion } from "./authz-git.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
 import { verifyChangeClosure } from "./change-closure.js";
@@ -725,6 +726,15 @@ async function commandDoctor(options) {
   // formato del sujeto, o por un cambio posterior del contrato— se descubria
   // semanas despues, con el trabajo ya hecho.
   findings.push(...(await auditAttestations(target)).findings);
+  // El eje de autorizacion (ADR 0008, G7). `doctor` REPORTA; quien adjudica es
+  // `phase-gate` (D5). La severidad no es la misma en los dos: aqui una base
+  // irresoluble es AVISO —un clon nuevo sin la rama remota es normal en la
+  // maquina de quien desarrolla, y `doctor` no esta concediendo nada— y en el
+  // gate bloquea.
+  {
+    const contratoCalidad = loadQualityContract(target);
+    if (contratoCalidad.ok) findings.push(...auditarAutorizacion(target, contratoCalidad.contract));
+  }
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
   findings.push(...checkRetentionPolicy(target));
@@ -1299,7 +1309,15 @@ async function commandUpgrade(options) {
   const pendientes = attestations.findings.filter((finding) => finding.verdict !== undefined);
   const invalidas = pendientes.filter((finding) => finding.verdict === "invalid").length;
   const noVerificables = pendientes.filter((finding) => finding.verdict === "unverifiable").length;
-  const bloqueado = pendientes.length > 0;
+  // El eje de autorizacion (G7): en `upgrade` los errores son ACCION REQUERIDA,
+  // no aviso. Actualizar y quedarse con superficies sin clasificar deja al
+  // consumidor con un bloqueo esperandolo en su siguiente gate humano, y
+  // enterarse ahi —con el trabajo hecho— es exactamente lo que la auditoria de
+  // atestaciones de 2.0.0 vino a evitar para las firmas.
+  const contratoTrasUpgrade = loadQualityContract(target);
+  const autorizacion = contratoTrasUpgrade.ok ? auditarAutorizacion(target, contratoTrasUpgrade.contract) : [];
+  const autorizacionBloqueante = autorizacion.filter((finding) => finding.level === "error");
+  const bloqueado = pendientes.length > 0 || autorizacionBloqueante.length > 0;
   return {
     exitCode: bloqueado ? EXIT_ACTION_REQUIRED : EXIT_OK,
     payload: {
@@ -1308,6 +1326,7 @@ async function commandUpgrade(options) {
       frameworkVersion: nextManifest.frameworkVersion,
       accepted: overrideEntries.map((entry) => entry.path),
       ...(attestations.checked > 0 ? { attestations } : {}),
+      ...(autorizacion.length > 0 ? { authorization: autorizacion } : {}),
       ...(bloqueado
         ? {
             // Se dice lo que de verdad paso: la migracion se aplico y lo que

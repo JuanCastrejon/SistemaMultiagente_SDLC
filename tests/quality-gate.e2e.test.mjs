@@ -260,7 +260,21 @@ execFileSync("node", [cli, "install", "--target", installed, "--mode", "greenfie
 {
   const configPath = path.join(installed, ".sdlc", "config.json");
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  config.surfaces = [{ id: "dominio", path: "packages/dominio", owner: "api-agent", tier: "core" }];
+  // Clasificada, que es lo que hace un consumidor real desde 2.0.0: sin los
+  // cuatro riesgos, `upgrade` termina en `action-required` por el eje de
+  // autorizacion (ADR 0008) y este caso mide gates de CALIDAD.
+  config.surfaces = [
+    {
+      id: "dominio",
+      path: "packages/dominio",
+      owner: "api-agent",
+      tier: "core",
+      moneyPath: false,
+      regulatedData: false,
+      securityCritical: false,
+      stateMachineCritical: false
+    }
+  ];
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
   execFileSync("node", [cli, "upgrade", "--target", installed, "--accept-managed", ".sdlc/config.json", "--json"], {
     cwd: repoRoot,

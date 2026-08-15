@@ -50,9 +50,13 @@ assert.match(driftSinSuperficies.stdout + driftSinSuperficies.stderr, /config-su
 // Declaradas las superficies reales (lo que hace un consumidor), no hay drift.
 const configPath = path.join(target, ".sdlc", "config.json");
 const installedConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+// Clasificadas, como las declara un consumidor real desde 2.0.0: sin los cuatro
+// riesgos, `upgrade` termina en `action-required` por el eje de autorizacion y
+// este caso mide validators, no autorizacion.
+const sinRiesgos = { moneyPath: false, regulatedData: false, securityCritical: false, stateMachineCritical: false };
 installedConfig.surfaces = [
-  { id: "backend", path: "apps/api", owner: "api-agent", tier: "core" },
-  { id: "web", path: "apps/web", owner: "web-agent", tier: "standard", hasUi: true }
+  { id: "backend", path: "apps/api", owner: "api-agent", tier: "core", ...sinRiesgos },
+  { id: "web", path: "apps/web", owner: "web-agent", tier: "standard", hasUi: true, ...sinRiesgos }
 ];
 fs.writeFileSync(configPath, JSON.stringify(installedConfig, null, 2), "utf8");
 execFileSync("node", [cli, "upgrade", "--target", target, "--accept-managed", ".sdlc/config.json", "--json"], {

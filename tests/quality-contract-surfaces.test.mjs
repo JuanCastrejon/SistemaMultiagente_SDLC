@@ -24,6 +24,19 @@ function run(args) {
   return execFileSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8" });
 }
 
+// Igual, pero tolerando un exit distinto de 0. Desde el ADR 0008, `upgrade`
+// termina en `action-required` cuando el contrato obliga a firmar, y eso no es
+// un fallo del comando: es su veredicto. `execFileSync` tira igual, asi que hay
+// que leer el stdout del error.
+function runTolerante(args) {
+  try {
+    return execFileSync("node", [cli, ...args], { cwd: repoRoot, encoding: "utf8" });
+  } catch (error) {
+    if (typeof error.stdout === "string" && error.stdout.trim()) return error.stdout;
+    throw error;
+  }
+}
+
 // --- 1. install de fabrica: el contrato refleja el default de config -------
 const greenfield = path.join(tempRoot, "greenfield");
 fs.mkdirSync(greenfield, { recursive: true });
@@ -63,8 +76,17 @@ config.surfaces = [
 ];
 fs.writeFileSync(path.join(greenfield, ".sdlc", "config.json"), JSON.stringify(config, null, 2), "utf8");
 
-const upgraded = JSON.parse(run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]));
-assert.equal(upgraded.status, "ok", JSON.stringify(upgraded));
+const upgraded = JSON.parse(runTolerante(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]));
+// Esta superficie declara `moneyPath: true`, asi que desde el ADR 0008 OBLIGA a
+// firma: `upgrade` termina en `action-required` y lo dice. Que un piloto de
+// pagos salga obligado no es un fallo del upgrade — es la propiedad que se
+// buscaba, y el aviso llega ANTES del gate humano en vez de cuando el trabajo ya
+// esta hecho.
+assert.equal(upgraded.status, "action-required", JSON.stringify(upgraded));
+assert.ok(
+  (upgraded.authorization ?? []).some((f) => f.code === "authz-surfaces-unclassified" && f.level === "error"),
+  JSON.stringify(upgraded.authorization)
+);
 
 const regenerated = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"));
 assert.equal(regenerated.surfaces.length, 1);
@@ -89,7 +111,7 @@ assert.equal(checkSurfaces(greenfield, loaded.contract).length, 0);
 // --- 3. sin superficies declaradas: `[]` explicito, no un YAML invalido ----
 config.surfaces = [];
 fs.writeFileSync(path.join(greenfield, ".sdlc", "config.json"), JSON.stringify(config, null, 2), "utf8");
-run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+runTolerante(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
 const empty = YAML.parse(fs.readFileSync(path.join(greenfield, "quality-contract.yaml"), "utf8"));
 assert.deepEqual(empty.surfaces, []);
 
@@ -110,6 +132,9 @@ fs.writeFileSync(path.join(greenfield, ".sdlc", "config.json"), JSON.stringify(c
 
 let injectionResult;
 try {
+  // AQUI si tiene que tirar: el rechazo por `project.name` es un error de
+  // validacion, no el `action-required` del eje de autorizacion. Usar el helper
+  // tolerante aqui se tragaria justo lo que este caso mide.
   run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
   injectionResult = { threw: false };
 } catch (error) {

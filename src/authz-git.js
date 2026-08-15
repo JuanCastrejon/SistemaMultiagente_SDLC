@@ -11,7 +11,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import YAML from "yaml";
 import { readTextIfExists } from "./file-utils.js";
-import { compararObligacion, evaluarObligacionDeFase } from "./authz.js";
+import { compararObligacion, contractObliga, evaluarObligacionDeFase, resolveHumanGatePolicy } from "./authz.js";
 
 function git(args, target) {
   const resultado = spawnSync("git", args, { cwd: target, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -233,4 +233,63 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
     avisos,
     base: base.base
   };
+}
+
+/**
+ * La auditoria del eje de autorizacion, para `doctor` y `upgrade` (G7).
+ *
+ * NO adjudica: adjudicar es de `phase-gate` (D5). Esto reporta, y con la
+ * severidad que la matriz de G7 fija para cada comando — que no es la misma
+ * para todos, y por eso la funcion devuelve `level` en cada hallazgo en vez de
+ * un booleano.
+ *
+ * La fila que rompe el patron, y por eso esta explicada: **BASE irresoluble es
+ * `warning` aqui y `blocked` en `phase-gate`**. `doctor` corre en la maquina de
+ * quien desarrolla, donde no tener la rama remota es normal —clon nuevo, red
+ * caida— y ademas no esta adjudicando nada. El gate si adjudica, y ahi no poder
+ * comparar es no poder conceder.
+ */
+export function auditarAutorizacion(target, contratoHead) {
+  const findings = [];
+
+  const obligacion = contractObliga(contratoHead);
+  if (obligacion.code === "authz-contract-duplicate-surface-id" || obligacion.code === "authz-contract-surface-id-missing") {
+    findings.push({ level: "error", code: obligacion.code, detail: obligacion.detail });
+  } else if (obligacion.code === "authz-contract-surfaces-invalid") {
+    findings.push({ level: "error", code: obligacion.code, detail: obligacion.detail });
+  } else if (obligacion.obliga) {
+    findings.push({
+      level: "error",
+      code: "authz-surfaces-unclassified",
+      detail:
+        obligacion.porQue.length > 0
+          ? `superficies que obligan a firmar: ${obligacion.porQue.join(", ")}. Clasificar los cuatro riesgos en config.surfaces y regenerar con \`sdlc upgrade\``
+          : `${obligacion.detail ?? "el contrato obliga a firmar"}. Clasificar los cuatro riesgos en config.surfaces y regenerar con \`sdlc upgrade\``
+    });
+  }
+
+  const politica = resolveHumanGatePolicy(contratoHead, null);
+  if (politica.code) findings.push({ level: "error", code: politica.code, detail: politica.detail });
+
+  const base = resolverBaseDeAutorizacion(target);
+  if (!base.ok) {
+    findings.push({ level: "warning", code: base.code, detail: base.detail });
+    return findings;
+  }
+
+  const contratoBase = leerContratoEnRef(target, base.base, "quality-contract.yaml");
+  if (contratoBase.presente && contratoBase.ok) {
+    const comparacion = compararObligacion(contratoBase.contract?.surfaces, contratoHead?.surfaces);
+    if (comparacion.ok) {
+      for (const bajada of comparacion.downgrades) {
+        findings.push({
+          level: "error",
+          code: "authz-downgrade",
+          detail: `la superficie \`${bajada.id}\` obligaba a firmar en la base y ya no (${bajada.motivo})`
+        });
+      }
+    }
+  }
+
+  return findings;
 }
