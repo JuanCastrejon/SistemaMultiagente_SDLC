@@ -11,7 +11,13 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import YAML from "yaml";
 import { readTextIfExists } from "./file-utils.js";
-import { compararObligacion, contractObliga, evaluarObligacionDeFase, resolveHumanGatePolicy } from "./authz.js";
+import {
+  compararObligacion,
+  compararPolitica,
+  contractObliga,
+  evaluarObligacionDeFase,
+  resolveHumanGatePolicy
+} from "./authz.js";
 
 function git(args, target) {
   const resultado = spawnSync("git", args, { cwd: target, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -130,7 +136,17 @@ export const FASES_SIN_ARBOL_QUE_ATESTAR = new Set(["F2", "F3"]);
  * venir de donde no puede escribir.
  */
 export function leerContratoEnRef(target, ref, ruta) {
-  const mostrado = git(["show", `${ref}:${ruta}`], target);
+  // El `./` NO es cosmetico. `git show <ref>:<ruta>` sin el resuelve contra la
+  // RAIZ del repo git; con el, contra el CWD. Un consumidor instalado con
+  // `sdlc adopt --target apps/extension` tiene su contrato en
+  // `apps/extension/quality-contract.yaml`, asi que sin `./` esta funcion leia
+  // el contrato de la raiz —o ninguno— y la comparacion BASE->HEAD no corria.
+  //
+  // Y lo agravante: su hermana `computeTreeHashAtRef` usa `git ls-tree -r`, que
+  // SI es relativa al cwd. Las dos mitades del mismo mecanismo discrepaban
+  // sobre que archivo es "el contrato", que es exactamente la clase de
+  // divergencia silenciosa que este repo persigue en todos los demas sitios.
+  const mostrado = git(["show", `${ref}:./${ruta}`], target);
   if (!mostrado.ok) return { ok: false, presente: false, contract: null, code: null, detail: `${ruta} no existe en ${ref}` };
   try {
     return { ok: true, presente: true, contract: YAML.parse(mostrado.stdout) ?? {}, code: null, detail: null };
@@ -174,7 +190,17 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
   //    de arriba se puede probar sin montar un repo.
   const base = resolverBaseDeAutorizacion(target, { baseSolicitada });
   if (!base.ok) {
-    bloqueos.push({ code: base.code, detail: base.detail });
+    // No poder resolver BASE bloquea en una fase CON puerta: ahi si hay algo
+    // que autorizar, y sin comparacion no se puede saber que se perdio.
+    //
+    // En una fase SIN puerta, lo unico que BASE aportaria es descubrir que
+    // alguien la quito. Eso importa, pero bloquear TODAS las fases de un repo
+    // sin ref remota —un clon nuevo, la maquina de quien desarrolla— convertiria
+    // el comando en inusable para lo que no esta autorizando nada. Y el arbitro
+    // que cuenta es CI (D5), donde la ref remota existe por construccion:
+    // `fetch-depth: 0` es requisito del workflow. Ahi el detector si corre.
+    const destino = puerta ? bloqueos : avisos;
+    destino.push({ code: base.code, detail: base.detail });
     return { ok: bloqueos.length === 0, exige: enHead.exige, bloqueos, avisos, base: null };
   }
 
@@ -193,7 +219,19 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
     const comparacion = compararObligacion(contratoBase.contract?.surfaces, contratoHead?.surfaces);
     if (!comparacion.ok) {
       bloqueos.push({ code: comparacion.code, detail: `${comparacion.lado}: ${comparacion.detail}` });
-    } else if (comparacion.downgrades.length > 0) {
+    } else {
+      // Debilitar la POLITICA es un downgrade AUNQUE NINGUNA SUPERFICIE CAMBIE,
+      // y por eso esta comprobacion NO puede colgar de que existan downgrades
+      // de superficie: `compararObligacion` mira solo `surfaces`, y eso deja
+      // fuera la mitad del modelo — la que decide donde el riesgo no obliga.
+      // Anidarla dentro del caso "hay downgrades" la hacia inalcanzable
+      // justo en el escenario que existe para cubrir.
+      for (const debil of compararPolitica(contratoBase.contract, contratoHead, [phaseId])) {
+        bloqueos.push({
+          code: "authz-policy-downgrade",
+          detail: `la politica de gate humano bajo de ${debil.desde} a ${debil.hasta} en ${debil.phaseId}: debilitar la politica es un downgrade de autorizacion aunque ninguna superficie cambie`
+        });
+      }
       for (const bajada of comparacion.downgrades) {
         bloqueos.push({
           code: "authz-downgrade",

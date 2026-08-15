@@ -419,14 +419,29 @@ cadena de candidatos.
 |---|---|---|
 | No hay ref de integración remota resoluble | `authz-base-unresolvable` | **bloquea** (exit 2) |
 | Hay ref pero `merge-base` falla (clon superficial) | `authz-base-unreachable` | **bloquea** |
-| El contrato no existe o no se puede leer en BASE | `authz-base-contract-unreadable` | **bloquea** |
+| El contrato **no existe** en BASE | `authz-base-contract-ausente` | **avisa** |
+| El contrato existe en BASE pero **no se puede leer** | `authz-base-contract-invalid` | **bloquea** |
 | El contrato de BASE existe pero es inválido | `authz-base-contract-invalid` | **bloquea** |
 | `--base` o `GITHUB_BASE_REF` apuntan a una rama distinta de la declarada | `authz-base-mismatch` | **bloquea** |
 
-Las cuatro bloquean por la misma razón, que es la doctrina del ADR 0007 aplicada
-aquí: **no poder medir no puede parecerse a no tener nada que reportar**. Y la
-asimetría importa — sin BASE no se puede saber qué se perdió, y lo que no se
-puede saber no se concede.
+Casi todas bloquean por la misma razón, que es la doctrina del ADR 0007 aplicada
+aquí: **no poder medir no puede parecerse a no tener nada que reportar**. Sin
+BASE no se puede saber qué se perdió, y lo que no se puede saber no se concede.
+
+**Las dos filas del contrato no son la misma cosa**, y separarlas costó una
+corrección: que el contrato **no exista** en BASE es el caso de bootstrap —el
+primer slice de un repo— y no hay obligación anterior que reducir, así que avisa.
+Que exista y **no se pueda leer** sí bloquea: ahí hubo algo y no se puede decir
+qué. Unificarlas en un solo código habría hecho imposible el primer slice de
+cualquier consumidor.
+
+**Y una fila cuya severidad depende de la fase:** si la fase evaluada no tiene
+`human_gate` en HEAD, no poder resolver BASE **avisa** en vez de bloquear. Lo
+único que BASE aportaría ahí es descubrir que alguien quitó la puerta, y
+bloquear *todas* las fases de un repo sin ref remota —un clon nuevo, la máquina
+de quien desarrolla— haría inusable el comando para lo que no está autorizando
+nada. El árbitro que cuenta es CI (D5), donde `fetch-depth: 0` es requisito del
+workflow y la ref existe por construcción: ahí el detector sí corre.
 
 **Bootstrap.** Un repo cuya rama de integración todavía no existe no tiene BASE,
 y por tanto no puede evaluar downgrades. Se bloquea igual, con

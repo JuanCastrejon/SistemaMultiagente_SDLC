@@ -15,7 +15,10 @@
 import assert from "node:assert/strict";
 import {
   RIESGOS_AUTORIZACION,
+  auditSurfaceIdentity,
+  POLITICAS_HUMAN_GATE,
   compararObligacion,
+  compararPolitica,
   contractObliga,
   estrechaLaSuperficie,
   evaluarObligacionDeFase,
@@ -42,7 +45,17 @@ assert.equal(requiredForSurface(limpia("a")), false, "los cuatro en false NO obl
 assert.equal(requiredForSurface(null), true, "lo que no es un objeto obliga");
 assert.equal(requiredForSurface([]), true, "una lista no es una superficie");
 
-for (const riesgo of RIESGOS_AUTORIZACION) {
+// Los CUATRO nombres, escritos a mano y comparados contra la constante. Sin
+// esto, el barrido de abajo deriva sus casos del MISMO array que un mutante
+// vaciaria: quitar `state_machine_critical` del conjunto cerrado hacia que el
+// test dejara de probarlo y el mutante sobrevivia. Un caso que saca su lista de
+// lo que prueba no prueba nada.
+assert.deepEqual(
+  [...RIESGOS_AUTORIZACION].sort(),
+  ["money_path", "regulated_data", "security_critical", "state_machine_critical"],
+  "el conjunto de riesgos es CERRADO: cuatro, y estos cuatro"
+);
+for (const riesgo of ["money_path", "regulated_data", "security_critical", "state_machine_critical"]) {
   assert.equal(requiredForSurface(limpia("a", { [riesgo]: true })), true, `${riesgo}: true obliga`);
   // Un valor que NO es booleano no es una clasificacion: es ruido. Y obliga,
   // porque el fail-closed no distingue "mal escrito" de "sin escribir".
@@ -183,10 +196,43 @@ assert.equal(contractObliga({ surfaces: [{ path: "src", tier: "core" }] }).code,
   assert.equal(estrechaLaSuperficie("apps/api", "servicios/api"), false, "un movimiento lateral no es estrechar");
   assert.equal(estrechaLaSuperficie("src", "src/"), false, "la barra final no cambia la ruta");
 
+  // Reclasificar Y estrechar el path A LA VEZ produce UN solo downgrade, no dos:
+  // el `continue` tras la reclasificacion existe para eso. Sin este caso, quitar
+  // ese `continue` sobrevivia — ningun otro combinaba las dos transiciones.
+  const ambas = compararObligacion(
+    [critica("a", { path: "." })],
+    [limpia("a", { path: "docs" })]
+  );
+  assert.equal(ambas.downgrades.length, 1, JSON.stringify(ambas.downgrades));
+  assert.equal(ambas.downgrades[0].motivo, "reclasificacion", "la reclasificacion es el motivo que manda");
+
   // Un `id` duplicado en cualquiera de los dos lados invalida la comparacion
   // entera, y se dice de que lado.
   assert.equal(compararObligacion([critica("a"), critica("a")], [critica("a")]).lado, "base");
   assert.equal(compararObligacion([critica("a")], [critica("a"), critica("a")]).lado, "head");
+}
+
+// --- 5. lo que se exporta y nadie probaba -------------------------------
+assert.deepEqual([...POLITICAS_HUMAN_GATE], ["attestation", "declarative", "none"]);
+assert.equal(auditSurfaceIdentity([limpia("a"), limpia("b")]).ok, true);
+assert.equal(auditSurfaceIdentity([limpia("a"), limpia("a")]).code, "authz-contract-duplicate-surface-id");
+assert.equal(auditSurfaceIdentity([{ path: "src" }]).code, "authz-contract-surface-id-missing");
+assert.equal(auditSurfaceIdentity([{ ...limpia("a"), id: "   " }]).code, "authz-contract-surface-id-missing", "un id en blanco no es identidad");
+assert.equal(auditSurfaceIdentity("no soy una lista").code, "authz-contract-surfaces-invalid");
+
+// --- 6. debilitar la POLITICA es un downgrade (D7) -----------------------
+// `compararObligacion` mira solo `surfaces`, asi que esto vive aparte: bajar
+// la politica no mueve ningun `required` y nadie lo reportaba.
+{
+  const con = (policy, overrides) => ({ surfaces: [limpia("a")], governance: { humanGate: { policy, overrides } } });
+  assert.equal(compararPolitica(con("attestation"), con("declarative")).length, 1, "attestation -> declarative es debilitar");
+  assert.equal(compararPolitica(con("declarative"), con("none")).length, 1, "declarative -> none es debilitar");
+  assert.equal(compararPolitica(con("declarative"), con("attestation")).length, 0, "endurecer no es downgrade");
+  assert.equal(compararPolitica(con("attestation"), con("attestation")).length, 0);
+  // Y por FASE, que es donde vive el override.
+  const porFase = compararPolitica(con("attestation"), con("attestation", { F13: "declarative" }), ["F13"]);
+  assert.equal(porFase.length, 1);
+  assert.equal(porFase[0].phaseId, "F13");
 }
 
 console.log("authz: PASS");

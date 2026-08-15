@@ -343,7 +343,7 @@ assert.ok(v2Gate.quality, "una fase con quality_gates debe adjudicar calidad");
 assert.ok(!v2Gate.warnings.some((w) => w.startsWith("contract-version-outdated")));
 // El gate del template esta en modo observe: informa, no bloquea.
 assert.ok(v2Gate.warnings.some((warning) => warning.startsWith("quality-gate-failed")));
-assert.equal(v2Gate.status, "ok");
+assert.equal(v2Gate.status, "ok", JSON.stringify(v2Gate.blockers ?? v2Gate));
 
 // `status` incorpora el cuarto componente.
 fs.writeFileSync(

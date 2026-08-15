@@ -253,6 +253,35 @@ export function estrechaLaSuperficie(pathBase, pathHead) {
   return head.startsWith(`${base}/`);
 }
 
+/**
+ * ¿Se debilito la POLITICA entre BASE y HEAD? (D7)
+ *
+ * `compararObligacion` mira solo las superficies, y eso dejaba fuera la mitad
+ * del modelo: bajar `governance.humanGate.policy` de `attestation` a
+ * `declarative` —o meter un override por fase— cambia lo que se exige donde el
+ * riesgo no obliga, y no movia ningun `required`. Nadie lo reportaba.
+ *
+ * No se compara contra un ideal, se compara contra la BASE: lo que estaba
+ * mergeado es la referencia, igual que con las superficies.
+ */
+const ORDEN_DE_EXIGENCIA = { none: 0, declarative: 1, attestation: 2 };
+
+export function compararPolitica(contratoBase, contratoHead, phaseIds = []) {
+  const debilitadas = [];
+  const fases = [null, ...phaseIds];
+  for (const phaseId of fases) {
+    const antes = resolveHumanGatePolicy(contratoBase, phaseId);
+    const ahora = resolveHumanGatePolicy(contratoHead, phaseId);
+    // Una politica invalida ya la reporta `resolveHumanGatePolicy` por su
+    // cuenta; aqui solo interesa el movimiento a la baja de una valida.
+    if (antes.code || ahora.code) continue;
+    if (ORDEN_DE_EXIGENCIA[ahora.policy] < ORDEN_DE_EXIGENCIA[antes.policy]) {
+      debilitadas.push({ phaseId: phaseId ?? "(repositorio)", desde: antes.policy, hasta: ahora.policy });
+    }
+  }
+  return debilitadas;
+}
+
 export function compararObligacion(surfacesBase, surfacesHead) {
   const identidadBase = auditSurfaceIdentity(surfacesBase ?? []);
   const identidadHead = auditSurfaceIdentity(surfacesHead ?? []);

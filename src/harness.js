@@ -314,28 +314,32 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
       }
       // El gate humano deja de ser un campo de texto que el propio agente puede
       // escribir: exige la referencia a un review verificable.
-      if (phase.human_gate) {
-        // La adjudicacion del ADR 0008. Solo aqui, y solo en fases con puerta:
-        // `signoff` no adjudica downgrades (D5) y una fase sin gate humano no
-        // tiene nada que autorizar. Ademas acota el coste — cada llamada gasta
-        // varios procesos de git.
-        const contratoCalidad = loadQualityContract(target);
-        const autorizacion = adjudicarAutorizacion({
-          target,
-          phaseId: phase.id,
-          contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
-          faseHead: phase
-        });
-        evidence.authorization = {
-          exige: autorizacion.exige,
-          base: autorizacion.base,
-          avisos: autorizacion.avisos.map((a) => a.code)
-        };
-        for (const bloqueo of autorizacion.bloqueos) {
-          evidenceBlockers.push(bloqueo.code);
-          evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
-        }
+      // La adjudicacion del ADR 0008 corre SIEMPRE, no solo cuando la fase
+      // tiene puerta. Ponerla dentro de `if (phase.human_gate)` era el defecto
+      // mas grave de esta implementacion: `authz-human-gate-removed` —el codigo
+      // que detecta que alguien apago la puerta— vivia DETRAS de la puerta que
+      // detecta. Apagarla hacia que su detector no corriera.
+      //
+      // El coste es aceptable porque `evaluatePhaseReadiness` se llama una vez
+      // por invocacion del gate, no una vez por fase.
+      const contratoCalidad = loadQualityContract(target);
+      const autorizacion = adjudicarAutorizacion({
+        target,
+        phaseId: phase.id,
+        contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
+        faseHead: phase
+      });
+      evidence.authorization = {
+        exige: autorizacion.exige,
+        base: autorizacion.base,
+        avisos: autorizacion.avisos.map((a) => a.code)
+      };
+      for (const bloqueo of autorizacion.bloqueos) {
+        evidenceBlockers.push(bloqueo.code);
+        evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
+      }
 
+      if (phase.human_gate) {
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
           evidenceBlockers.push("human-gate-signoff-missing");
