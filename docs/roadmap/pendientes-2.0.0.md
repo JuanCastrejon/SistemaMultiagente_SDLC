@@ -209,12 +209,18 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
       insatisfacible con un solo maintainer. ¿Addendum o revisión propia del
       ADR?
 
-## Implementar el ADR 0008 — modelo de riesgos de autorización · **BLOQUEA 2.0.0**
+## ~~Implementar el ADR 0008~~ — HECHO (2026-08-15)
 
-Diseño cerrado y escrito en `docs/adr/0008-modelo-de-riesgos-de-autorizacion.md`.
-**Nada de esto está implementado todavía**, y desde el 2026-08-14 esto ya no es
-roadmap posterior: es el alcance de 2.0.0. Sus siete decisiones no se pueden
-partir sin dejar hueco explotable, así que van juntas.
+D1–D7 implementados. Los siete huecos de diseño se cerraron **antes** de
+escribir código, y un ataque adversarial al diseño encontró cuatro bloqueantes
+más —entre ellos que D3 no producía la propiedad que prometía— que se corrigieron
+en el ADR antes de cablear nada.
+
+Qué quedó: `src/authz.js` (puro), `src/authz-git.js` (resolución de BASE y
+adjudicación), sujeto v2 con `contract_sha256` y `phase_contract_sha256`,
+detección de deriva de política, la matriz de G7 en `doctor`/`upgrade`, el paso
+de autorización en el workflow gestionado, `tests/authz.test.mjs` con 9 de 9
+mutantes muertos, y las cinco rupturas declaradas.
 
 Antes de escribir código hay que cerrar los siete huecos de diseño que el propio
 ADR lista en «Estado de la implementación» (`required()` canónico, match
