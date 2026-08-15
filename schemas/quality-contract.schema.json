@@ -4,12 +4,25 @@
   "title": "SDLC quality contract",
   "description": "Contrato de calidad del repo consumidor. El phase-contract dice QUE se mide y en que fase; este archivo dice CUANTO por tier y COMO se produce la metrica. Ningun nombre de herramienta vive en el engine.",
   "type": "object",
-  "required": ["version", "tiers", "surfaces", "probes", "gates"],
+  "required": [
+    "version",
+    "tiers",
+    "surfaces",
+    "probes",
+    "gates"
+  ],
   "properties": {
-    "version": { "type": "integer", "const": 1 },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
     "enforcement": {
       "type": "string",
-      "enum": ["observe", "ratchet", "enforce"],
+      "enum": [
+        "observe",
+        "ratchet",
+        "enforce"
+      ],
       "default": "observe",
       "description": "Techo global de severidad. Un gate nunca puede ser mas estricto que este valor."
     },
@@ -20,7 +33,9 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "description": { "type": "string" }
+          "description": {
+            "type": "string"
+          }
         }
       }
     },
@@ -29,14 +44,47 @@
       "description": "Mapeo superficie -> tier. El path debe existir en disco: si no, los gates sobre esa superficie evaluarian sobre el vacio.",
       "items": {
         "type": "object",
-        "required": ["id", "path", "tier"],
+        "required": [
+          "id",
+          "path",
+          "tier"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "path": { "type": "string", "minLength": 1 },
-          "tier": { "type": "string", "minLength": 1 },
-          "money_path": { "type": "boolean", "default": false },
-          "has_ui": { "type": "boolean", "default": false }
-        }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "money_path": {
+            "type": "boolean",
+            "default": false,
+            "description": "Riesgo de autorizacion: toca dinero."
+          },
+          "has_ui": {
+            "type": "boolean",
+            "default": false
+          },
+          "regulated_data": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: trata datos regulados (PII, salud, financieros)."
+          },
+          "security_critical": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: privilegios efectivos (permisos amplios, superficie de ataque, secretos)."
+          },
+          "state_machine_critical": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: gobierna una maquina de estados cuyo desorden corrompe datos."
+          }
+        },
+        "description": "Los cuatro riesgos de autorizacion (ADR 0008, D1) son OPCIONALES en el schema y OBLIGATORIOS en la practica: ausente no es `false`, es `sin clasificar`, y `required()` obliga a firmar. El schema no puede exigirlos porque romperia a todo consumidor de 1.x al leer su contrato; quien los exige es el guard de autorizacion, que ademas dice cual falta."
       }
     },
     "probes": {
@@ -44,29 +92,62 @@
       "description": "Como se produce cada metrica. El engine no sabe de vitest ni de stryker: ejecuta un script del consumidor y lee el reporte que declara.",
       "items": {
         "type": "object",
-        "required": ["id", "command", "emits", "format"],
+        "required": [
+          "id",
+          "command",
+          "emits",
+          "format"
+        ],
         "properties": {
-          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9:-]{0,63}$" },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9:-]{0,63}$"
+          },
           "command": {
             "type": "string",
             "pattern": "^[a-z0-9][a-z0-9:._-]{0,63}$",
             "description": "Nombre del script en package.json, NO una linea de shell. El engine lo invoca con el package manager detectado; los metacaracteres se rechazan."
           },
-          "emits": { "type": "string", "minLength": 1, "description": "Ruta del reporte nativo que produce el probe." },
-          "format": { "type": "string", "minLength": 1, "description": "Formato del reporte, resuelto por un adapter fuera del engine." },
+          "emits": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Ruta del reporte nativo que produce el probe."
+          },
+          "format": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Formato del reporte, resuelto por un adapter fuera del engine."
+          },
           "command_sha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$",
             "description": "sha256 del texto literal del script de package.json que corre este probe. Sin esto, el arbitro re-ejecuta lo que el evaluado declare hoy, sin garantia de que sea lo mismo que se reviso. Cambiar este valor pasa por el guard de frontera (quality-contract.yaml esta protegido), igual que cualquier otro cambio de contrato."
           },
-          "timeout_ms": { "type": "integer", "minimum": 1000, "default": 120000 },
-          "when_absent": { "type": "string", "enum": ["skip", "warn", "fail"], "default": "warn" },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "default": 120000
+          },
+          "when_absent": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "warn",
+              "fail"
+            ],
+            "default": "warn"
+          },
           "applies_when": {
             "type": "object",
             "description": "Condicion de aplicabilidad. Un probe que no aplica es NOT_APPLICABLE, que no es lo mismo que PASS ni que SKIP.",
             "properties": {
-              "surface_has_ui": { "type": "boolean" },
-              "min_subjects": { "type": "integer", "minimum": 0 }
+              "surface_has_ui": {
+                "type": "boolean"
+              },
+              "min_subjects": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           }
         }
@@ -77,39 +158,130 @@
       "description": "Adjudicacion. Cada gate declara metrica, operador, umbral por tier, denominador minimo y modo.",
       "items": {
         "type": "object",
-        "required": ["id", "phase", "metric", "op", "mode"],
+        "required": [
+          "id",
+          "phase",
+          "metric",
+          "op",
+          "mode"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "phase": { "type": "string", "pattern": "^F(0|1|2|3|3_5|4|5|6|7|8|9|10|11|12|13|14|15|16|17)$" },
-          "metric": { "type": "string", "minLength": 1, "description": "Path punteado dentro de las metricas medidas." },
-          "op": { "type": "string", "enum": ["gte", "lte", "eq", "neq", "exists", "absent"] },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "phase": {
+            "type": "string",
+            "pattern": "^F(0|1|2|3|3_5|4|5|6|7|8|9|10|11|12|13|14|15|16|17)$"
+          },
+          "metric": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Path punteado dentro de las metricas medidas."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "gte",
+              "lte",
+              "eq",
+              "neq",
+              "exists",
+              "absent"
+            ]
+          },
           "mode": {
             "type": "string",
-            "enum": ["observe", "ratchet", "block"],
+            "enum": [
+              "observe",
+              "ratchet",
+              "block"
+            ],
             "description": "Escalera de adopcion. Ningun control nace en block."
           },
-          "threshold": { "type": ["number", "string", "boolean", "null"] },
+          "threshold": {
+            "type": [
+              "number",
+              "string",
+              "boolean",
+              "null"
+            ]
+          },
           "thresholds": {
             "type": "object",
             "description": "Umbral por tier. Se admite la clave default como respaldo.",
-            "additionalProperties": { "type": ["number", "string", "boolean", "null"] }
+            "additionalProperties": {
+              "type": [
+                "number",
+                "string",
+                "boolean",
+                "null"
+              ]
+            }
           },
           "min_denominator": {
             "type": "object",
-            "required": ["metric"],
+            "required": [
+              "metric"
+            ],
             "description": "Sin esto, todo gate con forma == 0 se satisface con el conjunto vacio.",
             "properties": {
-              "metric": { "type": "string", "minLength": 1 },
-              "value": { "type": "number", "default": 1 }
+              "metric": {
+                "type": "string",
+                "minLength": 1
+              },
+              "value": {
+                "type": "number",
+                "default": 1
+              }
             }
           },
           "provenance": {
             "type": "string",
-            "enum": ["fuente-primaria", "default-de-herramienta", "decision-de-equipo"],
+            "enum": [
+              "fuente-primaria",
+              "default-de-herramienta",
+              "decision-de-equipo"
+            ],
             "description": "De donde sale el numero. Obligatorio moralmente: casi ningun umbral tiene respaldo externo."
           }
         }
       }
+    },
+    "governance": {
+      "type": "object",
+      "description": "Politica de gate humano (ADR 0008, D2/D7). Vive AQUI y no en .sdlc/config.json: este archivo esta protegido por el guard de frontera, asi que debilitar la politica exige tocar una ruta protegida.",
+      "properties": {
+        "humanGate": {
+          "type": "object",
+          "properties": {
+            "policy": {
+              "type": "string",
+              "enum": [
+                "attestation",
+                "declarative",
+                "none"
+              ],
+              "default": "attestation",
+              "description": "Alcance: por REPOSITORIO. Solo decide donde ningun riesgo obliga; nunca puede debilitar la obligacion derivada de riesgos."
+            },
+            "overrides": {
+              "type": "object",
+              "description": "Override por FASE. Ni por superficie —una fase se firma una vez— ni por slice, que es una unidad de trabajo del evaluado.",
+              "additionalProperties": {
+                "type": "string",
+                "enum": [
+                  "attestation",
+                  "declarative",
+                  "none"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

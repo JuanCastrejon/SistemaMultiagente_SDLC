@@ -24,7 +24,7 @@
 
 import { spawnSync } from "node:child_process";
 import { sha256Text, spawnCapture, stableJson } from "./file-utils.js";
-import { computeContractSha256AtRef } from "./evidence-writer.js";
+import { computeContractSha256AtRef, computePhaseContractSha256AtRef } from "./evidence-writer.js";
 
 export const ATTESTATION_TRAILER = "Signed-Attestation-Subject";
 
@@ -54,11 +54,19 @@ export function computeSubjectSha256(subject) {
 export function buildSubject({ target, ref, slice, phase, treeHash }) {
   const contrato = computeContractSha256AtRef(target, ref);
   if (!contrato.ok) return { ok: false, code: contrato.code, detail: contrato.detail, subject: null };
+  const fases = computePhaseContractSha256AtRef(target, ref);
+  if (!fases.ok) return { ok: false, code: fases.code, detail: fases.detail, subject: null };
   return {
     ok: true,
     code: null,
     detail: null,
-    subject: { slice, phase, tree_hash: treeHash, contract_sha256: contrato.hash }
+    subject: {
+      slice,
+      phase,
+      tree_hash: treeHash,
+      contract_sha256: contrato.hash,
+      phase_contract_sha256: fases.hash
+    }
   };
 }
 

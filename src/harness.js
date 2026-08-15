@@ -8,7 +8,12 @@ import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
-import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "./evidence-writer.js";
+import {
+  computeContractSha256AtRef,
+  computePhaseContractSha256AtRef,
+  computeTreeHashAtRef,
+  computeTreeHashAtRefAsync
+} from "./evidence-writer.js";
 import { buildSubject, gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
@@ -147,11 +152,14 @@ export function detectPackageManager(target) {
 
 function contractCandidates(target) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  return [
-    path.join(target, "phase-contract.yaml"),
-    path.join(target, ".github", "agent-state", "phase-contract.yaml"),
-    path.join(moduleRoot, "phase-contract.yaml")
-  ];
+  // `.github/agent-state/phase-contract.yaml` YA NO es candidato (ADR 0008, G4
+  // punto 4). Era una ruta que ninguna lista del guard de frontera protegia
+  // —`DEFAULT_LOCKED` ancla `phase-contract.yaml` a la raiz, y alli solo estan
+  // `quality-baseline.yaml` y `lessons.yaml`—, asi que crear el contrato de
+  // fases ahi permitia poner `human_gate: false` sin que nadie lo viera.
+  // `human_gate` es el AND exterior de todo el modelo de autorizacion: una ruta
+  // alternativa para escribirlo era una puerta trasera al interruptor maestro.
+  return [path.join(target, "phase-contract.yaml"), path.join(moduleRoot, "phase-contract.yaml")];
 }
 
 // Version de contrato que este engine entiende. v2 anade `quality_gates` por
@@ -947,6 +955,10 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
   const current = treeAt(headRef);
   const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
   if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
+  const deriva = detectarDerivaDePolitica(target, armado.subject, headRef, memo);
+  if (deriva) return deriva;
+
   return verifySignoff({
     target,
     commitSha,
@@ -955,6 +967,50 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
     headRef,
     currentTreeHash: current.ok ? current.hash : null
   });
+}
+
+/**
+ * La deriva de politica (ADR 0008, D3).
+ *
+ * El sujeto ancla la politica DEL REF ATESTADO. Recomputarlo alli da siempre el
+ * mismo numero, asi que una mutacion posterior seria invisible POR
+ * CONSTRUCCION: la propiedad que el ADR promete —"una firma deja de valer si
+ * alguien muta la politica bajo la que se emitio"— no se sigue de esa
+ * definicion sola. Hay que comparar contra HEAD.
+ *
+ * Y NO es frescura. Confundirlas ya costo un error en este mismo mecanismo: que
+ * el `tree_hash` se haya movido es un AVISO, porque el codigo cambia todo el
+ * tiempo y eso no invalida una aprobacion. La politica no cambia todo el
+ * tiempo, y cuando cambia, lo aprobado bajo la anterior deja de estar aprobado.
+ */
+function detectarDerivaDePolitica(target, subject, headRef, memo) {
+  if (memo.politicaHead === undefined) {
+    memo.politicaHead = {
+      contrato: computeContractSha256AtRef(target, headRef),
+      fases: computePhaseContractSha256AtRef(target, headRef)
+    };
+  }
+  const { contrato, fases } = memo.politicaHead;
+  // Si no se puede leer la politica de HEAD no se concluye deriva: no poder
+  // comprobar no es "no vale", y aqui el veredicto correcto lo da el resto de
+  // la verificacion.
+  if (contrato.ok && contrato.hash !== subject.contract_sha256) {
+    return {
+      ok: false,
+      code: "authz-contract-drift",
+      detail:
+        "quality-contract.yaml cambio despues de firmar: la atestacion aprobo una politica que ya no es la vigente. Volver a firmar con `sdlc signoff --slice <id> --phase <F> --create --record`"
+    };
+  }
+  if (fases.ok && fases.hash !== subject.phase_contract_sha256) {
+    return {
+      ok: false,
+      code: "authz-phase-contract-drift",
+      detail:
+        "phase-contract.yaml cambio despues de firmar: `human_gate` es el interruptor de todo el modelo de autorizacion, asi que una atestacion emitida bajo otro contrato de fases no vale. Volver a firmar con `sdlc signoff --slice <id> --phase <F> --create --record`"
+    };
+  }
+  return null;
 }
 
 // Tres veredictos, no dos. "No se pudo comprobar" no es "la firma es mala",
@@ -1034,6 +1090,15 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
   const current = await treeAt(headRef);
   const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
   if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
+  // LA MISMA comprobacion que la via sincrona, y no es opcional: si las dos
+  // vias divergen, la auditoria y el gate juzgan distinto la misma firma. Eso ya
+  // esta declarado como fallo de seguridad silencioso en la cabecera de
+  // `gitAsync`, y la deriva de politica es exactamente el tipo de veredicto que
+  // no puede depender de por que camino se llego.
+  const deriva = detectarDerivaDePolitica(target, armado.subject, headRef, memo);
+  if (deriva) return deriva;
+
   return verifySignoffAsync({
     target,
     commitSha,

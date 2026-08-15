@@ -48,7 +48,23 @@ const DEFAULT_LOCKED = [
 // y de mutacion POR PAQUETE. Anclarlas a la raiz dejaba `packages/app/
 // vitest.config.ts` fuera del guard, y bajar ahi `thresholds` es reescribir el
 // criterio igual que hacerlo en la raiz. Reproducido en la ronda 16.
-const LOCKED_BASENAME_PREFIXES = ["vitest.config", "stryker.conf", ".dependency-cruiser", "eslint.config"];
+//
+// Los DOS CONTRATOS van tambien por basename, y por un motivo distinto del de
+// las configs de gate: un consumidor instalado con
+// `sdlc adopt --target apps/extension` tiene su `quality-contract.yaml` en
+// `apps/extension/`, y el patron anclado a la raiz no lo alcanzaba. El ADR 0008
+// elige poner la politica de autorizacion en `quality-contract.yaml`
+// argumentando que "ya esta protegido" — y ese argumento solo era cierto para
+// instalaciones en la raiz del repo git. `phase-contract.yaml` es peor todavia:
+// lleva `human_gate`, que es el AND exterior de todo el modelo.
+const LOCKED_BASENAME_PREFIXES = [
+  "vitest.config",
+  "stryker.conf",
+  ".dependency-cruiser",
+  "eslint.config",
+  "quality-contract.yaml",
+  "phase-contract.yaml"
+];
 
 // Rutas que el guard protege SIEMPRE, sin importar que diga locked-paths.txt
 // ni ningun otro archivo de configuracion. Sin esto, la ruta mas barata para
