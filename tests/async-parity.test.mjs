@@ -470,20 +470,31 @@ console.log(
   // familias mas y se afirma la propiedad GENERAL abajo —ningun prefijo de N
   // bytes reproduce el orden—, en vez de un conteo concreto:
   //   - `prefijo-comun-a`/`-b` se separan en el byte 15;
-  //   - `a-a`/`a-a-a`, donde uno es PREFIJO del otro, cubren la longitud.
+  //   - `a-a`/`a-a-a`, donde uno es PREFIJO del otro, cubren la longitud;
+  //   - `n`+U+0303 junto a `ñ` precompuesta (ronda 13): son CANONICAMENTE
+  //     EQUIVALENTES y tienen bytes distintos, asi que un comparador que
+  //     normalice antes de comparar los colapsa a iguales. `sort` es estable,
+  //     de modo que ese comparador deja que `readdirSync` dicte su orden y el
+  //     informe deja de ser determinista — que es justo lo que el orden
+  //     contractual existe para impedir. Sin este par, la mutacion sobrevivia.
   // El orden de entrada esta desordenado a proposito: `sort` es estable, y con
   // la entrada ya ordenada un comparador que colapsa un par lo dejaria pasar.
   const slices = [
     "a-slice",
     "Z-slice",
-    "ñ-slice",
+    // Las dos enes van ESCAPADAS a proposito: escritas como literales son
+    // indistinguibles a simple vista, y cualquier normalizador de editor o
+    // filtro de git podria colapsarlas -- que es justo la propiedad que este
+    // par existe para probar.
+    "ñ-slice", // precompuesta: U+00F1
     "！-slice",
-    "\u{1F600}-slice",
+    "😀-slice",
     "a-z",
     "a-a",
     "prefijo-comun-b",
     "prefijo-comun-a",
-    "a-a-a"
+    "a-a-a",
+    "ñ-slice" // descompuesta: n + U+0303, canonicamente equivalente a la anterior
   ];
   {
     const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
@@ -505,6 +516,23 @@ console.log(
           Buffer.compare(Buffer.from(a, "utf8").subarray(0, n), Buffer.from(b, "utf8").subarray(0, n))
         ),
         `el conjunto tiene que distinguir el orden por bytes de una comparacion de los primeros ${n} bytes`
+      );
+    }
+
+    // Y de una que NORMALICE antes de comparar. Esta mutacion sobrevivio a la
+    // ronda 13 entera: sin dos nombres canonicamente equivalentes, normalizar
+    // no cambia nada. Con ellos, el comparador los colapsa a iguales y —`sort`
+    // es estable— deja que `readdirSync` dicte su orden relativo.
+    const equivalentes = slices.filter((s) => s.normalize("NFC") === "\u00F1-slice");
+    assert.equal(equivalentes.length, 2, "el conjunto necesita el par NFC/NFD; sin el, normalizar es indetectable");
+    assert.notEqual(equivalentes[0], equivalentes[1], "el par tiene que diferir en bytes, no solo en apariencia");
+    for (const forma of ["NFC", "NFD"]) {
+      assert.notDeepEqual(
+        porBytesTmp,
+        [...slices].sort((a, b) =>
+          Buffer.compare(Buffer.from(a.normalize(forma), "utf8"), Buffer.from(b.normalize(forma), "utf8"))
+        ),
+        `el conjunto tiene que distinguir el orden por bytes de uno que normalice a ${forma} antes de comparar`
       );
     }
   }
@@ -548,9 +576,10 @@ console.log(
       "a-a-a",
       "a-slice",
       "a-z",
+      "n\u0303-slice",
       "prefijo-comun-a",
       "prefijo-comun-b",
-      "ñ-slice",
+      "\u00F1-slice",
       "！-slice",
       "\u{1F600}-slice"
     ],
@@ -641,9 +670,10 @@ console.log(
     "a-a-a",
     "a-slice",
     "a-z",
+    "n\u0303-slice",
     "prefijo-comun-a",
     "prefijo-comun-b",
-    "ñ-slice",
+    "\u00F1-slice",
     "！-slice",
     "\u{1F600}-slice"
   ]) {
