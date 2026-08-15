@@ -37,6 +37,26 @@ Proporción que sale de aplicar esto a una ronda típica: **un `opus` por cada
 cuatro o cinco agentes baratos**. La ronda 14 lo hizo al revés —ocho agentes
 `opus`— y murió sin devolver un solo hallazgo.
 
+### Los roles no están disponibles en la sesión que los crea
+
+Medido en la ronda 15: los cinco archivos se escribieron y, en la misma sesión,
+despacharlos por nombre falló con `agent type 'rastreador' not found`. **El
+registro de roles se lee al arrancar la sesión**, así que un rol nuevo no existe
+para quien lo acaba de escribir.
+
+Mientras tanto, el reparto se aplica igual pasando `model` y `effort` en cada
+llamada. Es la misma política; lo que se pierde es tenerla escrita en un sitio
+en vez de repetida en cada lanzamiento — que era justamente el problema que los
+roles resuelven. Cuando la sesión se reinicie, los cinco nombres funcionan.
+
+Y el fallo enseñó algo que vale más que el reparto: **la ronda 15 sobrevivió a
+que sus cinco lentes se cayeran** porque la síntesis, al recibir cinco resultados
+vacíos, hizo el trabajo ella misma en vez de devolver un informe en blanco — y
+encontró cuatro defectos reales en el validador de anclas. Una fase de síntesis
+que se limita a agregar habría devuelto «nada que reportar» sobre una ronda que
+no se ejecutó. Por eso el script nombra las lentes caídas: un recorte silencioso
+se lee como cobertura completa.
+
 ## Antes de repartir: ¿hace falta la ronda?
 
 Del `/review` de [gstack](https://github.com/garrytan/gstack), que resuelve el

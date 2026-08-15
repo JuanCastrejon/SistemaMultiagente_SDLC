@@ -530,21 +530,49 @@ console.log(
     "\u{1F600}-slice",
     "aa",
     "a-z",
-    "a-a",
+    "a-a-a",
     "prefijo-comun-b",
     "prefijo-comun-a",
-    "a-a-a",
+    "a-a",
     ENYE_NFD,
     "a-espacio",
     " a-espacio",
-    "s-10",
     "s-2",
+    "s-10",
     LARGO_B,
     LARGO_A
   ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD);
   {
     const aBytes = (texto, codificacion = "utf8") => Buffer.from(texto, codificacion);
     const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(aBytes(a), aBytes(b)));
+
+    // El conjunto afirma arriba que la entrada esta desordenada a proposito
+    // «para que un comparador que colapsa un par no pase por estabilidad». Eso
+    // no era cierto para DOS de los siete pares: `a-a`/`a-a-a` y `s-10`/`s-2`
+    // aparecian en la entrada en el mismo orden relativo que por bytes, asi que
+    // un comparador que los empatara habria pasado esta tabla. Lo mataba el
+    // caso de `readdirSync` invertido, no esta tabla — la cobertura estaba,
+    // pero no donde el comentario decia.
+    //
+    // Se afirma la propiedad en vez de confiar en ella: para cada par, el MAYOR
+    // por bytes tiene que aparecer ANTES en la entrada.
+    const PARES_QUE_DISCRIMINAN = [
+      ["a-a", "a-a-a"],
+      ["a-a", "aa"],
+      ["prefijo-comun-a", "prefijo-comun-b"],
+      ["a-espacio", " a-espacio"],
+      ["s-10", "s-2"],
+      [LARGO_A, LARGO_B],
+      ...(fsDistingueFormas ? [[ENYE_NFC, ENYE_NFD]] : [])
+    ];
+    for (const [x, y] of PARES_QUE_DISCRIMINAN) {
+      const menor = Buffer.compare(aBytes(x), aBytes(y)) < 0 ? x : y;
+      const mayor = menor === x ? y : x;
+      assert.ok(
+        slices.indexOf(mayor) < slices.indexOf(menor),
+        `el par ${JSON.stringify([x, y])} tiene que entrar en orden INVERSO al de bytes; si no, un comparador que lo empate pasa por estabilidad de sort`
+      );
+    }
     const noReproduce = (comparador, queEs) =>
       assert.notDeepEqual(
         porBytesTmp,
