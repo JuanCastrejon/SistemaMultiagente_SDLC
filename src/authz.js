@@ -1,0 +1,246 @@
+// ---------------------------------------------------------------------------
+// Modelo de riesgos de autorizacion (ADR 0008, D1/D4/D7).
+//
+// Separa los dos ejes que el ADR 0007 habia mezclado: `tier` mide CALIDAD y los
+// riesgos declarados por superficie deciden AUTORIZACION. La consecuencia
+// perversa que fuerza esta separacion esta medida: con la regla anterior,
+// esquivar una firma bastaba con bajar el tier — y eso compraba ademas diez
+// puntos menos de cobertura. La gobernanza incentivaba degradar la calidad.
+//
+// Todo lo de aqui es PURO: entra un contrato, sale un veredicto. Sin git, sin
+// disco, sin reloj. Quien adjudica es `phase-gate` (D5); este modulo solo sabe
+// decir que obliga y que cambio.
+// ---------------------------------------------------------------------------
+
+// Conjunto CERRADO. Ni mas ni menos, y el orden no importa porque la regla es
+// un OR. Que sea cerrado es lo que hace que una clave mal escrita
+// (`security-critical`, `securityCritical`) no sea un riesgo declarado: no
+// aporta un booleano valido a ninguno de los cuatro, asi que el fail-closed de
+// `requiredForSurface` obliga. El error de tecleo se paga con una firma de mas,
+// nunca con una de menos.
+export const RIESGOS_AUTORIZACION = ["money_path", "regulated_data", "security_critical", "state_machine_critical"];
+
+/**
+ * ¿Esta superficie obliga a firmar? (ADR 0008, G1)
+ *
+ * Fail-closed en cada rama, y por el mismo motivo en todas: *no clasificado* no
+ * es *no aplica*. Una superficie heredada sin clasificar conserva la obligacion
+ * hasta que una revision humana la clasifique.
+ */
+export function requiredForSurface(surface) {
+  if (!surface || typeof surface !== "object" || Array.isArray(surface)) return true;
+  for (const riesgo of RIESGOS_AUTORIZACION) {
+    const valor = surface[riesgo];
+    // Ausente, null, cadena, numero: cualquier cosa que no sea un booleano
+    // significa que nadie clasifico ese riesgo.
+    if (typeof valor !== "boolean") return true;
+    if (valor === true) return true;
+  }
+  return false;
+}
+
+/**
+ * La identidad de las superficies, que es precondicion de todo lo demas (G1/G2).
+ *
+ * Un `id` duplicado no se resuelve conservadoramente "por superficie": haria
+ * ambiguo el emparejamiento BASE↔HEAD, y una ambiguedad en la identidad se
+ * resuelve rechazando el contrato entero, no eligiendo una de las dos lecturas.
+ */
+export function auditSurfaceIdentity(surfaces) {
+  if (!Array.isArray(surfaces)) {
+    return { ok: false, code: "authz-contract-surfaces-invalid", detail: "`surfaces` no es una lista" };
+  }
+  const vistos = new Set();
+  const duplicados = new Set();
+  const sinId = [];
+  for (const [indice, surface] of surfaces.entries()) {
+    const id = surface && typeof surface === "object" ? surface.id : undefined;
+    if (typeof id !== "string" || id.trim() === "") {
+      sinId.push(indice);
+      continue;
+    }
+    if (vistos.has(id)) duplicados.add(id);
+    vistos.add(id);
+  }
+  if (sinId.length > 0) {
+    return {
+      ok: false,
+      code: "authz-contract-surface-id-missing",
+      detail: `superficies sin \`id\` en las posiciones ${sinId.join(", ")}: \`id\` es la identidad con la que se compara BASE contra HEAD`
+    };
+  }
+  if (duplicados.size > 0) {
+    return {
+      ok: false,
+      code: "authz-contract-duplicate-surface-id",
+      detail: `\`id\` duplicado: ${[...duplicados].join(", ")}. El emparejamiento BASE↔HEAD seria ambiguo`
+    };
+  }
+  return { ok: true, code: null, detail: null };
+}
+
+/**
+ * ¿Obliga el contrato entero? (D1)
+ *
+ * `surfaces: []` obliga: es la misma regla que 2.0.0 ya aplica, y por el mismo
+ * motivo — un repo sin superficies declaradas no es un repo sin riesgo, es un
+ * repo sin clasificar.
+ */
+export function contractObliga(contract) {
+  // Un contrato SIN clave `surfaces` no es un contrato con cero superficies: es
+  // un contrato que no declara nada. Se trata igual que `surfaces: []`, que ya
+  // obliga — el fail-closed no tiene ninguna razon para distinguirlos.
+  const surfaces = Array.isArray(contract?.surfaces) ? contract.surfaces : [];
+  const identidad = auditSurfaceIdentity(surfaces);
+  if (!identidad.ok) {
+    return { obliga: true, code: identidad.code, detail: identidad.detail, porQue: [] };
+  }
+  if (surfaces.length === 0) {
+    return {
+      obliga: true,
+      code: "authz-surfaces-empty",
+      detail: "sin superficies declaradas no se puede afirmar que ninguna sea critica",
+      porQue: []
+    };
+  }
+  const porQue = surfaces.filter((surface) => requiredForSurface(surface)).map((surface) => surface.id);
+  return { obliga: porQue.length > 0, code: null, detail: null, porQue };
+}
+
+export const POLITICAS_HUMAN_GATE = ["attestation", "declarative", "none"];
+
+/**
+ * La politica declarada, y si es sostenible (D7, G5).
+ *
+ * Alcance: por REPOSITORIO, con override por FASE. Ni por superficie —una fase
+ * se firma una vez, no una vez por superficie, y dos politicas distintas sobre
+ * la misma fase no tendrian veredicto definido— ni por slice, que es una unidad
+ * de trabajo del evaluado.
+ */
+export function resolveHumanGatePolicy(contract, phaseId) {
+  const bloque = contract?.governance?.humanGate ?? {};
+  const declarada = bloque.policy ?? "attestation";
+  const override = phaseId && bloque.overrides ? bloque.overrides[phaseId] : undefined;
+  const efectiva = override ?? declarada;
+
+  if (!POLITICAS_HUMAN_GATE.includes(efectiva)) {
+    return {
+      policy: "attestation",
+      code: "authz-policy-invalida",
+      detail: `politica desconocida: ${JSON.stringify(efectiva)}. Validas: ${POLITICAS_HUMAN_GATE.join(", ")}`
+    };
+  }
+
+  if (efectiva === "none") {
+    // `none` no se degrada a su version laxa cuando no se sostiene: se RECHAZA.
+    // Una politica que no se puede sostener no se aplica a medias.
+    const identidad = auditSurfaceIdentity(contract?.surfaces ?? []);
+    if (!identidad.ok) {
+      return { policy: "attestation", code: "authz-policy-none-invalida", detail: identidad.detail };
+    }
+    if ((contract?.surfaces ?? []).length === 0) {
+      return {
+        policy: "attestation",
+        code: "authz-policy-none-invalida",
+        detail: "`none` exige superficies declaradas: con `surfaces: []` la criticidad es indeterminable"
+      };
+    }
+    const criticas = (contract.surfaces ?? []).filter((surface) => requiredForSurface(surface)).map((s) => s.id);
+    if (criticas.length > 0) {
+      return {
+        policy: "attestation",
+        code: "authz-policy-none-invalida",
+        detail: `\`none\` exige que ninguna superficie sea critica; obligan: ${criticas.join(", ")}`
+      };
+    }
+  }
+
+  return { policy: efectiva, code: null, detail: null };
+}
+
+/**
+ * La regla de precedencia entera, en una funcion (G4).
+ *
+ * El orden de autoridad, y esta escrito como ALGORITMO y no como prosa a
+ * proposito: si la obligacion por riesgo se comprobara solo en un comentario,
+ * un override podria debilitarla y nadie lo notaria.
+ *
+ *   1. `phase.human_gate` es la PUERTA. Ninguna politica añade gates humanos
+ *      donde el contrato de fases no los declara.
+ *   2. La obligacion por riesgo manda DENTRO de la puerta, sin excepcion
+ *      configurable.
+ *   3. La politica solo decide donde el riesgo no obliga.
+ */
+export function evaluarObligacionDeFase({ phase, contract }) {
+  const tienePuerta = Boolean(phase?.human_gate);
+  const obligacion = contractObliga(contract);
+  const politica = resolveHumanGatePolicy(contract, phase?.id);
+
+  if (!tienePuerta) {
+    return {
+      exige: "ninguna",
+      porRiesgo: obligacion.obliga,
+      policy: politica.policy,
+      code: obligacion.code ?? politica.code ?? null,
+      detail: obligacion.detail ?? politica.detail ?? null,
+      surfacesQueObligan: obligacion.porQue
+    };
+  }
+
+  const exige = obligacion.obliga || politica.policy === "attestation" ? "attestation" : politica.policy;
+  return {
+    exige,
+    porRiesgo: obligacion.obliga,
+    policy: politica.policy,
+    code: obligacion.code ?? politica.code ?? null,
+    detail: obligacion.detail ?? politica.detail ?? null,
+    surfacesQueObligan: obligacion.porQue
+  };
+}
+
+/**
+ * La comparacion BASE→HEAD (D4, G2).
+ *
+ * Se empareja por `id`, nunca por `path`: un `path` cambia cuando se mueve
+ * codigo; un `id` es la identidad que el consumidor declara y mantiene.
+ *
+ * Split y merge de superficies se tratan como BAJAS a proposito. No hay forma
+ * fiable de distinguir "parti `api` en `api-http` y `api-jobs`" de "borre `api`
+ * y cree dos superficies sin clasificar": las dos producen el mismo diff del
+ * contrato. Ante dos lecturas indistinguibles se elige la que no concede.
+ */
+export function compararObligacion(surfacesBase, surfacesHead) {
+  const identidadBase = auditSurfaceIdentity(surfacesBase ?? []);
+  const identidadHead = auditSurfaceIdentity(surfacesHead ?? []);
+  if (!identidadBase.ok) return { ok: false, lado: "base", code: identidadBase.code, detail: identidadBase.detail };
+  if (!identidadHead.ok) return { ok: false, lado: "head", code: identidadHead.code, detail: identidadHead.detail };
+
+  const porIdBase = new Map((surfacesBase ?? []).map((s) => [s.id, s]));
+  const porIdHead = new Map((surfacesHead ?? []).map((s) => [s.id, s]));
+
+  const downgrades = [];
+  const bajas = [];
+  const altas = [];
+
+  for (const [id, surfaceBase] of porIdBase) {
+    const surfaceHead = porIdHead.get(id);
+    if (!surfaceHead) {
+      bajas.push(id);
+      // Una baja solo es downgrade si lo que se fue OBLIGABA. Borrar una
+      // superficie que no obligaba no reduce ninguna autorizacion.
+      if (requiredForSurface(surfaceBase)) downgrades.push({ id, motivo: "baja", desde: true, hasta: false });
+      continue;
+    }
+    const antes = requiredForSurface(surfaceBase);
+    const ahora = requiredForSurface(surfaceHead);
+    // Lo que cuenta es la TRANSICION del booleano, no cada mutacion de campo:
+    // poner un riesgo en false mientras otro sigue en true no cambia nada.
+    if (antes && !ahora) downgrades.push({ id, motivo: "reclasificacion", desde: true, hasta: false });
+  }
+
+  for (const id of porIdHead.keys()) {
+    if (!porIdBase.has(id)) altas.push(id);
+  }
+
+  return { ok: true, downgrades, bajas, altas };
+}

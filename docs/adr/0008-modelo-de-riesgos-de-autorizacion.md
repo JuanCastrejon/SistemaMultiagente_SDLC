@@ -239,22 +239,210 @@ que sí lo está.** Desde 2026-08-14 esto no es roadmap: es **deuda bloqueante d
 ruta v1: no computa `contract_sha256` (D3), no distingue sujetos v1 de v2 (D6),
 no evalúa riesgos por superficie (D1) ni compara BASE→HEAD (D4).
 
-Lo que falta para poder implementar sin reabrir el diseño:
+## Los siete huecos, cerrados (2026-08-15)
 
-1. Algoritmo puro y canónico `required(surface, contract)`, con tipos válidos,
-   valores desconocidos, duplicados y superficie vacía.
-2. Reglas de match BASE/HEAD por `id`, y tratamiento exacto de alta, baja, split
-   y merge de superficies.
-3. Definición exacta de `BASE` y `HEAD` — PR, merge-base, SHA de CI—, con el
-   comportamiento en clon superficial y sus códigos de salida.
-4. Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
-   derivada de riesgos.
-5. Alcance de `humanGate.policy`: por repositorio, por superficie, por fase o por
-   slice. Sin eso, `declarative` y `none` son ambiguos.
-6. Migración: qué evidencia v1 queda como histórica, cuál bloquea, cómo se
-   re-firma y qué reporta `upgrade --dry-run`.
-7. Matriz de enforcement por comando: `doctor`, `upgrade`, `phase-gate`, CI y
-   local no pueden inferir severidad solo de `warning`/`error`.
+Estaban listados como «lo que falta para poder implementar sin reabrir el
+diseño». Se cierran aquí, antes de escribir código, porque implementar con ellos
+abiertos es exactamente cómo se reabre un diseño a mitad de camino.
+
+### G1. `required(surface)` — el algoritmo canónico
+
+Los cuatro riesgos son un conjunto **cerrado**: `money_path`, `regulated_data`,
+`security_critical`, `state_machine_critical`. Ni más ni menos, y el orden no
+importa porque la función es un OR.
+
+```
+required(surface):
+  si surface no es un objeto           → true
+  para cada r de los CUATRO riesgos:
+    v = surface[r]
+    si typeof v !== "boolean"          → true      # ausente, null, cadena, número
+    si v === true                      → true
+  → false
+```
+
+Fail-closed en cada rama, y por el mismo motivo en todas: *no clasificado* no es
+*no aplica*. Una superficie heredada sin clasificar conserva la obligación hasta
+que una revisión humana la clasifique.
+
+**Casos que la función NO decide sola, porque son del contrato, no de una
+superficie:**
+
+- **`surfaces: []`** → obliga. Ya es la regla desde 2.0.0 y no cambia.
+- **`id` duplicado** → el contrato entero es **inválido**, no «esa superficie
+  obliga». Con dos superficies del mismo `id`, el emparejamiento BASE↔HEAD de G2
+  es ambiguo, y una ambigüedad en la identidad no se puede resolver
+  conservadoramente por superficie: se resuelve rechazando el contrato.
+  Código: `authz-contract-duplicate-surface-id`.
+- **`id` ausente** → mismo trato. `id` es la identidad persistente; sin ella no
+  hay nada que emparejar.
+- **Claves desconocidas** en una superficie se **ignoran**. Un `security-critical`
+  con guion, o un `securityCritical` en camelCase, no es un riesgo declarado: los
+  cuatro nombres son exactos. Y como una clave desconocida no aporta un booleano
+  válido a ninguno de los cuatro, el fail-closed de arriba ya obliga — el error
+  de tecleo se paga con una firma de más, nunca con una de menos.
+
+### G2. Emparejamiento BASE↔HEAD
+
+Se empareja **por `id`**, nunca por `path`. Un `path` cambia cuando se mueve
+código; un `id` es la identidad que el consumidor declara y mantiene.
+
+| Situación | Cómo se resuelve | ¿Downgrade? |
+|---|---|---|
+| `id` en ambos | se comparan `required(base)` y `required(head)` | solo si `true → false` |
+| `id` solo en HEAD (**alta**) | superficie nueva; se aplica su `required` | no |
+| `id` solo en BASE (**baja**) | la continuidad **no se puede demostrar** | **sí**, si su `required` en BASE era `true` |
+| `path` cambia, `id` estable (**rename/move**) | se compara con normalidad | no por sí mismo |
+| **split** (un `id` se parte en varios) | el `id` original desaparece → es una baja | sí, por la baja |
+| **merge** (varios `id` se funden en uno) | los `id` absorbidos desaparecen → bajas | sí, por las bajas |
+
+Split y merge se tratan como bajas **a propósito**. No hay forma fiable de
+distinguir «partí `api` en `api-http` y `api-jobs`» de «borré `api` y creé dos
+superficies sin clasificar»: las dos producen exactamente el mismo diff del
+contrato. Ante dos lecturas indistinguibles, se elige la que no concede.
+
+Lo que cuenta es la **transición del booleano**, no cada mutación de campo:
+poner `money_path` en `false` mientras `security_critical` sigue en `true` no es
+downgrade, porque la obligación seguía siendo `true`.
+
+### G3. `BASE` y `HEAD`, exactos
+
+**HEAD** es el commit evaluado: `HEAD` en local; en CI, el SHA del checkout del
+PR.
+
+**BASE** es `git merge-base HEAD <integración>`, donde `<integración>` se
+resuelve **exactamente igual que en el guard de frontera**:
+`refs/remotes/origin/<rama>`, calificada, y rechazando lo que no viva bajo
+`refs/remotes/`. No es una coincidencia de estilo: es el mismo ataque: un tag
+llamado `origin/develop` secuestra la base y hace que BASE y HEAD sean el mismo
+árbol, con lo que ningún downgrade es detectable.
+
+| Situación | Código | Qué hace |
+|---|---|---|
+| No hay ref de integración remota resoluble | `authz-base-unresolvable` | **bloquea** (exit 2) |
+| Hay ref pero `merge-base` falla (clon superficial) | `authz-base-unreachable` | **bloquea** |
+| El contrato no existe o no se puede leer en BASE | `authz-base-contract-unreadable` | **bloquea** |
+| El contrato de BASE existe pero es inválido | `authz-base-contract-invalid` | **bloquea** |
+
+Las cuatro bloquean por la misma razón, que es la doctrina del ADR 0007 aplicada
+aquí: **no poder medir no puede parecerse a no tener nada que reportar**. Y la
+asimetría importa — sin BASE no se puede saber qué se perdió, y lo que no se
+puede saber no se concede.
+
+**Bootstrap.** Un repo cuya rama de integración todavía no existe no tiene BASE,
+y por tanto no puede evaluar downgrades. Se bloquea igual, con
+`authz-base-unresolvable`, y se sale de ahí creando la rama de integración —
+no relajando el control. Es el mismo camino que el guard de frontera ya obliga a
+recorrer, así que no añade un paso nuevo al consumidor.
+
+### G4. Precedencia
+
+Tres cosas pueden hablar sobre si una fase exige firma. El orden es:
+
+```
+exigeAtestacion(fase, contrato) =
+      fase.human_gate === true
+  AND ( algunaSuperficieObliga(contrato)  OR  policyEfectiva(fase) === "attestation" )
+```
+
+Leído en palabras, y en orden de autoridad:
+
+1. **`phase.human_gate` es la puerta.** Si una fase no es un punto de aprobación
+   humana, no se le exige firma aunque el repo entero sea crítico. Ninguna
+   política *añade* gates humanos donde el contrato de fases no los declara; eso
+   sería el ADR 0007 reescrito desde otro archivo.
+2. **La obligación derivada de riesgos manda dentro de la puerta.** Si alguna
+   superficie obliga, la política **no puede debilitarla**: `attestation`, sin
+   excepción configurable. Es D1, y es lo que hace que el eje sea de riesgo y no
+   de configuración.
+3. **La política solo decide donde el riesgo no obliga.** `declarative` acepta
+   una firma no verificable, **siempre etiquetada como tal en el veredicto**.
+   `none` no exige nada.
+
+Corolario que conviene decir en voz alta: una superficie sin clasificar hace
+`attestation` obligatoria en **todas** las fases con `human_gate`, y ninguna
+política la baja. Ese es el fail-closed retroactivo que este ADR acepta.
+
+### G5. Alcance de `humanGate.policy`
+
+**Por repositorio, con override por fase. Ni por superficie, ni por slice.**
+
+```yaml
+governance:
+  humanGate:
+    policy: attestation          # attestation | declarative | none
+    overrides:
+      F2: declarative            # solo donde ningún riesgo obliga
+```
+
+- **Por superficie, no**, y es la decisión menos obvia de las cuatro: una fase se
+  firma **una vez**, no una vez por superficie. Si la política fuera por
+  superficie, una fase que toca dos superficies con políticas distintas no
+  tendría veredicto definido — y el desempate acabaría siendo «la más laxa gana»
+  o una regla escondida en el código. La obligación *sí* es por superficie (D1);
+  la **política** es del repositorio.
+- **Por slice, no.** Un slice es una unidad de trabajo del evaluado. Una política
+  por slice es una política que el evaluado elige por trabajo, que es
+  exactamente lo que D1 existe para impedir.
+- **El override por fase sí**, porque las fases son estructura declarada del
+  repositorio y viven en un archivo protegido por el guard de frontera. Y solo
+  puede debilitar donde ningún riesgo obliga: es el punto 3 de G4, no una
+  excepción a él.
+
+`none` se **rechaza como contrato inválido** —no como «sin obligación»— si hay
+`surfaces: []` o si alguna superficie tiene criticidad indeterminable. Código:
+`authz-policy-none-invalida`. Una política que no se puede sostener no se aplica
+en su versión laxa: se rechaza.
+
+### G6. Migración de la evidencia v1
+
+**Qué distingue a una v1 de una v2:** el sujeto. v1 es
+`{ slice, phase, tree_hash }`; v2 es `{ slice, phase, tree_hash, contract_sha256 }`.
+La distinción se hace por **presencia de `contract_sha256`**, no por un número de
+versión declarado: un campo declarado lo escribe el evaluado.
+
+| Comando | Evidencia con sujeto v1 |
+|---|---|
+| `doctor` | **error persistente**, con la lista de fases y el comando exacto |
+| `upgrade` | `action-required`; `--dry-run` reporta cuántas y cuáles, sin escribir |
+| `phase-gate` | **bloquea** la fase evaluada |
+
+**Nada queda «como histórico» de forma silenciosa.** Se consideró marcar como
+histórica la evidencia de fases ya cerradas y se descarta: una fase cerrada con
+una firma que ya no verifica es exactamente el estado que hace creer que algo se
+aprobó cuando no se puede demostrar. Si la fase no se vuelve a evaluar, la
+atestación v1 no bloquea nada porque nadie la mira; en cuanto se evalúa, bloquea.
+Eso no es una regla aparte, es la consecuencia de no tener una.
+
+**Reparación**, y es la misma frase que el CHANGELOG de 2.0.0 ya usa:
+`sdlc signoff --slice <id> --phase <F> --create --record`. Sin `--record` el
+commit firmado existe pero la evidencia sigue apuntando a la firma vieja.
+
+### G7. Matriz de enforcement por comando
+
+`warning` y `error` no bastan: el mismo hecho tiene severidad distinta según
+quién pregunte. Esta tabla es la fuente de verdad.
+
+| Hecho | `doctor` | `upgrade` | `phase-gate` | `signoff` | CI |
+|---|---|---|---|---|---|
+| Superficie sin clasificar (D1 obliga) | error | action-required | **blocked** si la fase tiene `human_gate` | — | como `phase-gate` |
+| Downgrade BASE→HEAD (D4) | error | action-required | **blocked** | **no adjudica** | como `phase-gate` |
+| Sujeto v1 (D6) | error | action-required | **blocked** | — | como `phase-gate` |
+| `contract_sha256` no coincide (D3) | error | action-required | **blocked** | error al verificar | como `phase-gate` |
+| `id` duplicado o ausente (G1) | error | action-required | **blocked** | — | como `phase-gate` |
+| BASE irresoluble (G3) | warning | warning | **blocked** | — | **blocked** |
+| Política `none` inválida (G5) | error | action-required | **blocked** | — | como `phase-gate` |
+| Firma declarativa donde se permite | warning **etiquetado** | — | pasa, etiquetado | — | pasa, etiquetado |
+
+Dos filas merecen explicación porque no siguen el patrón:
+
+- **BASE irresoluble es `warning` en `doctor` y `blocked` en `phase-gate`.**
+  `doctor` corre en la máquina de quien desarrolla, donde no tener la rama
+  remota es normal (clon nuevo, red caída) y no está adjudicando nada. El gate sí
+  adjudica, y ahí no poder comparar es no poder conceder.
+- **`signoff` no adjudica downgrades**, y es D5 literal. Construye y verifica
+  atestaciones; normalmente ni siquiera conoce el BASE de la evaluación. Darle
+  voto repartiría el mismo veredicto entre dos sitios con información distinta.
 
 ## Lo que este ADR NO decide
 

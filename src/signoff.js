@@ -24,6 +24,7 @@
 
 import { spawnSync } from "node:child_process";
 import { sha256Text, spawnCapture, stableJson } from "./file-utils.js";
+import { computeContractSha256AtRef } from "./evidence-writer.js";
 
 export const ATTESTATION_TRAILER = "Signed-Attestation-Subject";
 
@@ -34,6 +35,42 @@ const TRAILER_PATTERN = new RegExp(`^${ATTESTATION_TRAILER}:\\s*([a-f0-9]{64})\\
 // necesitar un serializador recursivo propio.
 export function computeSubjectSha256(subject) {
   return sha256Text(stableJson(subject));
+}
+
+/**
+ * EL sujeto. Un solo sitio donde se arma (ADR 0008, D3).
+ *
+ * Antes se construia inline en SEIS lugares —cuatro en `cli.js`, dos en
+ * `harness.js`— y añadir un campo a mano en los seis es exactamente el defecto
+ * que esta rama ha cometido cuatro veces: arreglar una ocurrencia y dejar las
+ * hermanas. Peor aqui que en un README: si `signoff` firma un sujeto y
+ * `phase-gate` recompone otro, la firma no verifica y el mensaje no dice por
+ * que.
+ *
+ * `ref` es el ref ATESTADO, no el working tree: es el mismo ref con el que se
+ * calculo `treeHash`, y pasarlos desalineados produciria un sujeto que no
+ * corresponde a ningun estado real del repo.
+ */
+export function buildSubject({ target, ref, slice, phase, treeHash }) {
+  const contrato = computeContractSha256AtRef(target, ref);
+  if (!contrato.ok) return { ok: false, code: contrato.code, detail: contrato.detail, subject: null };
+  return {
+    ok: true,
+    code: null,
+    detail: null,
+    subject: { slice, phase, tree_hash: treeHash, contract_sha256: contrato.hash }
+  };
+}
+
+// El sujeto v1, el que emitia 1.x: sin `contract_sha256`. No se usa para firmar
+// NADA — existe solo para poder reconocer una atestacion antigua y decir "hay
+// que re-firmar" en vez de "esto no coincide". Devuelve null si el sujeto no
+// tiene la forma esperada, para no inventar una comparacion.
+export function subjectV1(subject) {
+  if (!subject || typeof subject !== "object") return null;
+  const { slice, phase, tree_hash: treeHash } = subject;
+  if (slice === undefined || phase === undefined || treeHash === undefined) return null;
+  return { slice, phase, tree_hash: treeHash };
 }
 
 export function buildAttestationMessage({ slice, phase, subjectSha256 }) {
@@ -255,6 +292,21 @@ export function judgeSignoff({ facts, commitSha, subject, maintainers = [], head
 
   const expected = computeSubjectSha256(subject);
   if (parsed.subjectSha256 !== expected) {
+    // Antes de dar un `mismatch` generico se comprueba si la firma es una v1:
+    // el sujeto se RECOMPUTA, nunca se lee del commit, asi que la unica forma
+    // de saber con que version se firmo es recomputar tambien la anterior y ver
+    // cual casa. Sin esto, una atestacion legitima de 1.x se reportaba igual
+    // que una manipulada, y la accion a tomar es completamente distinta:
+    // re-firmar contra investigar.
+    const v1 = subjectV1(subject);
+    if (v1 && computeSubjectSha256(v1) === parsed.subjectSha256) {
+      return {
+        ok: false,
+        code: "signoff-subject-v1",
+        detail:
+          "la atestacion se firmo con el sujeto v1 `{slice, phase, tree_hash}`, sin `contract_sha256`: no cubre la politica bajo la que se emitio. Volver a firmar con `sdlc signoff --slice <id> --phase <F> --create --record`"
+      };
+    }
     return {
       ok: false,
       code: "signoff-subject-mismatch",
@@ -303,6 +355,30 @@ export async function verifySignoffAsync({ target, commitSha, subject, maintaine
  * si mismo — lo autoritativo es que el commit resultante pase verifySignoff
  * en CI, igual que cualquier otra evidencia de este gauntlet.
  */
+
+/**
+ * ¿Hay cambios sin commitear dentro de las superficies?
+ *
+ * Se expone aparte porque el orden de los mensajes importa: con el arbol sucio,
+ * el contrato tampoco esta commiteado todavia, asi que armar el sujeto falla
+ * con `contract-missing-at-ref` y esconde la causa real. Quien tiene que
+ * commitear no necesita enterarse de dos cosas: necesita enterarse de la
+ * primera.
+ */
+export function worktreeDirtyForSurfaces(target, surfacePaths = []) {
+  const scope = surfacePaths.length > 0 ? ["--", ...surfacePaths] : [];
+  const dirty = git(["status", "--porcelain", ...scope], target);
+  if (dirty.ok && dirty.stdout) {
+    return {
+      dirty: true,
+      code: "signoff-worktree-dirty",
+      detail: `hay cambios sin commitear en las superficies declaradas; el commit de atestacion es vacio y firmaria el arbol de HEAD, no lo que hay en disco:
+${dirty.stdout}`
+    };
+  }
+  return { dirty: false, code: null, detail: null };
+}
+
 export function createAttestationCommit({
   target,
   slice,

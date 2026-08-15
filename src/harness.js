@@ -9,7 +9,7 @@ import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.j
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "./evidence-writer.js";
-import { gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
+import { buildSubject, gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -945,10 +945,12 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
   const approved = treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
   const current = treeAt(headRef);
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
   return verifySignoff({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: memo.maintainers,
     headRef,
     currentTreeHash: current.ok ? current.hash : null
@@ -1030,10 +1032,12 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
   const approved = await treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
   const current = await treeAt(headRef);
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
   return verifySignoffAsync({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: memo.maintainers,
     headRef,
     currentTreeHash: current.ok ? current.hash : null

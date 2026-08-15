@@ -46,7 +46,7 @@ import { baselineDoctorFindings } from "./quality-baseline.js";
 import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
 import { computeTreeHashAtRef, evidencePath as evidencePathFor, recordAttestation } from "./evidence-writer.js";
-import { createAttestationCommit, verifySignoff } from "./signoff.js";
+import { buildSubject, createAttestationCommit, verifySignoff, worktreeDirtyForSurfaces } from "./signoff.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
 import { verifyChangeClosure } from "./change-closure.js";
@@ -823,10 +823,13 @@ function recordVerifiedAttestation(target, { slice, phase, surfacePaths, commitS
   const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
 
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
   const verification = verifySignoff({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: config.governance?.maintainers ?? []
   });
   if (!verification.ok) {
@@ -887,7 +890,22 @@ function commandSignoff(options) {
     if (!tree.ok) {
       return { exitCode: EXIT_ERROR, payload: { status: "error", code: tree.code, message: tree.detail } };
     }
-    const subject = { slice, phase, tree_hash: tree.hash };
+    // El arbol sucio se comprueba ANTES de armar el sujeto: con cambios sin
+    // commitear, el contrato tampoco esta en HEAD y `buildSubject` fallaria con
+    // `contract-missing-at-ref`, escondiendo la causa real detras de un
+    // sintoma. Quien tiene que commitear necesita enterarse de eso, no de dos
+    // cosas a la vez.
+    if (!Boolean(options["allow-dirty"] ?? options.allowDirty)) {
+      const sucio = worktreeDirtyForSurfaces(target, surfacePaths);
+      if (sucio.dirty) {
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", ok: false, code: sucio.code, detail: sucio.detail } };
+      }
+    }
+    const armado = buildSubject({ target, ref: "HEAD", slice, phase, treeHash: tree.hash });
+    if (!armado.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armado.code, message: armado.detail } };
+    }
+    const subject = armado.subject;
     const created = createAttestationCommit({
       target,
       slice,
@@ -917,14 +935,17 @@ function commandSignoff(options) {
       // Se verifica por la MISMA ruta que usara el gate, y ANTES de escribir:
       // enlazar una firma que no verifica seria afirmar una garantia inexistente.
       const approved = computeTreeHashAtRef(target, surfacePaths, created.commitSha);
-      const verification = approved.ok
+      const rearmado = approved.ok
+        ? buildSubject({ target, ref: created.commitSha, slice, phase, treeHash: approved.hash })
+        : { ok: false, code: approved.code, detail: approved.detail };
+      const verification = rearmado.ok
         ? verifySignoff({
             target,
             commitSha: created.commitSha,
-            subject: { slice, phase, tree_hash: approved.hash },
+            subject: rearmado.subject,
             maintainers: recordConfig.governance?.maintainers ?? []
           })
-        : { ok: false, code: approved.code, detail: approved.detail };
+        : { ok: false, code: rearmado.code, detail: rearmado.detail };
       if (!verification.ok) {
         return {
           exitCode: EXIT_ACTION_REQUIRED,
@@ -991,7 +1012,11 @@ function commandSignoff(options) {
       return { exitCode: EXIT_ERROR, payload: { status: "error", code: approved.code, message: approved.detail } };
     }
     const current = computeTreeHashAtRef(target, surfacePaths, headRef);
-    const subject = { slice, phase, tree_hash: approved.hash };
+    const armadoVerify = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+    if (!armadoVerify.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armadoVerify.code, message: armadoVerify.detail } };
+    }
+    const subject = armadoVerify.subject;
     const result = verifySignoff({
       target,
       commitSha,
