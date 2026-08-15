@@ -7,15 +7,28 @@
 # Formato:
 #   - path: openspec/specs/cobros/spec.md
 #     reason: correccion de una regla mal modelada detectada en F9
-#     approved_by: <login de la lista de mantenedores>
-#     review_id: <id del review que la aprobo>
+#     approved_by: <firmante de la lista de mantenedores>
+#     attestation_commit: <sha del commit firmado que la aprobo>
 #     expires_at: 2026-12-31T00:00:00Z
 #
 # Reglas:
 #   1. `path` es exacto, no un glob: una excepcion amplia es una puerta abierta.
+#      El guard compara por igualdad exacta, asi que un glob aqui no autoriza
+#      nada -- ni siquiera lo que parece autorizar.
 #   2. `approved_by` debe estar en la lista de mantenedores del repo.
 #   3. Toda entrada caduca. Sin `expires_at`, la excepcion se vuelve permanente
 #      por olvido, que es como mueren estos controles.
+#
+# LO QUE HOY NO SE ENFORCEA, dicho aqui porque una regla que nadie comprueba es
+# peor que ninguna regla -- se cree cumplida:
+#   - `approved_by`, `attestation_commit` y `expires_at` NO los lee el guard:
+#     solo extrae `path`. Una entrada caducada sigue autorizando.
+#   - La aprobacion real que hoy vale es la ATESTACION FIRMADA de la fase
+#     (`sdlc signoff --slice <id> --phase <F> --create --record`), no un review
+#     de plataforma: con un solo maintainer GitHub prohibe auto-aprobar el PR
+#     propio. Este archivo documentaba `review_id` de aquel mecanismo.
+#   - Cerrar ese hueco es trabajo del ADR 0008 (D2 y D7), que define donde vive
+#     la politica y que comando enforcea que.
 
 version: 1
 allowlist: []

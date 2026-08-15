@@ -762,6 +762,16 @@ export function listFiles(root, options = {}) {
       if (ignored.has(entry.name)) {
         continue;
       }
+      // `.claude/worktrees/` son worktrees de git creados DENTRO del repo por
+      // agentes en paralelo: cada uno es una COPIA completa del arbol. Sin esta
+      // regla, cualquier worktree vivo duplica todos los archivos del repo ante
+      // los validadores y `validate-template-sanitization` falla nombrando
+      // rutas que el desarrollador no reconoce. Se compara la RUTA, no solo el
+      // nombre: un directorio `worktrees/` en cualquier otro sitio si es
+      // contenido del repo.
+      if (entry.isDirectory() && entry.name === "worktrees" && path.basename(current) === ".claude") {
+        continue;
+      }
       const absolute = path.join(current, entry.name);
       if (entry.isDirectory()) {
         walk(absolute);
