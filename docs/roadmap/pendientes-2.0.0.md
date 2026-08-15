@@ -160,6 +160,97 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
       gracia** (debe resolver en menos de la mitad), no contra un 10 s flojo que
       dejaba pasar un retraso de 1 s.
 
+## Para retomar en la próxima sesión — estado a 2026-08-15
+
+Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `8b8bdd9`; 9 commits
+locales por encima.** [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
+abierto contra `develop` y `MERGEABLE`; el #40 (`develop` → `main`) sigue
+esperando a que #41 entre.
+
+Suite completa en Windows y POSIX (exit 0), `npm run validate` en verde,
+204 archivos de documentación con sus anclas.
+
+### Lo primero, en este orden
+
+- [ ] **Empujar los 9 commits locales.** El PR #41 todavía no los incluye.
+- [ ] **Ronda 18 sobre `a602f5c`**, que es el último y nadie ha revisado. La
+      ronda 17 murió por límite de subagentes antes de refutar sus 18 hallazgos
+      y **antes de la síntesis**, así que *nadie contestó* la pregunta que
+      cierra: «¿se puede publicar 2.0.0 con esto?». El patrón de esta rama es
+      que los arreglos de la ronda N fallan en la N+1, y la 17 lo confirmó tres
+      veces seguidas dentro del mismo commit.
+- [ ] **Mergear #41 con `--admin`.** Es la única vez: el PR introduce a la vez
+      el job `spec-boundary` y la allowlist que lo desbloquea, y una excepción
+      solo cuenta cuando ya está en la base. Del siguiente en adelante el
+      control se sostiene solo. Está escrito en el cuerpo del PR y en la
+      cabecera de `.github/agent-state/spec-boundary-allowlist.yaml`.
+- [ ] **Mergear #40 a `main`**, también con `--admin` mientras haya un solo
+      maintainer.
+- [ ] **Decidir npm**: `gh workflow run publish.yml`, **nunca `npm publish` a
+      mano**.
+
+### Lo que quedó sin verificar de la ronda 17
+
+- [ ] Los hallazgos **razonados** (no ejecutados) sobre códigos `authz-*` sin
+      caso propio. `tests/authz-git.test.mjs` cubre la mayoría de forma
+      estructural, pero no hay un caso por código.
+- [ ] `authz-base-unreachable` (clon superficial) no tiene caso: montar un DAG
+      desconectado cuesta y se dejó fuera.
+- [ ] Ninguna ejecución real en **GitHub Actions**. Todo se probó con refs
+      simuladas (`git update-ref`). Sin verificar: el evento `pull_request` y su
+      ref `refs/pull/N/merge`, PRs desde fork, y si `actions/checkout` con
+      `fetch-depth: 0` deja `refs/remotes/origin/<base>` presente con la forma
+      que `calificarRemota` espera. **Si eso falla, el paso nuevo del workflow
+      pone rojo un caso legítimo.**
+
+### Deuda declarada que sigue abierta
+
+- [ ] **La otra mitad del guard de frontera no se auditó.** El script declara
+      que es «la mitad barata por RUTA» y que la autorización real la aporta la
+      atestación. Las rondas 16 y 17 auditaron la primera mitad; la segunda
+      —recomputación del sujeto, verificación GPG, enlace con la evidencia— no
+      la ha mirado nadie con la misma lupa.
+- [ ] **El allowlist del guard no comprueba contenido, solo rutas.** Una
+      excepción autoriza cambios ilimitados a esa ruta hasta que caduque. La
+      granularidad por contenido es trabajo del ADR 0008 aplicado al allowlist,
+      y no se hizo.
+- [ ] **`maxBuffer` de 64 MiB nunca se puso a prueba** con un diff real que lo
+      desborde.
+
+### Adopción de gstack — decidido, sin empezar
+
+Análisis completo en la sesión del 2026-08-15. **No entra en
+`external-tools.yaml`**: su modo `--team` escribe en el repo un hook
+`PreToolUse` con matcher genérico `Skill` que devolvería `deny` para *cualquier*
+skill si gstack no está instalado en la máquina de quien clona — interceptaría
+las nuestras. Es una superficie de gobierno, no una herramienta puntual.
+
+Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
+
+- [ ] **Enchufar el ledger de lecciones.** `src/skill-lessons.js` ya existe
+      entero —fingerprint, `occurrences`, umbral de promoción, gate humano— y
+      **nadie lo lee**: es un store de solo escritura. El mismo defecto apareció
+      tres veces mientras el mecanismo para evitarlo estaba construido y
+      desenchufado. Coste: cero código — añadir a las personas de F9/F10 un
+      bloque que ejecute `sdlc skill-lesson --target . --json` y trate toda
+      lección con `occurrences >= 2` como lente obligatoria.
+      **Ojo**: `lessons.yaml` está en `DEFAULT_LOCKED`, así que cablear el
+      `--record` a mitad de slice exige decidir el allowlist antes.
+- [ ] **Un checklist de dominio** (`testing.md` de `review/specialists`) como
+      sección de la persona de F9, con salida en `F9.yaml` validado. **Uno solo**
+      hasta que un slice real justifique otro.
+- [ ] **Escritura atómica del checkpoint.** `writeText` es `fs.writeFileSync`
+      directo sobre un vault de Obsidian que puede estar sincronizando; un save
+      cortado deja un checkpoint truncado que `analyzeCheckpointNarrative`
+      leería como **completo**. Añadir `writeTextAtomic` (tmp + rename en el
+      mismo directorio) y usarla **solo** en `commandSave`. Que falle ruidoso:
+      un `EPERM` silencioso perdería el checkpoint sin avisar.
+- [ ] **Validador Tier 1**: que los comandos `sdlc <sub>` citados en las
+      SKILL.md existan en el `switch` de `src/cli.js`. Solo subcomandos al
+      principio — validar flags contra un parser genérico daría una garantía que
+      no existe.
+
+
 ## Espera decisión del mantenedor
 
 - [ ] **Firma del propio repo del framework.** El job `spec-boundary` de

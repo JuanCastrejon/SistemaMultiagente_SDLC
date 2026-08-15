@@ -457,6 +457,115 @@ Un clon superficial no es culpa de nadie, así que su remedio no es «vuelve a f
 
 El recorrido de la evidencia sin firmas cuesta ~30 ms: lo caro son los procesos de git, no leer YAML.
 
+## Modelo de riesgos de autorización (2.0.0, ADR 0008)
+
+Hasta 2.0.0 la firma humana colgaba de `tier`, y eso tenía una consecuencia
+perversa **medida**: para esquivar una firma bastaba con bajar el tier — y eso
+compraba además diez puntos menos de cobertura. La regla de gobernanza
+incentivaba degradar la calidad.
+
+Desde 2.0.0 son dos ejes separados: **`tier` mide, los riesgos autorizan.**
+
+```yaml
+# quality-contract.yaml — se genera desde config.surfaces
+surfaces:
+  - id: extension
+    path: .
+    tier: core                    # solo umbrales de calidad
+    money_path: false
+    regulated_data: false
+    security_critical: true       # <all_urls> + content script en cualquier origen
+    state_machine_critical: false
+```
+
+La obligación de firma desaparece **solo** si los cuatro riesgos están presentes,
+son booleanos válidos y los cuatro son `false`. Ausente, `null`, una cadena o un
+nombre mal escrito **obligan**: *no clasificado* no es *no aplica*, y un error de
+tecleo se paga con una firma de más, nunca con una de menos.
+
+Aplica a las fases con gate humano que tienen árbol que atestar —F4, F13 y F14—.
+En F2/F3 no hay código que firmar, y exigirlo allí produciría un bloqueo del que
+no se sale sin tocar la política que el control existe para proteger.
+
+### Qué se compara, y contra qué
+
+`phase-gate` es el **único** que adjudica. Compara la obligación efectiva entre
+la rama de integración y HEAD, superficie a superficie, emparejando por `id`:
+
+| Situación | ¿Downgrade? |
+| --- | --- |
+| `true → false` por reclasificación | sí |
+| La superficie desaparece | sí — la continuidad no se puede demostrar |
+| Split o merge de superficies | sí, por las bajas: producen el mismo diff que borrarlas |
+| El `path` se estrecha (`.` → `docs/`) | sí, baja parcial: la obligación queda intacta y el sujeto se vacía |
+| Rename con `id` estable | no por sí mismo |
+| Alta de una superficie nueva | no |
+| Se baja `governance.humanGate.policy` | sí, aunque ninguna superficie cambie |
+| Se quita `human_gate` de una fase | sí — es la puerta que gobierna todo el modelo |
+
+La rama base sale de `gitFlow.integrationBranch` y se califica a
+`refs/remotes/origin/<rama>`, **no** de lo que proponga el PR: elegir la base es
+elegir qué downgrades son detectables. Un tag llamado `origin/develop` no sirve
+como base, a propósito. En CI hace falta `fetch-depth: 0`.
+
+### El sujeto de la atestación, v2
+
+```
+{ slice, phase, tree_hash, contract_sha256, phase_contract_sha256 }
+```
+
+Los dos hashes nuevos cierran dos huecos distintos. `contract_sha256` hace que
+**una firma deje de valer si la política cambia después de firmar**
+(`authz-contract-drift`) — y se compara contra HEAD, no solo contra el ref
+atestado, porque recomputar en el ref atestado da siempre el mismo número y la
+mutación posterior sería invisible por construcción.
+
+No es frescura: que el `tree_hash` se mueva sigue siendo un **aviso**, porque el
+código cambia todo el tiempo y eso no invalida una aprobación. La política no
+cambia todo el tiempo.
+
+`phase_contract_sha256` entra porque `phase.human_gate` es el AND exterior de
+todo el modelo y vivía en un archivo que el sujeto no cubría.
+
+Una atestación emitida con el sujeto anterior se reconoce como tal
+(`signoff-subject-v1`) en lugar de reportarse como un *mismatch* genérico: la
+acción a tomar es re-firmar, no investigar.
+
+### La política, y sus límites
+
+```yaml
+governance:
+  humanGate:
+    policy: declarative          # attestation | declarative | none
+    overrides:
+      F2: declarative
+```
+
+Por **repositorio**, con override por **fase**. Ni por superficie —una fase se
+firma una vez, y dos políticas sobre la misma fase no tendrían veredicto
+definido— ni por slice, que es una unidad de trabajo del evaluado.
+
+La política **solo decide donde el riesgo no obliga**. Donde obliga,
+`attestation` es obligatoria sin excepción configurable. Y `none` no se degrada a
+su versión laxa cuando no se sostiene —`surfaces: []`, o alguna superficie
+crítica—: se **rechaza**.
+
+### Dónde se adjudica
+
+| Hecho | `doctor` | `upgrade` | `phase-gate` | CI |
+| --- | --- | --- | --- | --- |
+| Superficie sin clasificar | error | acción requerida | **bloquea** | como el gate |
+| Downgrade BASE→HEAD | error | acción requerida | **bloquea** | como el gate |
+| Sujeto v1 o deriva de política | error | acción requerida | **bloquea** | como el gate |
+| BASE irresoluble | aviso | aviso | **bloquea** (con puerta) | **bloquea** |
+
+`doctor` corre donde se desarrolla y no está concediendo nada; el gate sí. Por
+eso una base irresoluble avisa en uno y bloquea en el otro.
+
+Y el paso de autorización vive en el **workflow gestionado**: sin él, el eje
+quedaría adjudicado únicamente en la máquina del agente, y no habría evasión que
+inventar — bastaría no correr el comando.
+
 ## Puente de Codex — preflight obligatorio
 
 Si delegas trabajo a Codex (ver `AGENTS.md`), ejecuta esto antes:
