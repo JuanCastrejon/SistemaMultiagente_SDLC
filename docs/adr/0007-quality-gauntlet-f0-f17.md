@@ -28,6 +28,8 @@ Ningún agente escribe `quality_metrics` a mano. Nuevo `src/evidence-writer.js`:
 
 La firma humana deja de ser un string: se deriva de un review `APPROVED` verificado por `gh api` sobre el `head_sha` exacto, con allowlist de logins y `dismiss-stale-reviews` activo.
 
+> **SUPERSEDIDO** — ver el [addendum de 2026-08-14](#addendum-2026-08-14--la-firma-humana-de-este-adr-esta-supersedida). Ni el mecanismo (`gh api` sobre un review) ni el disparador (`tier`) son ya los de este ADR.
+
 ### D3. No-vacuidad antes que umbral
 
 Todo gate declara `min_denominator`. `survived == 0` sobre cero mutantes, `failed == 0` sobre cero tests E2E y `violations == 0` sobre una superficie cuyo path no existe son PASS hoy y son el modo de fallo más peligroso del sistema. El engine emite `gate-vacuous` **antes** de aplicar el operador.
@@ -61,6 +63,8 @@ Cero adapters de Vitest, Stryker o Playwright dentro del framework. El consumido
 ## Reubicación del gate humano
 
 **No se añade un quinto gate humano.** Cambia el *contenido* del gate existente de F4, que pasa a firmar la especificación (Gherkin en prosa + procedimientos de QA + tier). F13 **sigue bloqueante para tier core y money_path**; su degradación para tier standard y shell queda como decisión de gobierno, no como default silencioso.
+
+> **SUPERSEDIDO en su parte de autorización** — la frase «bloqueante para tier core y money_path» es exactamente el anclaje que el ADR 0008 D1 elimina. Ver el [addendum](#addendum-2026-08-14--la-firma-humana-de-este-adr-esta-supersedida). Lo que F13 *mide* no cambia; lo que cambia es qué obliga a firmarlo.
 
 Se propone además colapsar F2 y F3 en una sola firma, lo que baja de cuatro a tres los round-trips humanos por slice y paga el contenido añadido a F4. Es decisión de proceso y requiere aprobación.
 
@@ -222,3 +226,46 @@ Dos defectos del framework aparecieron al construir esto, ambos preexistentes:
 Un solo cambio, con test de regresión, sin tocar ningún archivo gestionado del consumidor: añadir en `commandVerdict` (`src/harness.js`) un precheck de existencia contra `packageJson.scripts` antes de invocar el package manager, y clasificar el paso ausente como `NOT_CONFIGURED` en vez de `pass`.
 
 Verificación binaria e inmediata: `sdlc verdict --target <piloto> --json` debe dejar de reportar `adr-integrity` y `active-slices` como `pass`, revelando que el `READY` actual es falso.
+
+## Addendum 2026-08-14 — la firma humana de este ADR está supersedida
+
+Este addendum no reescribe nada de arriba: lo marca. El historial se conserva
+porque explica por qué el mecanismo llegó a ser el que era.
+
+**Qué queda supersedido, y por qué.** La decisión P5 describe la firma humana
+como un review `APPROVED` verificado con `gh api` sobre el `head_sha`, y la
+sección de reubicación ancla la obligación de F13 a `tier core`/`money_path`.
+Ninguna de las dos cosas es hoy cierta:
+
+1. **El mecanismo cambió al implementarlo.** Con un solo maintainer GitHub
+   prohíbe auto-aprobar el PR propio, así que `platform-review` es
+   insatisfacible y `src/signoff.js` verifica un **commit vacío firmado**
+   (`git verify-commit`) cuyo sujeto se recomputa siempre. El razonamiento está
+   en la cabecera de ese módulo y en `governance.threatModel:
+   single-maintainer`. Este ADR nunca se actualizó, y la contradicción vivió
+   abierta hasta hoy.
+
+2. **El disparador cambia con el [ADR 0008](0008-modelo-de-riesgos-de-autorizacion.md).**
+   Su D1 separa los dos ejes: `tier` queda **solo** para umbrales de calidad, y
+   la obligación de firma se deriva de riesgos de autorización declarados por
+   superficie (`money_path`, `regulated_data`, `security_critical`,
+   `state_machine_critical`), fail-closed. La razón es medida y está en aquel
+   ADR: con la regla de este, esquivar una firma bastaba con bajar el tier — y
+   eso **también** compraba diez puntos menos de cobertura. La gobernanza
+   incentivaba degradar la calidad.
+
+   D5 añade que el downgrade lo adjudica **únicamente** `phase-gate`, y D7 que
+   la política (`attestation` / `declarative` / `none`) vive en
+   `quality-contract.yaml`, nunca en `.sdlc/config.json`.
+
+**Por qué este addendum existe ahora y no antes.** Mientras el ADR 0008 era
+trabajo posterior, la contradicción era deuda documental anotada en el roadmap.
+Desde que **el ADR 0008 entra en 2.0.0**, deja de serlo: quien implemente D1-D7
+tiene delante dos fuentes incompatibles sobre quién debe firmar, y la de arriba
+es la que invita a reintroducir el disparador por `tier` que D1 existe para
+eliminar.
+
+**Lo que este addendum NO toca.** Todo lo demás del ADR 0007 sigue vigente: la
+escalera de gates, la no-vacuidad, la evidencia append-only, el ratchet y su
+baseline. La única parte supersedida es **qué obliga a firmar y cómo se verifica
+esa firma**.

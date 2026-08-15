@@ -1025,7 +1025,9 @@ function commandSignoff(options) {
     payload: {
       status: "error",
       message:
-        "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>"
+        "Uso: sdlc signoff --slice <id> --phase <F> <--create [--record] [--signing-key <id>] [--allow-dirty] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>\n" +
+        "  --record enlaza la firma con la evidencia de la fase. Sin el, el commit firmado existe pero\n" +
+        "  la evidencia sigue apuntando a la anterior y el gate sigue bloqueando."
     }
   };
 }

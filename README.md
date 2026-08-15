@@ -179,7 +179,9 @@ Una salvedad honesta: si la rama base todavía no tiene el script (bootstrap, pr
 
 ```powershell
 # El sujeto (slice + fase + tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado
-sdlc signoff --slice <id> --phase <F> --create
+# `--record` enlaza la firma con la evidencia de su fase. SIN el, el commit firmado existe pero la
+# evidencia sigue apuntando a la anterior y el gate sigue bloqueando: es el paso que falta, no un extra.
+sdlc signoff --slice <id> --phase <F> --create --record
 sdlc signoff --slice <id> --phase <F> --verify --commit <sha>
 
 # Cada escenario Gherkin trae un sc_id cuyo hash debe coincidir con (capability, requirement, título)
@@ -226,13 +228,16 @@ Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`
 
 ## Qué cambia en 2.0.0
 
-Tres rupturas, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+Las rupturas **ya implementadas** son cuatro, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+
+> Esta lista **todavía no está cerrada**: el [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) entra en 2.0.0 y añadirá la suya («superficie sin clasificar ⇒ firma obligatoria»). Se declarará **al implementarla**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces y confunde más que el silencio.
 
 | Ruptura | Qué implica al actualizar |
 | --- | --- |
 | El sujeto de la firma cambia de formato | Las atestaciones anteriores **no verifican**. Hay que volver a firmar (`sdlc signoff … --create --record`). `doctor` y `upgrade` las nombran una por una. |
 | `install` deja de escribir superficies y stack de ejemplo | Un repo recién instalado sale en **error** en `doctor` hasta declarar sus superficies reales. Es deliberado: ver abajo. |
 | `.github/agents/surface-traceability.json` se genera desde `config.surfaces` | Cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; revísalo si lo consumes a mano. |
+| El hash de árbol pasa de 256 MiB a **64 MiB** por llamada | Un repo cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol, así que no alcanza a un repo normal — pero es silencioso para un monorepo grande. |
 
 ### El instalador ya no finge configuración
 

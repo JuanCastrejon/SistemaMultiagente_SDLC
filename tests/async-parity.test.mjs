@@ -531,24 +531,85 @@ console.log(
     "ni como `localeCompare`, que depende del ICU de la maquina"
   );
 
-  // Y que el comparador SE USE de verdad en `auditAttestations`. Probar el
-  // helper aislado no basta: la ronda 11 quito el comparador del sitio de
-  // llamada y la suite siguio 20/20 verde, porque `readdirSync` ya devolvia
-  // ese orden en esa maquina. La salida verificaba una CASUALIDAD del sistema
-  // de archivos, no el criterio.
+  // Y que el comparador SE USE de verdad en `auditAttestations`, que es una
+  // pregunta DISTINTA de si el comparador funciona. Historia, porque explica la
+  // forma de lo que sigue:
   //
-  // Se comprueba sobre el codigo porque el orden de `readdirSync` no se puede
-  // forzar desde aqui: es del sistema de archivos, no nuestro.
-  const fuenteHarness = fs.readFileSync(new URL("../src/harness.js", import.meta.url), "utf8");
-  const bloqueAudit = fuenteHarness.slice(fuenteHarness.indexOf("export async function auditAttestations"));
-  const usos = (bloqueAudit.match(/compareByUtf8Bytes/g) ?? []).length;
-  assert.ok(
-    usos >= 2,
-    `auditAttestations tiene que ordenar CON el comparador tanto los slices como sus archivos; se vieron ${usos} usos`
-  );
-  assert.ok(
-    !/\.sort\(\)\s*[;)\n]/.test(bloqueAudit),
-    "ningun `.sort()` sin comparador dentro de auditAttestations: eso ordena por UTF-16 o no ordena nada"
+  //   - Ronda 11: quitar el comparador del sitio de llamada dejaba la suite en
+  //     20/20 verde. `readdirSync` ya devolvia ese orden en esa maquina, asi que
+  //     la salida verificaba una CASUALIDAD del sistema de archivos.
+  //   - Ronda 12: el primer intento de arreglo escaneaba el TEXTO de
+  //     `src/harness.js` buscando dos menciones del comparador y ningun
+  //     `.sort()` pelado. Cayo con
+  //     `.sort((a, b) => (console.log(compareByUtf8Bytes(a, b)), 0))`: conserva
+  //     las dos menciones, no tiene `.sort()` sin argumentos, y no ordena nada.
+  //     Un test que lee el codigo en vez de ejecutarlo mide la forma, no el
+  //     efecto.
+  //
+  // Lo que sigue es conductual: se fuerza a `readdirSync` a devolver el orden
+  // INVERSO y se exige la MISMA salida. Si el codigo ordena, da igual lo que
+  // entregue el sistema de archivos; si no ordena —o "ordena" con un
+  // comparador que devuelve 0—, la salida sale invertida y el caso muere.
+  //
+  // Se puede interceptar porque `src/harness.js` hace `import fs from
+  // "node:fs"` y resuelve `fs.readdirSync` EN EL MOMENTO de llamarlo, sobre el
+  // mismo objeto de modulo que este test. La afirmacion de la ronda 11 —"el
+  // orden de readdirSync no se puede forzar desde aqui"— era falsa.
+
+  // Dos fases mas por slice, para que el orden INTERNO tambien discrimine: hay
+  // dos ordenaciones en `auditAttestations` (slices y sus archivos) y una sola
+  // fase por slice solo ejercitaba la primera. Las fases son ASCII a la fuerza
+  // —`schemas/phase-evidence.schema.json` exige `^F(0|…|17)$`, y un nombre
+  // fuera de ese patron no llega a producir hallazgo—, asi que aqui no se
+  // separa bytes de UTF-16: eso ya lo cubren los slices. Lo que este nivel
+  // discrimina es ORDENAR contra NO ORDENAR. Por bytes: `F13` < `F2` < `F3_5`.
+  const fasesExtra = ["F2", "F3_5"];
+  for (const slice of slices) {
+    for (const fase of fasesExtra) {
+      fs.writeFileSync(
+        path.join(repo, ".github", "agent-state", "evidence", slice, `${fase}.yaml`),
+        YAML.stringify({
+          phase: fase,
+          slice,
+          agent_id: "t",
+          started_at: new Date(0).toISOString(),
+          outputs: [],
+          validators_run: [],
+          human_gate_signoff: { required: true, approved_by: "x", attestation_commit: "0".repeat(40) }
+        }),
+        "utf8"
+      );
+    }
+  }
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "fases extra"]);
+
+  const esperadoParejas = [];
+  for (const slice of ["Z-slice", "a-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"]) {
+    for (const fase of ["F13", "F2", "F3_5"]) esperadoParejas.push(`${slice}/${fase}`);
+  }
+
+  const readdirReal = fs.readdirSync;
+  let resultadoInvertido;
+  try {
+    fs.readdirSync = (dir, opciones) => [...readdirReal(dir, opciones)].reverse();
+    // La inversion tiene que MORDER: si el sistema de archivos ya devolviera
+    // el orden inverso, este caso volveria a medir una casualidad — la de
+    // signo contrario.
+    assert.notDeepEqual(
+      fs.readdirSync(path.join(repo, ".github", "agent-state", "evidence")),
+      readdirReal(path.join(repo, ".github", "agent-state", "evidence")),
+      "el parche de readdirSync tiene que cambiar el orden observado"
+    );
+    resultadoInvertido = await auditAttestations(repo);
+  } finally {
+    fs.readdirSync = readdirReal;
+  }
+
+  assert.deepEqual(
+    resultadoInvertido.findings.map((f) => `${f.slice}/${f.phase}`),
+    esperadoParejas,
+    "con `readdirSync` devolviendo el orden INVERSO la salida no cambia: la ordena el codigo, no el sistema de archivos"
   );
 }
 

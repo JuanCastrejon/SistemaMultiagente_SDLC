@@ -6,7 +6,9 @@
 
 Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
 
-> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **cuatro** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
+> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **cuatro rupturas ya implementadas** están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa (`sdlc signoff … --create --record`; sin `--record` el gate sigue bloqueando).
+>
+> **La lista no está cerrada.** El [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) entra en esta misma versión y trae la suya: *superficie sin clasificar ⇒ firma obligatoria*. No está implementado, así que **no se declara todavía** — anunciar una ruptura que el código no ejerce es un defecto que estas notas ya cometieron dos veces. 2.0.0 no se publica hasta que esté dentro.
 
 ### Fixed — firma humana (P5, ADR 0007)
 
