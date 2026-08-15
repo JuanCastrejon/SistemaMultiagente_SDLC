@@ -459,7 +459,13 @@ console.log(
   // `！` (U+FF01, BMP alto) y `😀` (U+1F600, suplementario) ordenan AL REVES:
   // en UTF-16 el emoji usa surrogates (D83D…) que son menores que FF01, y en
   // bytes UTF-8 no. Verificado antes de escribirlo.
-  const slices = ["a-slice", "Z-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"];
+  //
+  // Y `a-a`/`a-z`, de la ronda 12: los cinco anteriores empiezan todos por un
+  // byte DISTINTO, asi que un comparador que solo mire el primer byte
+  // —`Buffer.from(a)[0] - Buffer.from(b)[0]`— los ordenaba bien y sobrevivia.
+  // Estos dos comparten los dos primeros bytes y solo se separan en el tercero,
+  // asi que obligan a comparar la cadena entera.
+  const slices = ["a-slice", "Z-slice", "ñ-slice", "！-slice", "\u{1F600}-slice", "a-a", "a-z"];
   {
     const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
     const porUtf16Tmp = [...slices].sort();
@@ -467,6 +473,15 @@ console.log(
       porBytesTmp,
       porUtf16Tmp,
       "el conjunto tiene que DISCRIMINAR: si ordena igual por bytes y por UTF-16, este caso no prueba nada"
+    );
+    // Y tiene que discriminar tambien un comparador que solo mire el PRIMER
+    // byte. Sin `a-a`/`a-z` no lo hacia, y esa mutacion sobrevivio a la ronda
+    // 12 entera. Se afirma aqui para que el dia que alguien recorte el conjunto
+    // se entere de que lo esta desafilando.
+    assert.notDeepEqual(
+      porBytesTmp,
+      [...slices].sort((a, b) => Buffer.from(a, "utf8")[0] - Buffer.from(b, "utf8")[0]),
+      "el conjunto tiene que distinguir el orden por bytes de una comparacion del PRIMER byte"
     );
   }
   for (const slice of slices) {
@@ -503,7 +518,7 @@ console.log(
   // que intenta descartar.
   assert.deepEqual(
     orden,
-    ["Z-slice", "a-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"],
+    ["Z-slice", "a-a", "a-slice", "a-z", "ñ-slice", "！-slice", "\u{1F600}-slice"],
     "orden por bytes UTF-8, escrito a mano"
   );
 
@@ -585,7 +600,7 @@ console.log(
   git(["commit", "--quiet", "-m", "fases extra"]);
 
   const esperadoParejas = [];
-  for (const slice of ["Z-slice", "a-slice", "ñ-slice", "！-slice", "\u{1F600}-slice"]) {
+  for (const slice of ["Z-slice", "a-a", "a-slice", "a-z", "ñ-slice", "！-slice", "\u{1F600}-slice"]) {
     for (const fase of ["F13", "F2", "F3_5"]) esperadoParejas.push(`${slice}/${fase}`);
   }
 
