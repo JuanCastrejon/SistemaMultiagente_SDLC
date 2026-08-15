@@ -463,9 +463,28 @@ console.log(
   // Y `a-a`/`a-z`, de la ronda 12: los cinco anteriores empiezan todos por un
   // byte DISTINTO, asi que un comparador que solo mire el primer byte
   // —`Buffer.from(a)[0] - Buffer.from(b)[0]`— los ordenaba bien y sobrevivia.
-  // Estos dos comparten los dos primeros bytes y solo se separan en el tercero,
-  // asi que obligan a comparar la cadena entera.
-  const slices = ["a-slice", "Z-slice", "ñ-slice", "！-slice", "\u{1F600}-slice", "a-a", "a-z"];
+  // Estos dos comparten los dos primeros bytes y solo se separan en el tercero.
+  //
+  // Arreglar eso con UN par mueve el agujero en vez de cerrarlo: un comparador
+  // de los tres primeros bytes seguiria pasando. Asi que el conjunto cubre dos
+  // familias mas y se afirma la propiedad GENERAL abajo —ningun prefijo de N
+  // bytes reproduce el orden—, en vez de un conteo concreto:
+  //   - `prefijo-comun-a`/`-b` se separan en el byte 15;
+  //   - `a-a`/`a-a-a`, donde uno es PREFIJO del otro, cubren la longitud.
+  // El orden de entrada esta desordenado a proposito: `sort` es estable, y con
+  // la entrada ya ordenada un comparador que colapsa un par lo dejaria pasar.
+  const slices = [
+    "a-slice",
+    "Z-slice",
+    "ñ-slice",
+    "！-slice",
+    "\u{1F600}-slice",
+    "a-z",
+    "a-a",
+    "prefijo-comun-b",
+    "prefijo-comun-a",
+    "a-a-a"
+  ];
   {
     const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
     const porUtf16Tmp = [...slices].sort();
@@ -474,15 +493,20 @@ console.log(
       porUtf16Tmp,
       "el conjunto tiene que DISCRIMINAR: si ordena igual por bytes y por UTF-16, este caso no prueba nada"
     );
-    // Y tiene que discriminar tambien un comparador que solo mire el PRIMER
-    // byte. Sin `a-a`/`a-z` no lo hacia, y esa mutacion sobrevivio a la ronda
-    // 12 entera. Se afirma aqui para que el dia que alguien recorte el conjunto
-    // se entere de que lo esta desafilando.
-    assert.notDeepEqual(
-      porBytesTmp,
-      [...slices].sort((a, b) => Buffer.from(a, "utf8")[0] - Buffer.from(b, "utf8")[0]),
-      "el conjunto tiene que distinguir el orden por bytes de una comparacion del PRIMER byte"
-    );
+    // Y tiene que discriminar cualquier comparador que mire solo un PREFIJO de
+    // N bytes. La ronda 12 sobrevivio entera a N=1 porque los cinco slices de
+    // entonces empezaban todos por un byte distinto. Se afirma la familia
+    // completa, no el caso que se encontro: asi, el dia que alguien recorte el
+    // conjunto, el test dice exactamente que N dejo de cubrir.
+    for (let n = 1; n <= 14; n++) {
+      assert.notDeepEqual(
+        porBytesTmp,
+        [...slices].sort((a, b) =>
+          Buffer.compare(Buffer.from(a, "utf8").subarray(0, n), Buffer.from(b, "utf8").subarray(0, n))
+        ),
+        `el conjunto tiene que distinguir el orden por bytes de una comparacion de los primeros ${n} bytes`
+      );
+    }
   }
   for (const slice of slices) {
     const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
@@ -518,7 +542,18 @@ console.log(
   // que intenta descartar.
   assert.deepEqual(
     orden,
-    ["Z-slice", "a-a", "a-slice", "a-z", "ñ-slice", "！-slice", "\u{1F600}-slice"],
+    [
+      "Z-slice",
+      "a-a",
+      "a-a-a",
+      "a-slice",
+      "a-z",
+      "prefijo-comun-a",
+      "prefijo-comun-b",
+      "ñ-slice",
+      "！-slice",
+      "\u{1F600}-slice"
+    ],
     "orden por bytes UTF-8, escrito a mano"
   );
 
@@ -600,7 +635,18 @@ console.log(
   git(["commit", "--quiet", "-m", "fases extra"]);
 
   const esperadoParejas = [];
-  for (const slice of ["Z-slice", "a-a", "a-slice", "a-z", "ñ-slice", "！-slice", "\u{1F600}-slice"]) {
+  for (const slice of [
+    "Z-slice",
+    "a-a",
+    "a-a-a",
+    "a-slice",
+    "a-z",
+    "prefijo-comun-a",
+    "prefijo-comun-b",
+    "ñ-slice",
+    "！-slice",
+    "\u{1F600}-slice"
+  ]) {
     for (const fase of ["F13", "F2", "F3_5"]) esperadoParejas.push(`${slice}/${fase}`);
   }
 
