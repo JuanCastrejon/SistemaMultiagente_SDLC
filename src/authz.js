@@ -232,6 +232,27 @@ export function evaluarObligacionDeFase({ phase, contract }) {
  * y cree dos superficies sin clasificar": las dos producen el mismo diff del
  * contrato. Ante dos lecturas indistinguibles se elige la que no concede.
  */
+// ¿El `path` de HEAD cubre menos arbol que el de BASE?
+//
+// Se decide sobre los paths DECLARADOS, no sobre los archivos que resuelven: es
+// puro, es barato, y es exacto para lo que importa — que el nuevo path este
+// DENTRO del viejo. Un movimiento lateral (`apps/api` -> `servicios/api`) no es
+// estrechar: puede cubrir mas, menos o lo mismo, y decidirlo pediria comparar
+// dos arboles de git. Eso se deja fuera a proposito en vez de fingir que este
+// criterio lo cubre.
+function normalizarRutaDeSuperficie(valor) {
+  const texto = String(valor ?? "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  return texto === "" || texto === "." ? "." : texto;
+}
+
+export function estrechaLaSuperficie(pathBase, pathHead) {
+  const base = normalizarRutaDeSuperficie(pathBase);
+  const head = normalizarRutaDeSuperficie(pathHead);
+  if (base === head) return false;
+  if (base === ".") return head !== ".";
+  return head.startsWith(`${base}/`);
+}
+
 export function compararObligacion(surfacesBase, surfacesHead) {
   const identidadBase = auditSurfaceIdentity(surfacesBase ?? []);
   const identidadHead = auditSurfaceIdentity(surfacesHead ?? []);
@@ -258,7 +279,20 @@ export function compararObligacion(surfacesBase, surfacesHead) {
     const ahora = requiredForSurface(surfaceHead);
     // Lo que cuenta es la TRANSICION del booleano, no cada mutacion de campo:
     // poner un riesgo en false mientras otro sigue en true no cambia nada.
-    if (antes && !ahora) downgrades.push({ id, motivo: "reclasificacion", desde: true, hasta: false });
+    if (antes && !ahora) {
+      downgrades.push({ id, motivo: "reclasificacion", desde: true, hasta: false });
+      continue;
+    }
+    // Y la BAJA PARCIAL, que no es simetrica con un rename y por eso se mira
+    // aparte: la obligacion es un OR por repositorio y NO mira el `path`; el
+    // sujeto de la firma SI, porque es el arbol de las superficies. Una
+    // superficie que conserva su `id` y su clasificacion y cambia `path: .` por
+    // `path: docs/` mantiene la obligacion intacta y VACIA lo que la firma
+    // cubre: sale una atestacion criptograficamente valida sobre documentacion
+    // mientras el codigo con los privilegios queda fuera del hash.
+    if (antes && estrechaLaSuperficie(surfaceBase.path, surfaceHead.path)) {
+      downgrades.push({ id, motivo: "baja-parcial", desde: true, hasta: true });
+    }
   }
 
   for (const id of porIdHead.keys()) {

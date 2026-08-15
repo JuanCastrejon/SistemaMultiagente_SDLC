@@ -228,9 +228,9 @@ Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`
 
 ## Qué cambia en 2.0.0
 
-Las rupturas **ya implementadas** son ocho, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+Las rupturas son **trece**, casi todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
 
-> Esta lista **todavía no está cerrada**: el [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) entra en 2.0.0 y añadirá la suya («superficie sin clasificar ⇒ firma obligatoria»). Se declarará **al implementarla**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces y confunde más que el silencio.
+> El [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) ya está implementado; sus cinco rupturas son las últimas de la tabla. Se declararon **al implementarlas**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces.
 
 | Ruptura | Qué implica al actualizar |
 | --- | --- |
@@ -242,6 +242,11 @@ Las rupturas **ya implementadas** son ocho, todas salidas de **operar** el frame
 | El guard exige base REMOTA calificada (`refs/remotes/…`) | Un tag o rama local llamado `origin/<rama>` ya no sirve como base: secuestraba la comparación entera. |
 | El workflow ya no cae a la copia del checkout | Si la rama de integración no trae el guard, falla con `spec-boundary-guard-ausente-en-base` en vez de ejecutar el script que el evaluado controla. |
 | El alcance del guard crece | Configs de gate por nombre a cualquier profundidad, `**` que cruza barras de verdad, autoprotección por sufijo de ruta, rutas NUL-delimitadas y rechazo de patrones patológicos. Puede bloquear lo que antes pasaba. |
+| Toda superficie sin clasificar exige atestación firmada | `tier` deja de gobernar la autorización. Cuatro riesgos por superficie deciden la firma, y ausente no es `false`. Aplica a F4/F13/F14. |
+| El sujeto de la atestación pasa a v2 | Gana `contract_sha256` y `phase_contract_sha256`. Las firmas anteriores no verifican, y la firma deja de valer si la política cambia después de firmar. |
+| `phase-gate` exige rama de integración remota | Leída de `gitFlow.integrationBranch`. Sin ella bloquea; pedir otra base es `authz-base-mismatch`. En CI, `fetch-depth: 0`. |
+| `upgrade` termina en `action-required` con el eje pendiente | Y `doctor` lo reporta, con severidades distintas por comando. |
+| El workflow gestionado gana un paso de autorización | Sin él, el eje se adjudicaba solo donde el evaluado ejecuta. |
 
 ### El instalador ya no finge configuración
 
