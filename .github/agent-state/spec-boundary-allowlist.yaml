@@ -1,0 +1,49 @@
+# Excepciones a la frontera de especificacion — repo del FRAMEWORK.
+#
+# Este repo es un caso especial y conviene decir por que, porque desde fuera
+# parece que el arbitro se estuviera concediendo permisos a si mismo.
+#
+# En un CONSUMIDOR, `scripts/validate-spec-boundary.mjs` y los workflows se
+# INSTALAN: nadie los edita, y tocarlos es exactamente la señal que el guard
+# existe para dar. Aqui se AUTORAN — son el codigo fuente del framework. El
+# guard no puede deducir esa diferencia mirando una ruta, asi que se declara
+# como excepcion con caducidad en vez de dejarla como agujero permanente.
+#
+# Las cuatro reglas se cumplen: `approved_by` esta en `governance.maintainers`
+# de `.sdlc/config.json`, `attestation_commit` es un commit firmado por ese
+# mismo mantenedor, y `expires_at` obliga a revisar esta lista en noviembre en
+# vez de heredarla para siempre.
+#
+# NOTA DE BOOTSTRAP: una excepcion solo cuenta cuando ya esta MERGEADA en la
+# rama de integracion — esa es la asimetria que impide que un PR se firme su
+# propio permiso. Por eso el PR que introduce a la vez el job de CI y esta
+# lista no puede pasar su propio gate, y su merge se hace con `--admin` y queda
+# documentado en el PR. A partir del siguiente, el control se sostiene solo.
+
+version: 1
+allowlist:
+  - path: .github/workflows/ci.yml
+    reason: el arbitro de este repo es codigo fuente del framework, no configuracion instalada
+    approved_by: juandavidcastrejonbermudes@gmail.com
+    attestation_commit: c361992e1b962843df673d36612869dfb59247b7
+    expires_at: 2026-11-13T00:00:00Z
+  - path: .github/workflows/regression-install.yml
+    reason: control de release del propio framework
+    approved_by: juandavidcastrejonbermudes@gmail.com
+    attestation_commit: c361992e1b962843df673d36612869dfb59247b7
+    expires_at: 2026-11-13T00:00:00Z
+  - path: templates/scripts/validate-spec-boundary.mjs
+    reason: fuente del guard; en un consumidor se instala, aqui se escribe
+    approved_by: juandavidcastrejonbermudes@gmail.com
+    attestation_commit: c361992e1b962843df673d36612869dfb59247b7
+    expires_at: 2026-11-13T00:00:00Z
+  - path: templates/.github/agent-state/spec-boundary-allowlist.yaml
+    reason: plantilla de la allowlist que se instala en el consumidor
+    approved_by: juandavidcastrejonbermudes@gmail.com
+    attestation_commit: c361992e1b962843df673d36612869dfb59247b7
+    expires_at: 2026-11-13T00:00:00Z
+  - path: .sdlc/config.json
+    reason: la lista de mantenedores de este repo
+    approved_by: juandavidcastrejonbermudes@gmail.com
+    attestation_commit: c361992e1b962843df673d36612869dfb59247b7
+    expires_at: 2026-11-13T00:00:00Z
