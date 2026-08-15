@@ -88,9 +88,35 @@ debilitar la política exige tocar una ruta protegida por el guard de frontera.
 Con una advertencia que D4 desarrolla: **el guard decide por ruta, no por
 semántica ni por autorización**. Es condición necesaria, no suficiente.
 
+Con dos condiciones que estaban implícitas y hay que hacer explícitas.
+
+**La primera: el guard alcanza el contrato solo si la instalación está en la
+raíz del repo git.** Los patrones de `DEFAULT_LOCKED` se comparan por segmentos
+desde esa raíz, así que un consumidor instalado con
+`sdlc adopt --target apps/extension` tiene su contrato en
+`apps/extension/quality-contract.yaml`, ruta que el guard **no** protege. Sin
+corregirlo, el argumento de D2 —«ya está protegido»— describe también a la
+opción descartada. Por eso ambos contratos pasan a protegerse por **basename a
+cualquier profundidad**, que es la misma corrección que ya se aplicó a
+`vitest.config` y `stryker.conf` por esta misma topología.
+
+**La segunda: `quality-contract.yaml` es un archivo GESTIONADO.** Su generador
+emite hoy `{id, path, tier, money_path, has_ui}` y no conoce los otros tres
+riesgos ni `governance`. Clasificar riesgos lo convertiría en «gestionado
+modificado localmente» y cada `upgrade` lo reportaría como conflicto cuya única
+salida es `--accept-managed`, que lo desengancha **para siempre** de las
+actualizaciones del framework. No es una evasión —es fail-closed— pero siembra
+el reflejo de «acepta el override para que deje de romper», que es cómo se apaga
+un control sin decidir apagarlo. La clasificación de riesgos y
+`governance.humanGate` son **propiedad del consumidor, no del template**: el
+generador pasa a **preservar** los bloques `surfaces` y `governance` existentes y
+solo los escribe cuando el archivo no existe.
+
 La divergencia entre `.sdlc/config.json` y `quality-contract.yaml` pasa de
-`warning` a **error** en `signoff` y `phase-gate`: un aviso no protege un
-control, y hoy el cruce solo compara `id@path`, no `tier` ni los riesgos.
+`warning` a **error** en `signoff` y `phase-gate`, y compara `id`, `path`, `tier`
+**y los cuatro riesgos**. Hoy compara solo `id@path`: elevar la severidad sin
+ampliar lo comparado no aportaría ninguna cobertura a este eje — sería un aviso
+más ruidoso sobre exactamente lo mismo.
 
 ### D3. Sujeto de atestación v2
 
@@ -99,9 +125,23 @@ control, y hoy el cruce solo compara `id@path`, no `tier` ni los riesgos.
 ```
 
 `contract_sha256` es el hash de los bytes del blob de `quality-contract.yaml`
-**en el ref atestado**, nunca un valor declarado ni leído del working tree. Una
-firma deja de valer si alguien muta la política bajo la que se emitió. El sujeto
-se sigue recomputando siempre, jamás se recibe declarado.
+**en el ref atestado**, nunca un valor declarado ni leído del working tree. El
+sujeto se sigue recomputando siempre, jamás se recibe declarado.
+
+Y la verificación compara **dos** valores, no uno: el `contract_sha256` del
+sujeto —el del ref atestado— y el de HEAD. Recomputar solo en el ref atestado da
+siempre el mismo número, así que una mutación posterior sería invisible **por
+construcción**: la propiedad que este ADR promete —«una firma deja de valer si
+alguien muta la política bajo la que se emitió»— no se sigue de la definición
+sola. Si divergen, la política vigente ya no es la firmada y la atestación **no
+vale**: `authz-contract-drift`, y `phase-gate` bloquea.
+
+No es frescura, y la distinción importa porque confundirlas ya costó un error en
+este mismo mecanismo: el `tree_hash` movido sigue siendo un **aviso**
+(`fresh: false`) porque el código cambia todo el tiempo y eso no invalida una
+aprobación. La política no cambia todo el tiempo, y cuando cambia, lo aprobado
+bajo la anterior deja de estar aprobado. Reparación:
+`sdlc signoff --slice <id> --phase <F> --create --record`.
 
 ### D4. Obligación efectiva BASE → HEAD
 
@@ -148,6 +188,19 @@ Verificar la atestación que la evidencia declara —lo que 2.0.0 ya hace— **n
 basta**: no detecta una obligación que se eliminó. `phase-gate` debe además
 **exigir** atestación cuando BASE la requería.
 
+Y `phase-gate` tiene que **correr donde el evaluado no manda**. Hoy
+`quality-verify.yml` invoca `governance-check` y `quality-gate`, y ninguno de los
+dos mira el gate humano ni las atestaciones: el eje de autorización quedaría
+adjudicado únicamente en la máquina del agente — la misma que el encabezado de
+ese workflow declara *advisory*. Sin un paso en el workflow gestionado, este ADR
+describe un acuerdo de caballeros, no un control. Es el defecto que el ADR 0007
+ya cerró para calidad —re-ejecutar en CI y comparar— reabierto para
+autorización.
+
+`.github/workflows/` está en `DEFAULT_LOCKED`, así que ese paso no lo puede
+quitar el evaluado sin excepción declarada. Consecuencia de alcance: el workflow
+gestionado cambia en 2.0.0, y eso va en la lista de rupturas.
+
 La comparación BASE→HEAD de D4 la decide **únicamente** `phase-gate`.
 `signoff --create/--record/--verify` construyen y verifican atestaciones, pero no
 adjudican downgrades: normalmente ni siquiera conocen el BASE de la evaluación, y
@@ -187,6 +240,19 @@ trimestre, cuesta más que clasificar superficies una vez. Una versión sin
 publicar puede crecer en alcance; una publicada no. Consecuencia directa y
 asumida: **2.0.0 no se publica hasta que D1–D7 estén implementados**, y su lista
 de rupturas deja de ser cuatro.
+
+**El fail-closed retroactivo no admite período de gracia, pero sí tiene
+alcance.** La obligación derivada de riesgos aplica a las fases con `human_gate`
+**posteriores a que exista código que firmar**: F4, F13 y F14. En F2 y F3
+—revisión de borrador y validación del issue— no hay árbol de superficies que
+atestar, y exigir allí una atestación cuyo sujeto es el hash de las superficies
+produce un bloqueo del que **no se sale**: en un repo recién instalado,
+`signoff --create` devuelve `signoff-empty-subject`, y la salida —arreglar
+`surfaces`— pasa por `quality-contract.yaml`, ruta protegida cuyo permiso se
+aprueba… en F2/F3. Un control insatisfacible es exactamente el argumento con el
+que el ADR 0007 descartó `platform-review`, y su desenlace previsible es que
+alguien relaje el fail-closed bajo presión. En F2 y F3 el gate humano conserva su
+forma actual, etiquetado como garantía no verificable.
 
 **Coste para equipos pequeños.** Un repo sin riesgos declarados como críticos no
 paga nada: `declarative` con etiqueta visible. El coste aparece exactamente donde
@@ -269,6 +335,15 @@ que una revisión humana la clasifique.
 superficie:**
 
 - **`surfaces: []`** → obliga. Ya es la regla desde 2.0.0 y no cambia.
+- **`surfaces` ausente, `null`, o que no sea una lista** → el contrato es
+  **inválido**, código `authz-contract-surfaces-invalid`. Y hay que decirlo
+  aparte del caso vacío porque el modo de fallo es distinto y mucho peor:
+  renombrar la clave a `Surfaces:` deja que un `(contract.surfaces ?? []).some(…)`
+  —el patrón literal que este repo ya usa en cuatro sitios— evalúe un OR sobre el
+  conjunto vacío, que es `false`. Con una sola letra mayúscula, ninguna
+  superficie obligaría en ninguna fase. Es la misma vacuidad que el ADR 0007
+  persigue con `min_denominator`, aplicada al eje de autorización: **la validez
+  del contrato se comprueba ANTES de evaluar el OR, nunca dentro de él.**
 - **`id` duplicado** → el contrato entero es **inválido**, no «esa superficie
   obliga». Con dos superficies del mismo `id`, el emparejamiento BASE↔HEAD de G2
   es ambiguo, y una ambigüedad en la identidad no se puede resolver
@@ -295,6 +370,16 @@ código; un `id` es la identidad que el consumidor declara y mantiene.
 | `path` cambia, `id` estable (**rename/move**) | se compara con normalidad | no por sí mismo |
 | **split** (un `id` se parte en varios) | el `id` original desaparece → es una baja | sí, por la baja |
 | **merge** (varios `id` se funden en uno) | los `id` absorbidos desaparecen → bajas | sí, por las bajas |
+| `path` se **estrecha** con `id` estable | el árbol que la superficie resuelve deja de contener archivos que resolvía en BASE | **sí**: baja parcial |
+
+La última fila no es simétrica con «rename/move», y por eso se explica. La
+obligación es un OR por repositorio y **no mira el `path`**; el sujeto de D3 sí,
+porque es el árbol de las superficies. Una superficie que conserva su `id` y su
+clasificación y cambia `path: .` por `path: docs/` mantiene la obligación intacta
+y **vacía lo que la firma cubre**: sale una atestación criptográficamente válida
+sobre `docs/` mientras el código con los privilegios queda fuera del hash. Es
+`signoff-empty-subject` con un archivo dentro — el caso degenerado, cero
+archivos, ya estaba cerrado desde 2.0.0; el útil para un atacante no lo estaba.
 
 Split y merge se tratan como bajas **a propósito**. No hay forma fiable de
 distinguir «partí `api` en `api-http` y `api-jobs`» de «borré `api` y creé dos
@@ -310,12 +395,25 @@ downgrade, porque la obligación seguía siendo `true`.
 **HEAD** es el commit evaluado: `HEAD` en local; en CI, el SHA del checkout del
 PR.
 
-**BASE** es `git merge-base HEAD <integración>`, donde `<integración>` se
-resuelve **exactamente igual que en el guard de frontera**:
-`refs/remotes/origin/<rama>`, calificada, y rechazando lo que no viva bajo
-`refs/remotes/`. No es una coincidencia de estilo: es el mismo ataque: un tag
-llamado `origin/develop` secuestra la base y hace que BASE y HEAD sean el mismo
-árbol, con lo que ningún downgrade es detectable.
+**BASE** es `git merge-base HEAD refs/remotes/origin/<integración>`, donde
+`<integración>` es la rama **declarada** en `gitFlow.integrationBranch` de
+`.sdlc/config.json` — no la que proponga el PR, ni la que traiga el entorno.
+
+La ref se califica igual que en el guard de frontera: se resuelve el nombre
+completo y se exige que viva bajo `refs/remotes/`, dos comprobaciones
+independientes. No es coincidencia de estilo, es el mismo ataque — un tag
+llamado `origin/develop` hace que BASE y HEAD sean el mismo árbol, y entonces
+ningún downgrade es detectable.
+
+**Pero calificar el namespace no basta.** La cadena de candidatos del guard
+(`--base`, `origin/$GITHUB_BASE_REF`, `origin/develop`, `origin/main`) deja que
+el evaluado **elija contra qué se le compara**, y elegir una base que ya contiene
+el contrato debilitado hace que no exista transición `true → false` que
+detectar: se empuja `sandbox` con la política ya bajada y se abre el PR contra
+`sandbox`. Lo que hoy protege al guard no es su `resolveBase` — es que el
+workflow le pasa `--base` interpolado desde la rama declarada, y `phase-gate` no
+tiene quien se lo pase. Por eso la rama sale de la **configuración**, nunca de la
+cadena de candidatos.
 
 | Situación | Código | Qué hace |
 |---|---|---|
@@ -323,6 +421,7 @@ llamado `origin/develop` secuestra la base y hace que BASE y HEAD sean el mismo
 | Hay ref pero `merge-base` falla (clon superficial) | `authz-base-unreachable` | **bloquea** |
 | El contrato no existe o no se puede leer en BASE | `authz-base-contract-unreadable` | **bloquea** |
 | El contrato de BASE existe pero es inválido | `authz-base-contract-invalid` | **bloquea** |
+| `--base` o `GITHUB_BASE_REF` apuntan a una rama distinta de la declarada | `authz-base-mismatch` | **bloquea** |
 
 Las cuatro bloquean por la misma razón, que es la doctrina del ADR 0007 aplicada
 aquí: **no poder medir no puede parecerse a no tener nada que reportar**. Y la
@@ -340,10 +439,19 @@ recorrer, así que no añade un paso nuevo al consumidor.
 Tres cosas pueden hablar sobre si una fase exige firma. El orden es:
 
 ```
-exigeAtestacion(fase, contrato) =
-      fase.human_gate === true
-  AND ( algunaSuperficieObliga(contrato)  OR  policyEfectiva(fase) === "attestation" )
+modoExigido(fase, contrato) ∈ { ninguna, declarative, attestation }
+
+  si fase.human_gate !== true            → ninguna
+  si algunaSuperficieObliga(contrato)    → attestation
+  si no                                  → policyEfectiva(fase)
 ```
+
+**Tres estados, no un booleano.** Con un booleano, `declarative` y `none` son
+indistinguibles cuando ningún riesgo obliga — y ahí vive hoy un bloqueo real
+(`human-gate-signoff-missing`) que una lectura literal de la fórmula booleana
+borraría: bajo `declarative`, la fase pasaría sin firma **de ninguna clase**, que
+es más laxo que el estado actual del framework. Un ADR que endurece un control
+no puede aflojarlo por un descuido de tipos.
 
 Leído en palabras, y en orden de autoridad:
 
@@ -359,9 +467,35 @@ Leído en palabras, y en orden de autoridad:
    una firma no verificable, **siempre etiquetada como tal en el veredicto**.
    `none` no exige nada.
 
+4. **La puerta también se puede quitar, y eso es un downgrade.**
+   `phase.human_gate` es el AND exterior de todo el modelo y vive en **otro
+   archivo**, que ni el sujeto de D3 ni la comparación de D4 miraban. Poner
+   `human_gate: false` en F13 apagaba el gate entero sin mover un solo riesgo ni
+   un solo hash. Es el hecho 3 del Contexto —«el interruptor del control estaba
+   fuera del control»— reproducido un nivel más arriba, dentro del ADR que
+   existe para cerrarlo. Por eso:
+
+   - el sujeto de D3 pasa a ser
+     `{ slice, phase, tree_hash, contract_sha256, phase_contract_sha256 }`;
+   - D4 gana una transición de segunda clase: `human_gate` que pasa de `true` en
+     BASE a `false` en HEAD —o una fase con `human_gate` que **desaparece**— es
+     `authz-human-gate-removed` y exige autorización de reducción, con la misma
+     doctrina de bajas de G2. Es la única excepción a «los controles de calidad
+     no son downgrades de autorización», y no la contradice: `human_gate` no es
+     un control de calidad, es la puerta que este apartado pone **por encima** de
+     todos ellos;
+   - los dos contratos se protegen por **basename a cualquier profundidad**, no
+     solo por su ruta en la raíz —un consumidor instalado con
+     `sdlc adopt --target apps/extension` tiene su contrato fuera del alcance de
+     un patrón anclado— y desaparece la ruta alternativa
+     `.github/agent-state/phase-contract.yaml` de los candidatos que el harness
+     acepta: un contrato de fases en una ruta que ninguna lista protege es una
+     puerta trasera al interruptor maestro.
+
 Corolario que conviene decir en voz alta: una superficie sin clasificar hace
-`attestation` obligatoria en **todas** las fases con `human_gate`, y ninguna
-política la baja. Ese es el fail-closed retroactivo que este ADR acepta.
+`attestation` obligatoria en las fases con `human_gate` **que tienen algo que
+atestar**, y ninguna política la baja. Ese es el fail-closed retroactivo que este
+ADR acepta — con el alcance por fase que las Consecuencias fijan.
 
 ### G5. Alcance de `humanGate.policy`
 

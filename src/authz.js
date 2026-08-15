@@ -87,9 +87,22 @@ export function auditSurfaceIdentity(surfaces) {
  * repo sin clasificar.
  */
 export function contractObliga(contract) {
-  // Un contrato SIN clave `surfaces` no es un contrato con cero superficies: es
-  // un contrato que no declara nada. Se trata igual que `surfaces: []`, que ya
-  // obliga — el fail-closed no tiene ninguna razon para distinguirlos.
+  // `surfaces` ausente, null o que no sea una lista NO es "cero superficies":
+  // es un contrato invalido, y se distingue del caso vacio porque el modo de
+  // fallo es mucho peor. Renombrar la clave a `Surfaces:` deja que un
+  // `(contract.surfaces ?? []).some(...)` —el patron que este repo ya usa en
+  // cuatro sitios— evalue un OR sobre el conjunto vacio, que es `false`: con
+  // una sola letra mayuscula, ninguna superficie obligaria en ninguna fase.
+  //
+  // La validez del contrato se comprueba ANTES de evaluar el OR, nunca dentro.
+  if (contract?.surfaces !== undefined && !Array.isArray(contract.surfaces)) {
+    return {
+      obliga: true,
+      code: "authz-contract-surfaces-invalid",
+      detail: "`surfaces` existe pero no es una lista: el contrato es invalido, no un contrato sin superficies",
+      porQue: []
+    };
+  }
   const surfaces = Array.isArray(contract?.surfaces) ? contract.surfaces : [];
   const identidad = auditSurfaceIdentity(surfaces);
   if (!identidad.ok) {
