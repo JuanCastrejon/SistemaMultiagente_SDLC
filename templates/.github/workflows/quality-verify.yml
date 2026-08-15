@@ -112,14 +112,31 @@ jobs:
       # proteccion, nunca quitarla (ver ALWAYS_LOCKED en el script).
       - name: Frontera de especificacion
         run: |
-          BASE="origin/{{gitFlow.integrationBranch}}"
+          # La ref va CALIFICADA a `refs/remotes/`. Con el nombre corto
+          # (`origin/<rama>`), las reglas DWIM de gitrevisions prueban
+          # `refs/tags/<n>` y `refs/heads/<n>` ANTES que `refs/remotes/<n>`: un
+          # tag llamado literalmente `origin/<rama>` apuntando al HEAD del PR
+          # hacia que el guard comparara HEAD contra HEAD (diff vacio) Y que
+          # este `git show` trajera la copia "confiable" del arbol del atacante.
+          # Las dos mitades del control caian a la vez. Reproducido.
+          BASE="refs/remotes/origin/{{gitFlow.integrationBranch}}"
           TRUSTED="$RUNNER_TEMP/validate-spec-boundary.trusted.mjs"
-          if git show "$BASE:scripts/validate-spec-boundary.mjs" > "$TRUSTED" 2>/dev/null && [ -s "$TRUSTED" ]; then
-            node "$TRUSTED" --base "$BASE"
-          else
-            echo "aviso: $BASE no tiene scripts/validate-spec-boundary.mjs (bootstrap); se usa la copia del checkout"
-            node scripts/validate-spec-boundary.mjs --base "$BASE"
+          if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
+            echo "::error::$BASE no existe en el checkout. El guard no puede arbitrar contra una base verificable."
+            echo "Comprobar que actions/checkout use fetch-depth: 0 y que la rama de integracion exista en origin."
+            exit 1
           fi
+          if ! git show "$BASE:scripts/validate-spec-boundary.mjs" > "$TRUSTED" 2>/dev/null || [ ! -s "$TRUSTED" ]; then
+            # NUNCA se cae a la copia del checkout: el codigo que arbitra seria
+            # el que el evaluado controla, que es exactamente lo que este step
+            # existe para impedir. "No se pudo medir" no es "aprobado" — la
+            # misma regla que el propio guard aplica a su diff.
+            echo "::error::$BASE no tiene scripts/validate-spec-boundary.mjs."
+            echo "Es el estado de bootstrap: instalar el guard y mergearlo a la rama de integracion ANTES de abrir PRs."
+            echo "codigo: spec-boundary-guard-ausente-en-base"
+            exit 1
+          fi
+          node "$TRUSTED" --base "$BASE"
 
       - name: Publicar evidencia recomputada
         if: always()

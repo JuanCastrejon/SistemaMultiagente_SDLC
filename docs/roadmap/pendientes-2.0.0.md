@@ -162,6 +162,21 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
 
 ## Espera decisión del mantenedor
 
+- [ ] **Firma del propio repo del framework.** El job `spec-boundary` de
+      `.github/workflows/ci.yml` ya corre el guard contra este repo, y hoy
+      reporta cuatro violaciones legítimas (su propio `ci.yml`, el
+      `regression-install.yml`, la fuente del guard y su allowlist). No hay
+      forma de conceder la excepción porque **este repo no tiene
+      `.sdlc/config.json` con `governance.maintainers` ni firma de commits
+      configurada**: sin un `signer` real, ninguna entrada del allowlist puede
+      ser válida.
+      Hace falta, y solo lo puede dar el mantenedor: (a) la cadena exacta que
+      `git log --format=%GS` reporta para su clave, (b) firma de commits
+      activa en el repo. Con eso se escribe `.sdlc/config.json` y las
+      excepciones de las rutas que el framework edita de forma rutinaria.
+      **Hasta entonces, ese job deja el repo sin poder mergear.**
+
+
 - [ ] **Publicar 2.0.0.** Rama empujada y **PR abierto contra `develop`**. Falta
       la revisión humana, el merge, y decidir si se publica a npm. El gate local
       (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo

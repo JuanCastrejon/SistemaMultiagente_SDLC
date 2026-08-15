@@ -2,33 +2,41 @@
 #
 # Cada entrada declara que un cambio en una ruta protegida es legitimo. La
 # proteccion existe porque el agente no puede reescribir el criterio con el que
-# se le juzga; una excepcion sin revision humana derrota el control entero.
+# se le juzga; una excepcion sin autorizacion humana derrota el control entero.
 #
 # Formato:
 #   - path: openspec/specs/cobros/spec.md
 #     reason: correccion de una regla mal modelada detectada en F9
-#     approved_by: <firmante de la lista de mantenedores>
+#     approved_by: <firmante exacto de governance.maintainers>
 #     attestation_commit: <sha del commit firmado que la aprobo>
 #     expires_at: 2026-12-31T00:00:00Z
 #
-# Reglas:
-#   1. `path` es exacto, no un glob: una excepcion amplia es una puerta abierta.
-#      El guard compara por igualdad exacta, asi que un glob aqui no autoriza
-#      nada -- ni siquiera lo que parece autorizar.
-#   2. `approved_by` debe estar en la lista de mantenedores del repo.
-#   3. Toda entrada caduca. Sin `expires_at`, la excepcion se vuelve permanente
-#      por olvido, que es como mueren estos controles.
+# LAS CUATRO SE COMPRUEBAN. Desde 2.0.0 una entrada a la que le falte
+# cualquiera de ellas, o que no las supere, NO autoriza nada — y el guard dice
+# exactamente cual fallo. Hasta 2.0.0 solo se leia `path` y las otras tres eran
+# decorativas: el archivo enunciaba reglas que nadie comprobaba, que es peor que
+# no tener reglas porque se creen cumplidas.
 #
-# LO QUE HOY NO SE ENFORCEA, dicho aqui porque una regla que nadie comprueba es
-# peor que ninguna regla -- se cree cumplida:
-#   - `approved_by`, `attestation_commit` y `expires_at` NO los lee el guard:
-#     solo extrae `path`. Una entrada caducada sigue autorizando.
-#   - La aprobacion real que hoy vale es la ATESTACION FIRMADA de la fase
-#     (`sdlc signoff --slice <id> --phase <F> --create --record`), no un review
-#     de plataforma: con un solo maintainer GitHub prohibe auto-aprobar el PR
-#     propio. Este archivo documentaba `review_id` de aquel mecanismo.
-#   - Cerrar ese hueco es trabajo del ADR 0008 (D2 y D7), que define donde vive
-#     la politica y que comando enforcea que.
+#   1. `path` es exacto, no un glob: una excepcion amplia es una puerta abierta.
+#      El guard compara por igualdad, asi que un glob aqui no autoriza nada --
+#      ni siquiera lo que parece autorizar.
+#   2. `approved_by` debe coincidir con el `signer` de alguien en
+#      `governance.maintainers` de `.sdlc/config.json`. Se lee de la rama BASE,
+#      no del checkout: añadirse a si mismo en el mismo commit no vale.
+#   3. `attestation_commit` debe existir en el historial, verificar como commit
+#      FIRMADO (`git verify-commit`) y estar firmado por un mantenedor. Es la
+#      atestacion que emite `sdlc signoff --slice <id> --phase <F> --create
+#      --record`. Un sha inventado ya no sirve.
+#   4. `expires_at` debe ser una fecha ISO futura. Sin caducidad, la excepcion
+#      se vuelve permanente por olvido, que es como mueren estos controles.
+#
+# Si el guard no PUEDE comprobar la atestacion —clon superficial, commit
+# ausente— la entrada tampoco autoriza. No poder medir no es aprobar: es la
+# misma regla que el guard aplica a su propio diff.
+#
+# Este archivo entero se lee de la rama de integracion, nunca del checkout
+# evaluado, y esta protegido por el propio guard: declararse una excepcion en el
+# mismo PR que la usa no tiene efecto.
 
 version: 1
 allowlist: []

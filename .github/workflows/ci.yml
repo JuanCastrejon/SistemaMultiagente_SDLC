@@ -49,3 +49,49 @@ jobs:
 
       - name: Run validators
         run: pnpm run validate
+
+  # El guard de frontera se PUBLICA a los consumidores desde este repo y hasta
+  # 2.0.0 no se ejecutaba aqui: `grep -rn spec-boundary .github/workflows` no
+  # daba nada. Quien trabaja en el framework podia vaciar `DEFAULT_LOCKED` o
+  # invertir un condicional sin dejar rastro, y eso se propagaba al siguiente
+  # `sdlc adopt` de cada consumidor. El arbitro no se arbitraba a si mismo.
+  #
+  # Se ejecuta la copia traida de la rama de integracion REMOTA, igual que en el
+  # consumidor: si un PR neutraliza su propia copia, quien juzga sigue siendo la
+  # version mergeada.
+  spec-boundary:
+    name: frontera de especificacion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # El guard compara contra la rama de integracion: sin el historial
+          # completo no hay merge-base contra el que comparar.
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Frontera de especificacion
+        run: |
+          # `refs/remotes/` explicito: con el nombre corto, un tag llamado
+          # `origin/develop` gana a la remota por las reglas DWIM de git y
+          # secuestra la base entera. Ver BREAKING 6 de 2.0.0.
+          BASE="refs/remotes/origin/${{ github.base_ref || 'develop' }}"
+          if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
+            BASE="refs/remotes/origin/main"
+          fi
+          if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
+            echo "::error::no hay rama de integracion remota resoluble; el guard no puede arbitrar."
+            exit 1
+          fi
+          TRUSTED="$RUNNER_TEMP/validate-spec-boundary.trusted.mjs"
+          if ! git show "$BASE:templates/scripts/validate-spec-boundary.mjs" > "$TRUSTED" 2>/dev/null || [ ! -s "$TRUSTED" ]; then
+            echo "::error::$BASE no trae templates/scripts/validate-spec-boundary.mjs."
+            echo "codigo: spec-boundary-guard-ausente-en-base"
+            exit 1
+          fi
+          node "$TRUSTED" --base "$BASE" --json

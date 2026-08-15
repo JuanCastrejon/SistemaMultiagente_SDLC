@@ -228,7 +228,7 @@ Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`
 
 ## Qué cambia en 2.0.0
 
-Las rupturas **ya implementadas** son cuatro, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+Las rupturas **ya implementadas** son ocho, todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
 
 > Esta lista **todavía no está cerrada**: el [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) entra en 2.0.0 y añadirá la suya («superficie sin clasificar ⇒ firma obligatoria»). Se declarará **al implementarla**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces y confunde más que el silencio.
 
@@ -238,6 +238,10 @@ Las rupturas **ya implementadas** son cuatro, todas salidas de **operar** el fra
 | `install` deja de escribir superficies y stack de ejemplo | Un repo recién instalado sale en **error** en `doctor` hasta declarar sus superficies reales. Es deliberado: ver abajo. |
 | `.github/agents/surface-traceability.json` se genera desde `config.surfaces` | Cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; revísalo si lo consumes a mano. |
 | El hash de árbol pasa de 256 MiB a **64 MiB** por llamada | Un repo cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol, así que no alcanza a un repo normal — pero es silencioso para un monorepo grande. |
+| Toda excepción de la allowlist deja de autorizar hasta completarse | `approved_by` debe ser un `signer` de `governance.maintainers`, `attestation_commit` debe verificar como commit firmado por un mantenedor, y `expires_at` debe estar vigente. Antes solo se leía `path` y las otras tres reglas eran decorativas. |
+| El guard exige base REMOTA calificada (`refs/remotes/…`) | Un tag o rama local llamado `origin/<rama>` ya no sirve como base: secuestraba la comparación entera. |
+| El workflow ya no cae a la copia del checkout | Si la rama de integración no trae el guard, falla con `spec-boundary-guard-ausente-en-base` en vez de ejecutar el script que el evaluado controla. |
+| El alcance del guard crece | Configs de gate por nombre a cualquier profundidad, `**` que cruza barras de verdad, autoprotección por sufijo de ruta, rutas NUL-delimitadas y rechazo de patrones patológicos. Puede bloquear lo que antes pasaba. |
 
 ### El instalador ya no finge configuración
 
