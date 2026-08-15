@@ -463,77 +463,105 @@ console.log(
   // Y `a-a`/`a-z`, de la ronda 12: los cinco anteriores empiezan todos por un
   // byte DISTINTO, asi que un comparador que solo mire el primer byte
   // —`Buffer.from(a)[0] - Buffer.from(b)[0]`— los ordenaba bien y sobrevivia.
-  // Estos dos comparten los dos primeros bytes y solo se separan en el tercero.
   //
   // Arreglar eso con UN par mueve el agujero en vez de cerrarlo: un comparador
-  // de los tres primeros bytes seguiria pasando. Asi que el conjunto cubre dos
-  // familias mas y se afirma la propiedad GENERAL abajo —ningun prefijo de N
-  // bytes reproduce el orden—, en vez de un conteo concreto:
+  // de los tres primeros bytes seguiria pasando. Asi que el conjunto cubre
+  // varias FAMILIAS de comparador incorrecto y se afirma la propiedad general
+  // abajo, en vez del caso concreto que se encontro cada vez:
   //   - `prefijo-comun-a`/`-b` se separan en el byte 15;
   //   - `a-a`/`a-a-a`, donde uno es PREFIJO del otro, cubren la longitud;
-  //   - `n`+U+0303 junto a `ñ` precompuesta (ronda 13): son CANONICAMENTE
-  //     EQUIVALENTES y tienen bytes distintos, asi que un comparador que
-  //     normalice antes de comparar los colapsa a iguales. `sort` es estable,
-  //     de modo que ese comparador deja que `readdirSync` dicte su orden y el
-  //     informe deja de ser determinista — que es justo lo que el orden
-  //     contractual existe para impedir. Sin este par, la mutacion sobrevivia.
-  // El orden de entrada esta desordenado a proposito: `sort` es estable, y con
-  // la entrada ya ordenada un comparador que colapsa un par lo dejaria pasar.
+  //   - `n`+U+0303 junto a `ñ` precompuesta (ronda 13): CANONICAMENTE
+  //     EQUIVALENTES y con bytes distintos, asi que un comparador que normalice
+  //     antes de comparar los colapsa a iguales;
+  //   - `a-a`/`aa` (ronda 13, segunda vuelta): colapsan si el comparador
+  //     BORRA los guiones. Por bytes `a-a` va antes, porque `-` (0x2D) es
+  //     menor que `a` (0x61).
+  //
+  // Todos los colapsos importan por la misma razon: `sort` es ESTABLE, asi que
+  // un comparador que empata dos entradas deja que `readdirSync` dicte su orden
+  // relativo — y el informe deja de ser determinista, que es justo lo que el
+  // orden contractual existe para impedir.
+  //
+  // El orden de entrada esta desordenado a proposito: con la entrada ya
+  // ordenada, un comparador que colapsa un par lo dejaria pasar por estabilidad.
+  const ENYE_NFC = "\u00F1-slice";
+  const ENYE_NFD = "n\u0303-slice";
+
+  // ¿Distingue ESTE sistema de archivos las dos formas? HFS+ y APFS en modo
+  // normalizador resuelven ambas al MISMO directorio: crear las dos daria una
+  // sola entrada y el caso fallaria por PLATAFORMA, no por defecto del
+  // comparador. Un test que se pone rojo donde el codigo es correcto se acaba
+  // borrando, asi que se sondea y se degrada solo la parte que depende del par.
+  const sonda = path.join(repo, ".sonda-normalizacion");
+  fs.mkdirSync(path.join(sonda, ENYE_NFC), { recursive: true });
+  fs.mkdirSync(path.join(sonda, ENYE_NFD), { recursive: true });
+  const fsDistingueFormas = fs.readdirSync(sonda).length === 2;
+  fs.rmSync(sonda, { recursive: true, force: true });
+  if (!fsDistingueFormas) {
+    console.log("orden de hallazgos: el sistema de archivos NORMALIZA los nombres; se omite el par NFC/NFD");
+  }
+
   const slices = [
     "a-slice",
     "Z-slice",
-    // Las dos enes van ESCAPADAS a proposito: escritas como literales son
-    // indistinguibles a simple vista, y cualquier normalizador de editor o
-    // filtro de git podria colapsarlas -- que es justo la propiedad que este
-    // par existe para probar.
-    "ñ-slice", // precompuesta: U+00F1
+    ENYE_NFC,
     "！-slice",
-    "😀-slice",
+    "\u{1F600}-slice",
+    "aa",
     "a-z",
     "a-a",
     "prefijo-comun-b",
     "prefijo-comun-a",
     "a-a-a",
-    "ñ-slice" // descompuesta: n + U+0303, canonicamente equivalente a la anterior
-  ];
+    ENYE_NFD
+  ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD);
   {
     const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")));
-    const porUtf16Tmp = [...slices].sort();
-    assert.notDeepEqual(
-      porBytesTmp,
-      porUtf16Tmp,
-      "el conjunto tiene que DISCRIMINAR: si ordena igual por bytes y por UTF-16, este caso no prueba nada"
-    );
-    // Y tiene que discriminar cualquier comparador que mire solo un PREFIJO de
-    // N bytes. La ronda 12 sobrevivio entera a N=1 porque los cinco slices de
-    // entonces empezaban todos por un byte distinto. Se afirma la familia
-    // completa, no el caso que se encontro: asi, el dia que alguien recorte el
-    // conjunto, el test dice exactamente que N dejo de cubrir.
-    for (let n = 1; n <= 14; n++) {
+    const noReproduce = (comparador, queEs) =>
       assert.notDeepEqual(
         porBytesTmp,
-        [...slices].sort((a, b) =>
-          Buffer.compare(Buffer.from(a, "utf8").subarray(0, n), Buffer.from(b, "utf8").subarray(0, n))
-        ),
-        `el conjunto tiene que distinguir el orden por bytes de una comparacion de los primeros ${n} bytes`
+        [...slices].sort(comparador),
+        `el conjunto tiene que distinguir el orden por bytes de ${queEs}`
+      );
+
+    noReproduce((a, b) => (a < b ? -1 : a > b ? 1 : 0), "el orden por UTF-16");
+    noReproduce((a, b) => a.localeCompare(b), "`localeCompare`");
+    noReproduce((a, b) => a.length - b.length, "una comparacion por LONGITUD");
+    noReproduce(
+      (a, b) => Buffer.compare(Buffer.from(a.toLowerCase(), "utf8"), Buffer.from(b.toLowerCase(), "utf8")),
+      "una comparacion insensible a mayusculas"
+    );
+    // La de la ronda 13, segunda vuelta: borrar los guiones antes de comparar.
+    noReproduce(
+      (a, b) => Buffer.compare(Buffer.from(a.replaceAll("-", ""), "utf8"), Buffer.from(b.replaceAll("-", ""), "utf8")),
+      "una comparacion que BORRA los guiones"
+    );
+
+    // Y cualquiera que mire solo un PREFIJO de N bytes. La ronda 12 sobrevivio
+    // entera a N=1 porque los cinco slices de entonces empezaban todos por un
+    // byte distinto. Se afirma la familia completa, no el N que se encontro:
+    // asi, el dia que alguien recorte el conjunto, el test dice exactamente que
+    // N dejo de cubrir.
+    for (let n = 1; n <= 14; n++) {
+      noReproduce(
+        (a, b) => Buffer.compare(Buffer.from(a, "utf8").subarray(0, n), Buffer.from(b, "utf8").subarray(0, n)),
+        `una comparacion de los primeros ${n} bytes`
       );
     }
 
-    // Y de una que NORMALICE antes de comparar. Esta mutacion sobrevivio a la
-    // ronda 13 entera: sin dos nombres canonicamente equivalentes, normalizar
-    // no cambia nada. Con ellos, el comparador los colapsa a iguales y —`sort`
-    // es estable— deja que `readdirSync` dicte su orden relativo.
-    const equivalentes = slices.filter((s) => s.normalize("NFC") === "\u00F1-slice");
-    assert.equal(equivalentes.length, 2, "el conjunto necesita el par NFC/NFD; sin el, normalizar es indetectable");
-    assert.notEqual(equivalentes[0], equivalentes[1], "el par tiene que diferir en bytes, no solo en apariencia");
-    for (const forma of ["NFC", "NFD"]) {
-      assert.notDeepEqual(
-        porBytesTmp,
-        [...slices].sort((a, b) =>
-          Buffer.compare(Buffer.from(a.normalize(forma), "utf8"), Buffer.from(b.normalize(forma), "utf8"))
-        ),
-        `el conjunto tiene que distinguir el orden por bytes de uno que normalice a ${forma} antes de comparar`
-      );
+    // Y una que NORMALICE. Solo se puede afirmar si el sistema de archivos
+    // distingue las dos formas: si las colapsa, el par no esta en el conjunto y
+    // esta propiedad no es observable aqui.
+    if (fsDistingueFormas) {
+      const equivalentes = slices.filter((nombre) => nombre.normalize("NFC") === ENYE_NFC);
+      assert.equal(equivalentes.length, 2, "el conjunto necesita el par NFC/NFD; sin el, normalizar es indetectable");
+      assert.notEqual(equivalentes[0], equivalentes[1], "el par tiene que diferir en bytes, no solo en apariencia");
+      for (const forma of ["NFC", "NFD"]) {
+        noReproduce(
+          (a, b) => Buffer.compare(Buffer.from(a.normalize(forma), "utf8"), Buffer.from(b.normalize(forma), "utf8")),
+          `una que normalice a ${forma} antes de comparar`
+        );
+      }
     }
   }
   for (const slice of slices) {
@@ -576,13 +604,14 @@ console.log(
       "a-a-a",
       "a-slice",
       "a-z",
-      "n\u0303-slice",
+      "aa",
+      ENYE_NFD,
       "prefijo-comun-a",
       "prefijo-comun-b",
-      "\u00F1-slice",
+      ENYE_NFC,
       "！-slice",
-      "\u{1F600}-slice"
-    ],
+      "😀-slice"
+    ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD),
     "orden por bytes UTF-8, escrito a mano"
   );
 
@@ -670,13 +699,14 @@ console.log(
     "a-a-a",
     "a-slice",
     "a-z",
-    "n\u0303-slice",
+    "aa",
+    ENYE_NFD,
     "prefijo-comun-a",
     "prefijo-comun-b",
-    "\u00F1-slice",
+    ENYE_NFC,
     "！-slice",
-    "\u{1F600}-slice"
-  ]) {
+    "😀-slice"
+  ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD)) {
     for (const fase of ["F13", "F2", "F3_5"]) esperadoParejas.push(`${slice}/${fase}`);
   }
 

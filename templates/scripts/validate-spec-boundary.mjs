@@ -10,8 +10,16 @@
 // toca rutas protegidas sin que exista una excepcion declarada.
 //
 // Que NO hace, y conviene decirlo: no puede probar por si solo que la firma
-// humana existio. Eso lo aporta el review de la plataforma. Este script es la
-// mitad barata del control; la otra mitad es una regla de proteccion de rama.
+// humana existio. Eso lo aporta la ATESTACION FIRMADA
+// (`sdlc signoff --slice <id> --phase <F> --create --record`), que es un commit
+// firmado cuyo sujeto se recomputa y que queda enlazado con la evidencia de la
+// fase. NO es un review de plataforma: con un solo maintainer GitHub prohibe
+// auto-aprobar el PR propio, asi que esa via es insatisfacible. Ver el addendum
+// del ADR 0007 y el ADR 0008.
+//
+// Este script es la mitad barata del control por RUTA; la otra mitad es la
+// atestacion, que decide por AUTORIZACION. Una proteccion de rama, si existe,
+// es complementaria y tampoco prueba la firma.
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
@@ -166,7 +174,8 @@ function parseAllowlistEntries(raw) {
 // introduce: solo cuenta despues de estar mergeada en la rama de integracion,
 // que es precisamente el gate humano que este control existe para forzar. El
 // allowlist sigue ademas en ALWAYS_LOCKED, asi que tocarlo se reporta como
-// violacion y exige la revision humana de la plataforma.
+// violacion. Quien la resuelve es la atestacion firmada de la fase, no un
+// review de plataforma.
 function loadAllowlist(base, allowlistFile) {
   return parseAllowlistEntries(readFromBase(base, allowlistFile));
 }
