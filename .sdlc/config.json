@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "SistemaMultiagente_SDLC",
+    "slug": "sistemamultiagente-sdlc"
+  },
+  "governance": {
+    "threatModel": "single-maintainer",
+    "maintainers": [
+      {
+        "name": "Juan David Castrejon B.",
+        "signer": "juandavidcastrejonbermudes@gmail.com"
+      }
+    ]
+  }
+}
