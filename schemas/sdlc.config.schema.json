@@ -136,13 +136,26 @@
           },
           "moneyPath": {
             "type": "boolean",
-            "default": false
+            "description": "Riesgo de autorizacion (ADR 0008, D1): toca dinero. AUSENTE no es `false`: es `sin clasificar`, y obliga a firmar."
           },
           "hasUi": {
             "type": "boolean",
             "default": false
+          },
+          "regulatedData": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: trata datos regulados (PII, salud, financieros)."
+          },
+          "securityCritical": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: privilegios efectivos — permisos amplios, superficie de ataque, secretos. `Traduce manga` describe el producto, no sus privilegios."
+          },
+          "stateMachineCritical": {
+            "type": "boolean",
+            "description": "Riesgo de autorizacion: gobierna una maquina de estados cuyo desorden corrompe datos."
           }
-        }
+        },
+        "description": "Los cuatro riesgos se propagan a quality-contract.yaml. Declararlos aqui es lo que evita que el contrato quede como `gestionado modificado localmente` en cada upgrade."
       }
     },
     "gitFlow": {

@@ -143,13 +143,37 @@ export function interpolate(content, context) {
 // superficie evita el modo de fallo mas comun de generar YAML por texto,
 // que es una indentacion de bloque mal alineada que produce un documento
 // invalido sin que nada lo detecte hasta que alguien lo parsea.
+// Los cuatro riesgos de autorizacion (ADR 0008, D1) se PROPAGAN desde
+// `config.surfaces` cuando el consumidor los declara alli, y NO se inventan
+// cuando no lo hace.
+//
+// La tentacion es emitir `false` en los cuatro para que un repo recien
+// instalado no salga obligado. Seria exactamente el error que el ADR nombra:
+// *no clasificado* no es *no aplica*. Escribir `false` por defecto es que el
+// framework clasifique el riesgo del consumidor por el, en un archivo que el
+// consumidor no ha leido — y encima con el valor que menos protege. Un repo sin
+// clasificar sale obligado, y eso es la respuesta correcta.
+const RIESGOS_EN_CONFIG = {
+  money_path: "moneyPath",
+  regulated_data: "regulatedData",
+  security_critical: "securityCritical",
+  state_machine_critical: "stateMachineCritical"
+};
+
 export function buildQualityContractSurfaces(surfaces) {
   if (surfaces.length === 0) return "[]";
   const entries = surfaces.map((surface) => {
     const tier = surface.tier ?? "standard";
-    const moneyPath = Boolean(surface.moneyPath);
-    const hasUi = Boolean(surface.hasUi);
-    return `{ id: ${JSON.stringify(surface.id)}, path: ${JSON.stringify(surface.path)}, tier: ${JSON.stringify(tier)}, money_path: ${moneyPath}, has_ui: ${hasUi} }`;
+    const campos = [
+      `id: ${JSON.stringify(surface.id)}`,
+      `path: ${JSON.stringify(surface.path)}`,
+      `tier: ${JSON.stringify(tier)}`
+    ];
+    for (const [enContrato, enConfig] of Object.entries(RIESGOS_EN_CONFIG)) {
+      if (typeof surface[enConfig] === "boolean") campos.push(`${enContrato}: ${surface[enConfig]}`);
+    }
+    campos.push(`has_ui: ${Boolean(surface.hasUi)}`);
+    return `{ ${campos.join(", ")} }`;
   });
   return `[${entries.join(", ")}]`;
 }

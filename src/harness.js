@@ -15,6 +15,7 @@ import {
   computeTreeHashAtRefAsync
 } from "./evidence-writer.js";
 import { buildSubject, gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
+import { adjudicarAutorizacion } from "./authz-git.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -314,9 +315,43 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
       // El gate humano deja de ser un campo de texto que el propio agente puede
       // escribir: exige la referencia a un review verificable.
       if (phase.human_gate) {
+        // La adjudicacion del ADR 0008. Solo aqui, y solo en fases con puerta:
+        // `signoff` no adjudica downgrades (D5) y una fase sin gate humano no
+        // tiene nada que autorizar. Ademas acota el coste — cada llamada gasta
+        // varios procesos de git.
+        const contratoCalidad = loadQualityContract(target);
+        const autorizacion = adjudicarAutorizacion({
+          target,
+          phaseId: phase.id,
+          contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
+          faseHead: phase
+        });
+        evidence.authorization = {
+          exige: autorizacion.exige,
+          base: autorizacion.base,
+          avisos: autorizacion.avisos.map((a) => a.code)
+        };
+        for (const bloqueo of autorizacion.bloqueos) {
+          evidenceBlockers.push(bloqueo.code);
+          evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
+        }
+
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
           evidenceBlockers.push("human-gate-signoff-missing");
+        } else if (autorizacion.exige === "attestation" && !signoff.attestation_commit) {
+          // El riesgo declarado obliga a una atestacion, y lo que hay es una
+          // declaracion. La diferencia no es de forma: una atestacion se puede
+          // volver a verificar y una declaracion es texto que el propio agente
+          // escribe.
+          evidenceBlockers.push("authz-attestation-missing");
+          evidence.authorizationDetail = [
+            ...(evidence.authorizationDetail ?? []),
+            {
+              code: "authz-attestation-missing",
+              detail: `${phase.id} exige atestacion firmada: ${autorizacion.avisos.find((a) => a.code === "authz-attestation-required")?.detail ?? "el contrato obliga"}. Emitirla con \`sdlc signoff --slice <id> --phase ${phase.id} --create --record\``
+            }
+          ];
         } else {
           // Hay DOS clases de firma y valen cosas distintas: una atestacion es
           // un commit firmado que se puede volver a verificar, y una

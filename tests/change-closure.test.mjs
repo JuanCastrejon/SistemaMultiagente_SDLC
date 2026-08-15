@@ -136,7 +136,21 @@ run(["install", "--target", target, "--mode", "greenfield", "--project-name", "D
 {
   const configPath = path.join(target, ".sdlc", "config.json");
   const installed = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  installed.surfaces = [{ id: "backend", path: "apps/api", owner: "api-agent", tier: "core" }];
+  // Clasificada, como la declara un consumidor real desde 2.0.0: sin los cuatro
+  // riesgos, el ADR 0008 obliga a atestacion firmada en toda fase con gate
+  // humano, y este caso mide el cierre de un change, no la autorizacion.
+  installed.surfaces = [
+    {
+      id: "backend",
+      path: "apps/api",
+      owner: "api-agent",
+      tier: "core",
+      moneyPath: false,
+      regulatedData: false,
+      securityCritical: false,
+      stateMachineCritical: false
+    }
+  ];
   fs.writeFileSync(configPath, JSON.stringify(installed, null, 2), "utf8");
   run(["upgrade", "--target", target, "--accept-managed", ".sdlc/config.json", "--json"]);
   fs.mkdirSync(path.join(target, "apps", "api"), { recursive: true });

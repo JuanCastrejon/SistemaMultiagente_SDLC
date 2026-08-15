@@ -508,14 +508,48 @@ const humanGateUnverifiable = JSON.parse(
   run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
 );
 assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
-// Un `approved_by` suelto es una DECLARACION: texto que el propio agente puede
-// escribir. Se nombra como tal, en vez de confundirla con una revision de
-// plataforma a la que solo le falta el identificador.
+// Desde el ADR 0008 este repo greenfield tiene sus superficies SIN CLASIFICAR
+// —el instalador no inventa los cuatro riesgos, porque *no clasificado* no es
+// *no aplica*—, asi que la obligacion derivada de riesgos exige atestacion y un
+// `approved_by` suelto deja de alcanzar. El bloqueo dice ademas que comando
+// emite la firma.
 assert.ok(
-  humanGateUnverifiable.warnings.includes("human-gate-signoff-declarative"),
-  JSON.stringify(humanGateUnverifiable.warnings)
+  humanGateUnverifiable.blockers.includes("authz-attestation-missing"),
+  JSON.stringify(humanGateUnverifiable.blockers)
 );
-assert.equal(humanGateUnverifiable.evidence.signatureClass, "declarative");
+assert.equal(humanGateUnverifiable.evidence.authorization.exige, "attestation");
+
+// Y la CONTRACARA, que es la que prueba que el coste sigue al riesgo en vez de
+// caer sobre todo el mundo: con las cuatro clasificaciones en `false`, la misma
+// evidencia declarativa vuelve a ser un AVISO y la fase no bloquea por
+// autorizacion. Sin este caso, "obliga siempre" pasaria el test de arriba.
+{
+  const configPath = path.join(greenfield, ".sdlc", "config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const previas = config.surfaces;
+  config.surfaces = previas.map((s) => ({
+    ...s,
+    moneyPath: false,
+    regulatedData: false,
+    securityCritical: false,
+    stateMachineCritical: false
+  }));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
+  run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+
+  const clasificado = JSON.parse(
+    run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
+  );
+  assert.ok(
+    !clasificado.blockers.includes("authz-attestation-missing"),
+    JSON.stringify(clasificado.blockers)
+  );
+  assert.ok(
+    clasificado.warnings.includes("human-gate-signoff-declarative"),
+    JSON.stringify(clasificado.warnings)
+  );
+  assert.equal(clasificado.evidence.signatureClass, "declarative");
+}
 
 // Una atestacion DECLARADA que no verifica es peor que ninguna: afirma una
 // garantia que no existe, asi que bloquea en vez de avisar.

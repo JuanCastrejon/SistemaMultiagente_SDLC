@@ -132,7 +132,17 @@ export const POLITICAS_HUMAN_GATE = ["attestation", "declarative", "none"];
  */
 export function resolveHumanGatePolicy(contract, phaseId) {
   const bloque = contract?.governance?.humanGate ?? {};
-  const declarada = bloque.policy ?? "attestation";
+  // El default es `declarative`, NO `attestation`, y la razon esta escrita en
+  // las Consecuencias del ADR: "un repo sin riesgos declarados como criticos no
+  // paga nada: `declarative` con etiqueta visible. El coste aparece exactamente
+  // donde el riesgo lo justifica, que es la propiedad que se buscaba".
+  //
+  // Con `attestation` por defecto, un repo con cero riesgos y un gate humano
+  // tendria que firmar igual — el coste dejaria de seguir al riesgo y el eje
+  // volveria a ser configuracion, que es justo lo que D1 separa. Donde el
+  // riesgo SI obliga, el OR de `evaluarObligacionDeFase` fuerza `attestation`
+  // sin que la politica pueda bajarla.
+  const declarada = bloque.policy ?? "declarative";
   const override = phaseId && bloque.overrides ? bloque.overrides[phaseId] : undefined;
   const efectiva = override ?? declarada;
 
