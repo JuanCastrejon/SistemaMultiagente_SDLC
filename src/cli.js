@@ -197,12 +197,38 @@ function getManagedPathSet(manifest) {
   return new Set((manifest?.managedFiles ?? []).map((entry) => entry.path));
 }
 
+// Strings compartidas entre `detectConflicts` y `commandUpgrade`: comparar
+// literales sueltos en dos funciones fue justo lo que dejo pasar el bug de
+// 2.0.2 (una tercera rama de `!pathExists` con su propio literal, invisible
+// para el filtro que reconocia "modificado localmente"). Un solo lugar para
+// los tres estados posibles de un archivo gestionado.
+const CONFLICT_REASON = Object.freeze({
+  UNMANAGED_EXISTING: "archivo preexistente no gestionado por SistemaMultiagente_SDLC",
+  MANAGED_MODIFIED: "archivo gestionado modificado localmente",
+  MANAGED_DELETED: "archivo gestionado eliminado localmente"
+});
+
 function detectConflicts(target, files, manifest) {
   const managed = getManagedPathSet(manifest);
+  const overrides = overrideIndex(target);
   const conflicts = [];
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     if (!pathExists(absolute)) {
+      // Un archivo gestionado que el consumidor borro a proposito no debe
+      // reaparecer en silencio. Si ya hay una eliminacion aceptada
+      // (overrides.yaml con `deleted: true`) se respeta sin pedir nada de
+      // nuevo; si no, se reporta como conflicto para que un `--accept-managed`
+      // explicito lo confirme.
+      const overrideEntry = overrides.get(relativePath);
+      if (managed.has(relativePath) && !overrideEntry?.deleted) {
+        conflicts.push({
+          path: relativePath,
+          reason: CONFLICT_REASON.MANAGED_DELETED,
+          existingSha256: null,
+          proposedSha256: sha256Text(content)
+        });
+      }
       continue;
     }
     const existing = normalizeLF(fs.readFileSync(absolute, "utf8"));
@@ -212,19 +238,31 @@ function detectConflicts(target, files, manifest) {
     if (!managed.has(relativePath)) {
       conflicts.push({
         path: relativePath,
-        reason: "archivo preexistente no gestionado por SistemaMultiagente_SDLC",
+        reason: CONFLICT_REASON.UNMANAGED_EXISTING,
         existingSha256: sha256Text(existing),
         proposedSha256: sha256Text(content)
       });
       continue;
     }
+    const existingSha256 = sha256Text(existing);
     const manifestEntry = manifest.managedFiles.find((entry) => entry.path === relativePath);
-    if (manifestEntry && sha256Text(existing) !== manifestEntry.sha256) {
+    const overrideEntry = overrides.get(relativePath);
+    // Un override vigente (el archivo en disco todavia coincide byte a byte
+    // con lo que se acepto) SIEMPRE cuenta como conflicto, aunque tambien
+    // coincida con el sha del manifiesto. El manifiesto guarda "lo ultimo
+    // escrito", y tras aceptar un override eso ES el contenido del override:
+    // comparar solo contra el manifiesto no distingue "sin cambios desde
+    // instalacion" de "override vigente que hay que seguir preservando", asi
+    // que un upgrade posterior que ni siquiera tocaba este archivo lo pisaba
+    // en silencio con la plantilla nueva del framework (ver CHANGELOG 2.0.3).
+    const matchesOverride = Boolean(overrideEntry) && overrideEntry.sha256 === existingSha256;
+    const driftedFromManifest = Boolean(manifestEntry) && existingSha256 !== manifestEntry.sha256;
+    if (driftedFromManifest || matchesOverride) {
       conflicts.push({
         path: relativePath,
-        reason: "archivo gestionado modificado localmente",
-        existingSha256: sha256Text(existing),
-        expectedSha256: manifestEntry.sha256,
+        reason: CONFLICT_REASON.MANAGED_MODIFIED,
+        existingSha256,
+        expectedSha256: manifestEntry?.sha256 ?? null,
         proposedSha256: sha256Text(content)
       });
     }
@@ -354,6 +392,12 @@ function registerOverrides(target, entries, frameworkVersion) {
     byPath.set(entry.path, {
       path: entry.path,
       sha256: entry.sha256,
+      // `deleted: true` marca una eliminacion deliberada del archivo gestionado
+      // (no una divergencia de contenido). Sin este campo, `detectConflicts`
+      // no puede distinguir "el consumidor lo borro a proposito" de "todavia
+      // no existe", y la version 2.0.2 recreaba el archivo en el siguiente
+      // upgrade.
+      ...(entry.deleted ? { deleted: true } : {}),
       reason: entry.reason,
       acceptedAt,
       frameworkVersion
@@ -1260,9 +1304,16 @@ async function commandUpgrade(options) {
   const accepted = [];
   const blocking = [];
   for (const conflict of conflicts) {
-    const isManaged = conflict.reason === "archivo gestionado modificado localmente";
-    const previouslyAccepted = alreadyOverridden.get(conflict.path)?.sha256 === conflict.existingSha256;
-    if (isManaged && (acceptAll || acceptRequested.has(conflict.path) || previouslyAccepted)) {
+    const isDeletion = conflict.reason === CONFLICT_REASON.MANAGED_DELETED;
+    const isAcceptable = isDeletion || conflict.reason === CONFLICT_REASON.MANAGED_MODIFIED;
+    const overrideEntry = alreadyOverridden.get(conflict.path);
+    // Para una eliminacion, "ya aceptado antes" se decide por el flag
+    // `deleted`, no por sha256 (no hay contenido que hashear). Para una
+    // divergencia de contenido, por el sha256 aceptado la ultima vez.
+    const previouslyAccepted = isDeletion
+      ? Boolean(overrideEntry?.deleted)
+      : overrideEntry?.sha256 === conflict.existingSha256;
+    if (isAcceptable && (acceptAll || acceptRequested.has(conflict.path) || previouslyAccepted)) {
       accepted.push(conflict);
     } else {
       blocking.push(conflict);
@@ -1294,7 +1345,9 @@ async function commandUpgrade(options) {
       payload: {
         status: "conflict",
         conflicts: blocking,
-        acceptable: blocking.filter((conflict) => conflict.reason === "archivo gestionado modificado localmente").map((conflict) => conflict.path),
+        acceptable: blocking
+          .filter((conflict) => conflict.reason === CONFLICT_REASON.MANAGED_MODIFIED || conflict.reason === CONFLICT_REASON.MANAGED_DELETED)
+          .map((conflict) => conflict.path),
         hint: "Repetir con --accept-managed <paths separados por coma> o --accept-all-managed para conservar la version local de esos archivos.",
         patchPlan
       }
@@ -1319,8 +1372,38 @@ async function commandUpgrade(options) {
   // volveria a detectarse como conflicto en el siguiente upgrade.
   const effectiveFiles = { ...files };
   const skipWrite = new Set();
+
+  // Barrido de tombstones ya registrados en overrides.yaml de corridas
+  // anteriores. Una eliminacion aceptada saca el path del manifiesto (deja de
+  // estar "managed"), asi que en la corrida SIGUIENTE `detectConflicts` ya no
+  // tiene nada que conflictuar para el -- pero sin este barrido, no haber
+  // conflicto significaba "escribilo", y `writeManagedFiles` lo recreaba de
+  // todos modos. Solo aplica si el archivo sigue ausente: si el consumidor lo
+  // recreo a mano por su cuenta, eso se trata como un archivo no gestionado
+  // normal, no se vuelve a pisar en silencio.
+  for (const [overridePath, entry] of alreadyOverridden) {
+    if (entry?.deleted && !pathExists(path.join(target, overridePath))) {
+      delete effectiveFiles[overridePath];
+    }
+  }
+
   const overrideEntries = [];
   for (const conflict of accepted) {
+    if (conflict.reason === CONFLICT_REASON.MANAGED_DELETED) {
+      // Se respeta la eliminacion: el path sale del set de archivos
+      // gestionados que se va a escribir (si se quedara con la plantilla
+      // fresca en `effectiveFiles`, `writeManagedFiles` lo recrearia) y el
+      // manifiesto deja de rastrearlo. `overrides.yaml` conserva el registro
+      // de que fue una decision, no un olvido.
+      delete effectiveFiles[conflict.path];
+      overrideEntries.push({
+        path: conflict.path,
+        sha256: null,
+        deleted: true,
+        reason: alreadyOverridden.get(conflict.path)?.reason ?? "eliminacion local aceptada en upgrade"
+      });
+      continue;
+    }
     const localContent = readTextIfExists(path.join(target, conflict.path));
     if (localContent === null) continue;
     const normalized = normalizeLF(localContent);
