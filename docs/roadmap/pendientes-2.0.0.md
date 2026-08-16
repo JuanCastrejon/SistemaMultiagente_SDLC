@@ -246,6 +246,14 @@ la primera ocurrencia y enseña huecos falsos — verificar siempre que la
 mutación tocó el sitio que se quería mutar (nos costó dos falsos sobrevivientes
 y un test real de propina).
 
+**Revisión cruzada (Opus 5, 2026-08-16):** verificó las rondas 18 y 19 contra
+el repo —no contra el informe— y confirmó PRs, CI, suite Windows/POSIX y una
+barrida de mutación propia (12/12). «Nada que corregir. Trabajo sólido.»
+Notó, con razón, que los hallazgos son de la misma familia que introdujo el
+propio arreglo de la ronda 17. Esto cierra la segunda voz pendiente que el
+checkpoint declaraba (Codex sigue sin cuota hasta el 12–13 de septiembre,
+pero ya no bloquea nada).
+
 ## Para retomar en la próxima sesión — estado a 2026-08-16
 
 Rama `fix/rupturas-declaradas-y-pgid`. **#41 ya está fusionado a `develop`
