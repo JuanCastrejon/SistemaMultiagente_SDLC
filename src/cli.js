@@ -561,6 +561,35 @@ function daysSince(filePath) {
   return Math.floor(ageMs / (24 * 60 * 60 * 1000));
 }
 
+// Nombres de skill que el manifiesto declara a proposito fuera de
+// `.github/skills`: externas instaladas por npx (`externalCollections`) o
+// espejadas entre stacks (`crossMirrorSkills`). Ninguna de las dos es una
+// "canonica huerfana" — son la razon de ser de esos campos del manifiesto.
+// Manifiesto ausente o ilegible ya se reporta aparte (`skill-manifest-missing`);
+// aqui basta con no reventar y devolver el set vacio.
+function readExternalSkillNames(manifestPath) {
+  const names = new Set();
+  const raw = readTextIfExists(manifestPath);
+  if (!raw) return names;
+  let manifest;
+  try {
+    manifest = JSON.parse(raw);
+  } catch {
+    return names;
+  }
+  for (const collection of manifest.externalCollections ?? []) {
+    for (const skill of collection.skills ?? []) {
+      if (skill?.name) names.add(skill.name);
+    }
+  }
+  for (const entry of manifest.crossMirrorSkills ?? []) {
+    for (const name of entry.skills ?? []) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function collectDoctorEnhancements(target, config) {
   const findings = [];
 
@@ -652,6 +681,13 @@ function collectDoctorEnhancements(target, config) {
   const canonicalSkills = path.join(target, ".github", "skills");
   const mirrorRoots = [".claude/skills", ".agents/skills", ".windsurf/skills"];
   if (pathExists(canonicalSkills)) {
+    // Sin canonica no siempre es "huerfana": el manifiesto puede declararla a
+    // proposito, como externa (`externalCollections`, instaladas por npx) o
+    // como espejo cruzado (`crossMirrorSkills`, copiada entre stacks). Antes
+    // este chequeo solo miraba `.github/skills` y avisaba de las dos por
+    // igual — 76 avisos permanentes en un consumidor con un stack externo
+    // real, indistinguibles de un espejo de verdad huerfano.
+    const declaredExternalSkills = readExternalSkillNames(skillsManifest);
     for (const mirrorRoot of mirrorRoots) {
       const absoluteMirrorRoot = path.join(target, mirrorRoot);
       if (!pathExists(absoluteMirrorRoot)) {
@@ -663,7 +699,7 @@ function collectDoctorEnhancements(target, config) {
         const mirror = path.join(absoluteMirrorRoot, entry.name, "SKILL.md");
         if (!pathExists(mirror)) continue;
         const canonical = path.join(canonicalSkills, entry.name, "SKILL.md");
-        if (!pathExists(canonical)) {
+        if (!pathExists(canonical) && !declaredExternalSkills.has(entry.name)) {
           findings.push({ level: "warning", code: "skill-mirror-without-canonical", path: `${mirrorRoot}/${entry.name}/SKILL.md` });
         }
       }
