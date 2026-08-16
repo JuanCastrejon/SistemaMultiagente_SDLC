@@ -528,4 +528,84 @@ assert.ok(
 );
 fs.rmSync(path.join(target, "openspec", "changes", "mi"), { recursive: true, force: true });
 
+// --- 23. el allowed_signers del REPO valida sin config de entorno ---------
+// Un runner de CI no tiene `gpg.ssh.allowedSignersFile`: la primera vez que un
+// PR necesito validar una excepcion de verdad, toda entrada del allowlist
+// murio con "no verifica como commit firmado" y `allowed` quedo vacio aunque
+// local validara. El guard tiene que poder verificar con las claves PUBLICAS
+// que viajan en el propio repo (`.sdlc/allowed_signers`), sin nada del
+// entorno. Este caso reproduce el runner: configs global y system vacias, y
+// la config local del repo neutralizada.
+if (firmaLista) {
+  // Una excepcion legitima en la BASE, igual que el caso 8.
+  git(["commit", "--quiet", "--allow-empty", "-S", "-m", "atestacion de la excepcion 23"]);
+  const atestacion23 = git(["rev-parse", "HEAD"]).trim();
+  fs.writeFileSync(
+    path.join(target, ".github", "agent-state", "spec-boundary-allowlist.yaml"),
+    [
+      "version: 1",
+      "allowlist:",
+      "  - path: quality-contract.yaml",
+      "    reason: caso 23",
+      `    approved_by: ${FIRMANTE}`,
+      `    attestation_commit: ${atestacion23}`,
+      "    expires_at: 2099-01-01T00:00:00Z",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  git(["add", "-A"]);
+  git(["commit", "--quiet", "-m", "excepcion 23 mergeada en la base"]);
+  git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+  // La ruta protegida tocada, y el guard ARREGLADO corrido como un runner:
+  // sin config de usuario, de sistema, ni del repo.
+  fs.writeFileSync(path.join(target, "quality-contract.yaml"), "version: 3\n", "utf8");
+  const gitconfigVacio = path.join(tempRoot, "gitconfig-vacio");
+  fs.writeFileSync(gitconfigVacio, "", "utf8");
+  const guardDirecto = path.join(tempRoot, "guard-directo.mjs");
+  fs.copyFileSync(guardSource, guardDirecto);
+  const envRunner = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: gitconfigVacio,
+    GIT_CONFIG_SYSTEM: gitconfigVacio,
+    GIT_CONFIG_NOSYSTEM: "1",
+    // Y sin config util en el entorno: un runner no tiene allowed_signers.
+    // La config de ENTORNO pisa los archivos, y el `-c` del guard pisa a la
+    // de entorno — por eso el archivo del repo gana solo cuando existe.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "gpg.ssh.allowedSignersFile",
+    GIT_CONFIG_VALUE_0: path.join(tempRoot, "allowed_signers_inexistente")
+  };
+
+  const llavePublica = `${FIRMANTE} namespaces="git" ${fs.readFileSync(path.join(tempRoot, "id_ed25519_guard.pub"), "utf8").trim()}\n`;
+  const correrRunner = () =>
+    JSON.parse(
+      spawnSync("node", [guardDirecto, "--base", "refs/remotes/origin/main", "--json"], {
+        cwd: target,
+        encoding: "utf8",
+        env: envRunner
+      }).stdout
+    );
+
+  // Sin el allowed_signers del repo: la entrada NO valida — muro, no control.
+  fs.rmSync(path.join(target, ".sdlc", "allowed_signers"), { force: true });
+  const sinArchivo = correrRunner();
+  assert.equal(sinArchivo.status, "blocked", JSON.stringify(sinArchivo));
+  assert.ok(sinArchivo.violations.some((v) => v.path === "quality-contract.yaml"));
+  assert.deepEqual(sinArchivo.allowed, [], "sin allowed_signers no hay excepcion que valga");
+
+  // Con el archivo: la excepcion verifica sin nada del entorno.
+  fs.writeFileSync(path.join(target, ".sdlc", "allowed_signers"), llavePublica, "utf8");
+  const conArchivo = correrRunner();
+  assert.equal(conArchivo.status, "ok", JSON.stringify(conArchivo));
+  assert.ok(
+    conArchivo.allowed.some((entry) => entry.path === "quality-contract.yaml"),
+    JSON.stringify(conArchivo)
+  );
+
+  fs.rmSync(path.join(target, ".sdlc", "allowed_signers"));
+  git(["checkout", "--", "quality-contract.yaml"]);
+}
+
 console.log("spec-boundary-guard: PASS");
