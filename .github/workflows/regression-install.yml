@@ -148,9 +148,34 @@ jobs:
         run: |
           node ./bin/sdlc.js upgrade --target ./tmp-consumer --json
 
+      # `./tmp-consumer` es un directorio de scratch, nunca un `git init`: el
+      # eje de autorizacion (ADR 0008, G7) no puede resolver `origin/develop`
+      # ahi y avisa `authz-base-unresolvable` SIEMPRE, a proposito (doctor
+      # reporta, no bloquea — un clon nuevo sin la rama remota es normal). Es
+      # el UNICO hallazgo que esta regresion tolera; cualquier otro sigue
+      # rompiendo el job.
       - name: Doctor ya configurado
+        shell: bash
         run: |
-          node ./bin/sdlc.js doctor --target ./tmp-consumer --json
+          set +e
+          salida=$(node ./bin/sdlc.js doctor --target ./tmp-consumer --json)
+          codigo=$?
+          set -e
+          echo "$salida"
+          SALIDA="$salida" CODIGO="$codigo" node -e '
+            const codigo = Number(process.env.CODIGO);
+            const payload = JSON.parse(process.env.SALIDA);
+            const findings = payload.findings ?? [];
+            const inesperados = findings.filter((f) => f.level !== "info" && f.code !== "authz-base-unresolvable");
+            if (inesperados.length > 0) {
+              console.error(`::error::doctor encontro hallazgos inesperados: ${JSON.stringify(inesperados)}`);
+              process.exit(1);
+            }
+            if (codigo !== 0 && codigo !== 2) {
+              console.error(`::error::doctor salio ${codigo}; solo se tolera 0 o 2 por authz-base-unresolvable`);
+              process.exit(1);
+            }
+          '
 
       - name: Diff
         run: |
