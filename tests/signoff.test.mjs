@@ -22,7 +22,9 @@ import {
   buildAttestationMessage,
   computeSubjectSha256,
   createAttestationCommit,
+  judgeSignoff,
   parseAttestationMessage,
+  subjectV1,
   verifySignoff
 } from "../src/signoff.js";
 
@@ -106,6 +108,62 @@ const verified = verifySignoff({ target, commitSha: created.commitSha, subject, 
 assert.equal(verified.ok, true, JSON.stringify(verified));
 assert.equal(verified.signer, SIGNER_UID);
 
+// 1b. La HUELLA de la clave manda (ronda 19, M2): declararla EXCLUYE la union
+// por principal, y una huella que no emparea rechaza aunque el email sea el
+// correcto. El mutante que comparaba solo el PREFIJO de la huella pasaba la
+// suite entera — por eso la huella erronea difiere solo en el ULTIMO caracter.
+const huellaCasiBuena = `${fingerprint.slice(0, -1)}${fingerprint.endsWith("0") ? "1" : "0"}`;
+const porHuella = verifySignoff({
+  target,
+  commitSha: created.commitSha,
+  subject,
+  maintainers: [{ signer: SIGNER_UID, fingerprint }]
+});
+assert.equal(porHuella.ok, true, JSON.stringify(porHuella));
+assert.equal(porHuella.identityBinding, "fingerprint");
+const huellaErrada = verifySignoff({
+  target,
+  commitSha: created.commitSha,
+  subject,
+  maintainers: [{ signer: SIGNER_UID, fingerprint: huellaCasiBuena }]
+});
+assert.equal(huellaErrada.ok, false, JSON.stringify(huellaErrada));
+assert.equal(huellaErrada.code, "signoff-signer-not-maintainer", "huella declarada que no emparea excluye la union por principal");
+
+// 1c. El canon del sujeto esta ANCLADO (ronda 19, M5): todos los tests
+// computaban el hash EN VIVO — crear y verificar compartian la funcion — asi
+// que cambiar el formato del canon era invisible para la suite. Estos
+// literales SON el contrato: si el canon cambia, toda atestacion firmada deja
+// de valer, y eso tiene que ser un fallo, no un dato.
+assert.equal(
+  computeSubjectSha256({ slice: "s1", phase: "F13", tree_hash: "abc", contract_sha256: "c1", phase_contract_sha256: "p1" }),
+  "d2534302c50b03e8062f914f81130886f50708db5df0c8721ea1230147eacbf6"
+);
+assert.equal(
+  computeSubjectSha256(subjectV1({ slice: "s1", phase: "F13", tree_hash: "abc", contract_sha256: "c1", phase_contract_sha256: "p1" })),
+  "f339f759e38897f375d3a5737e0ade109e343ee477f50ab4d53d541fe5425507"
+);
+
+// 1d. Un sujeto v1 firmado se rechaza con su codigo propio (ronda 19, M8): la
+// distincion dice QUE hacer — re-firmar, no investigar — y nadie la probaba.
+// El mensaje se firma con el hash v1 de un sujeto v2: solo casa si la
+// atestacion se emitio con el formato anterior.
+const sujetoV2 = { slice: "slice-money", phase: "F13", tree_hash: "treehash123", contract_sha256: "c1", phase_contract_sha256: "p1" };
+const mensajeV1 = buildAttestationMessage({
+  slice: sujetoV2.slice,
+  phase: sujetoV2.phase,
+  subjectSha256: computeSubjectSha256(subjectV1(sujetoV2))
+});
+const factsV1 = {
+  ancestor: true,
+  exists: true,
+  verifyOk: true,
+  log: ["G", SIGNER_UID, fingerprint, fingerprint, mensajeV1].join("\0")
+};
+const v1 = judgeSignoff({ facts: factsV1, commitSha: "abc123def456", subject: sujetoV2, maintainers, headRef: "HEAD" });
+assert.equal(v1.ok, false, JSON.stringify(v1));
+assert.equal(v1.code, "signoff-subject-v1", JSON.stringify(v1));
+
 // 2. El codigo cambio despues de la firma: el subject (tree_hash) ya no
 // coincide. Una firma vieja no puede aprobar contenido nuevo.
 const staleSubject = { ...subject, tree_hash: "otro-arbol-distinto" };
@@ -171,11 +229,24 @@ fs.writeFileSync(
   "utf8"
 );
 
+// Firmar con cambios sin commitear firmaria el arbol de HEAD y no lo que hay
+// en disco: se bloquea antes de crear nada.
+const dirtyCreate = JSON.parse(
+  runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--create", "--json"]).stdout
+);
+assert.equal(dirtyCreate.status, "blocked", JSON.stringify(dirtyCreate));
+assert.equal(dirtyCreate.code, "signoff-worktree-dirty");
+
+git(["add", "."]);
+git(["commit", "--quiet", "-m", "contenido a aprobar"]);
+const approvedSha = git(["rev-parse", "HEAD"]).trim();
+
 const createOut = JSON.parse(
   runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--create", "--json"]).stdout
 );
 assert.equal(createOut.status, "ok", JSON.stringify(createOut));
 assert.ok(createOut.commitSha);
+assert.ok(createOut.files > 0, "el sujeto tiene que anclar archivos reales");
 
 const verifyOut = JSON.parse(
   runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--verify", "--commit", createOut.commitSha, "--json"])
@@ -183,16 +254,173 @@ const verifyOut = JSON.parse(
 );
 assert.equal(verifyOut.status, "ok", JSON.stringify(verifyOut));
 assert.equal(verifyOut.signer, SIGNER_UID);
+assert.equal(verifyOut.fresh, true);
 
-// El arbol cambia (src/index.js) sin volver a firmar: --verify con el MISMO
-// commit ahora debe bloquear, porque el sujeto recomputado ya no es el que
-// el commit aprobo.
+// REGRESION (manga-translator-mvp, 2026-08): el arbol cambia y se commitea
+// despues de firmar. La firma NO caduca — sigue atestando el arbol que aprobo,
+// que es lo que la hace servir como registro de que la fase se aprobo — pero se
+// reporta `fresh: false`, y `--require-fresh` la bloquea para quien exija que
+// lo aprobado sea lo actual.
 fs.writeFileSync(path.join(target, "src", "index.js"), "export const x = 2;\n", "utf8");
-const verifyStale = JSON.parse(
+git(["add", "."]);
+git(["commit", "--quiet", "-m", "cambio posterior a la firma"]);
+
+const verifyAfterChange = JSON.parse(
   runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--verify", "--commit", createOut.commitSha, "--json"])
     .stdout
 );
-assert.equal(verifyStale.status, "blocked");
-assert.equal(verifyStale.code, "signoff-subject-mismatch");
+assert.equal(verifyAfterChange.status, "ok", JSON.stringify(verifyAfterChange));
+assert.equal(verifyAfterChange.fresh, false);
+
+const verifyFresh = JSON.parse(
+  runCli([
+    "signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13",
+    "--verify", "--commit", createOut.commitSha, "--require-fresh", "--json"
+  ]).stdout
+);
+assert.equal(verifyFresh.status, "blocked");
+assert.equal(verifyFresh.code, "signoff-stale");
+
+// El sujeto se ancla al arbol del commit firmado, no al de HEAD: dos commits
+// despues sigue siendo el mismo hash.
+assert.equal(verifyAfterChange.subject.tree_hash, verifyOut.subject.tree_hash);
+
+// Una firma de otra fase no aprueba esta: slice y phase entran en el sujeto.
+const verifyOtherPhase = JSON.parse(
+  runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F15", "--verify", "--commit", createOut.commitSha, "--json"])
+    .stdout
+);
+assert.equal(verifyOtherPhase.status, "blocked");
+assert.equal(verifyOtherPhase.code, "signoff-subject-mismatch");
 
 console.log("signoff cli e2e: PASS");
+
+// --- El maintainer declarado en la otra forma de %GS -------------------------
+// GPG reporta el UID completo; con `gpg.format=ssh` git reporta solo el
+// principal de allowed_signers. Declarar el email pelado tiene que valer contra
+// una firma GPG cuyo %GS es "Nombre <email>", y al reves. Es exactamente lo que
+// costo un commit de bootstrap en manga-translator-mvp.
+// El commit de la seccion anterior (`created`) quedo fuera de la historia por
+// el reset del caso 5; el vigente es el que creo el CLI.
+const cliSubject = verifyOut.subject;
+const emailOnly = verifySignoff({
+  target,
+  commitSha: createOut.commitSha,
+  subject: cliSubject,
+  maintainers: [{ signer: "maintainer@example.com" }]
+});
+assert.equal(emailOnly.ok, true, JSON.stringify(emailOnly));
+
+const otherEmail = verifySignoff({
+  target,
+  commitSha: createOut.commitSha,
+  subject: cliSubject,
+  maintainers: [{ signer: "otro@example.com" }]
+});
+assert.equal(otherEmail.ok, false);
+assert.equal(otherEmail.code, "signoff-signer-not-maintainer");
+assert.match(otherEmail.detail, /maintainer@example\.com/, "el error tiene que mostrar el %GS observado");
+
+console.log("signoff signer matching (gpg uid vs principal ssh): PASS");
+
+// --- Superficie fantasma: no se firma ni se verifica el vacio ----------------
+// Con `apps/api`/`apps/web` (los placeholders del instalador) el arbol resuelve
+// a cero archivos y el tree_hash es el SHA-256 de la cadena vacia. Una firma
+// asi es criptograficamente valida y semanticamente hueca.
+fs.writeFileSync(
+  path.join(target, "quality-contract.yaml"),
+  "version: 1\nenforcement: observe\ntiers:\n  core:\n    description: unico tier\nsurfaces:\n  - id: fantasma\n    path: apps/api\n    tier: core\nprobes: []\ngates: []\n",
+  "utf8"
+);
+git(["add", "."]);
+git(["commit", "--quiet", "-m", "contrato con superficie fantasma"]);
+
+const createEmpty = JSON.parse(
+  runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--create", "--json"]).stdout
+);
+assert.equal(createEmpty.status, "blocked", JSON.stringify(createEmpty));
+assert.equal(createEmpty.code, "signoff-empty-subject");
+
+const verifyEmpty = JSON.parse(
+  runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--verify", "--commit", createOut.commitSha, "--json"])
+    .stdout
+);
+assert.equal(verifyEmpty.status, "blocked", JSON.stringify(verifyEmpty));
+assert.equal(verifyEmpty.code, "signoff-empty-subject");
+
+console.log("signoff empty-subject guard: PASS");
+
+// --- E2E con firma SSH real -------------------------------------------------
+// El unico camino que estaba sin cubrir, y el que usan de hecho los
+// consumidores: `gpg.format=ssh`. Aqui es donde `-S<keyid>` pegado fallaba y
+// donde %GS devuelve el principal de allowed_signers en vez de un UID.
+const sshTarget = path.join(tempRoot, "repo-ssh");
+const SSH_PRINCIPAL = "ssh-signer@example.com";
+let sshReady = true;
+try {
+  fs.mkdirSync(sshTarget, { recursive: true });
+  const keyPath = path.join(tempRoot, "id_ed25519");
+  execFileSync("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", SSH_PRINCIPAL, "-f", keyPath], { stdio: "ignore" });
+  const publicKey = fs.readFileSync(`${keyPath}.pub`, "utf8").trim();
+  const allowedSigners = path.join(tempRoot, "allowed_signers");
+  fs.writeFileSync(allowedSigners, `${SSH_PRINCIPAL} namespaces="git" ${publicKey}\n`, "utf8");
+
+  const gitSsh = (args) => execFileSync("git", args, { cwd: sshTarget, encoding: "utf8" });
+  gitSsh(["init", "--quiet"]);
+  gitSsh(["config", "user.email", SSH_PRINCIPAL]);
+  gitSsh(["config", "user.name", "SSH Signer"]);
+  gitSsh(["config", "gpg.format", "ssh"]);
+  gitSsh(["config", "user.signingkey", `${keyPath}.pub`.replace(/\\/g, "/")]);
+  gitSsh(["config", "gpg.ssh.allowedSignersFile", allowedSigners.replace(/\\/g, "/")]);
+
+  fs.mkdirSync(path.join(sshTarget, "src"), { recursive: true });
+  fs.writeFileSync(path.join(sshTarget, "src", "index.js"), "export const y = 1;\n", "utf8");
+  fs.writeFileSync(
+    path.join(sshTarget, "quality-contract.yaml"),
+    "version: 1\nenforcement: observe\ntiers:\n  core:\n    description: unico tier\nsurfaces:\n  - id: s\n    path: src\n    tier: core\nprobes: []\ngates: []\n",
+    "utf8"
+  );
+  fs.mkdirSync(path.join(sshTarget, ".sdlc"), { recursive: true });
+  fs.writeFileSync(
+    path.join(sshTarget, ".sdlc", "config.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        frameworkVersion: "1.0.0",
+        project: { name: "Demo SSH", slug: "demo-ssh" },
+        mode: "greenfield",
+        surfaces: [],
+        gitFlow: { integrationBranch: "main", stableBranch: "main" },
+        openspec: { profile: "minimal" },
+        // Declarado como UID con nombre, que es lo que documentaba el framework:
+        // con SSH git reporta solo el principal y antes esto no podia pasar nunca.
+        governance: { threatModel: "single-maintainer", maintainers: [{ signer: `SSH Signer <${SSH_PRINCIPAL}>` }] }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  gitSsh(["add", "."]);
+  gitSsh(["commit", "--quiet", "-m", "base ssh"]);
+} catch (error) {
+  sshReady = false;
+  console.log(`signoff ssh e2e: SKIP (${error.message.split("\n")[0]})`);
+}
+
+if (sshReady) {
+  const sshCreate = JSON.parse(
+    runCli(["signoff", "--target", sshTarget, "--slice", "slice-ssh", "--phase", "F13", "--create", "--json"]).stdout
+  );
+  assert.equal(sshCreate.status, "ok", JSON.stringify(sshCreate));
+
+  const sshVerify = JSON.parse(
+    runCli(["signoff", "--target", sshTarget, "--slice", "slice-ssh", "--phase", "F13", "--verify", "--commit", sshCreate.commitSha, "--json"])
+      .stdout
+  );
+  assert.equal(sshVerify.status, "ok", JSON.stringify(sshVerify));
+  assert.equal(sshVerify.signer, SSH_PRINCIPAL, "con SSH, %GS es el principal de allowed_signers");
+  assert.equal(sshVerify.fresh, true);
+
+  console.log("signoff ssh e2e (principal vs uid): PASS");
+}

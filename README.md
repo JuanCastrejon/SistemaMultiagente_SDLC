@@ -179,7 +179,9 @@ Una salvedad honesta: si la rama base todavía no tiene el script (bootstrap, pr
 
 ```powershell
 # El sujeto (slice + fase + tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado
-sdlc signoff --slice <id> --phase <F> --create
+# `--record` enlaza la firma con la evidencia de su fase. SIN el, el commit firmado existe pero la
+# evidencia sigue apuntando a la anterior y el gate sigue bloqueando: es el paso que falta, no un extra.
+sdlc signoff --slice <id> --phase <F> --create --record
 sdlc signoff --slice <id> --phase <F> --verify --commit <sha>
 
 # Cada escenario Gherkin trae un sc_id cuyo hash debe coincidir con (capability, requirement, título)
@@ -190,6 +192,8 @@ sdlc change-close --change <slug> --integration-branch develop
 ```
 
 Con un solo maintainer, GitHub prohíbe auto-aprobar un PR propio: `platform-review` es insatisfacible, así que la firma se verifica por **commit firmado** en vez de por review de plataforma (`governance.threatModel: single-maintainer`).
+
+> Desde 2.0.0 el sujeto se ancla al **commit firmado** y `--create --record` enlaza la firma con la evidencia de su fase. Ver [Firma humana: emitir, enlazar y auditar](#firma-humana-emitir-enlazar-y-auditar).
 
 ### Documentación generada, no escrita
 
@@ -221,6 +225,363 @@ sdlc red-proof-verify --slice <id> --report reports/red-proof.json --format vite
 Todo escenario en `status: red` exige que el reporte declare `outcome: assertion-failed`: un error colateral (import roto, `throw` arbitrario) no da crédito, porque demuestra que algo se rompió, no que el escenario esté bien especificado.
 
 Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`, `proofStrength: "heuristic"`, `limitations`). No consume aún procedencia de CI, así que adjudica un reporte que produce el propio evaluado: `ok` significa «no se detectó trampa», nunca «el rojo quedó demostrado». Ningún workflow lo invoca por defecto.
+
+## Qué cambia en 2.0.0
+
+Las rupturas son **trece**, casi todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+
+> El [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) ya está implementado; sus cinco rupturas son las últimas de la tabla. Se declararon **al implementarlas**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces.
+
+| Ruptura | Qué implica al actualizar |
+| --- | --- |
+| El sujeto de la firma cambia de formato | Las atestaciones anteriores **no verifican**. Hay que volver a firmar (`sdlc signoff … --create --record`). `doctor` y `upgrade` las nombran una por una. |
+| `install` deja de escribir superficies y stack de ejemplo | Un repo recién instalado sale en **error** en `doctor` hasta declarar sus superficies reales. Es deliberado: ver abajo. |
+| `.github/agents/surface-traceability.json` se genera desde `config.surfaces` | Cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; revísalo si lo consumes a mano. |
+| El hash de árbol pasa de 256 MiB a **64 MiB** por llamada | Un repo cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol, así que no alcanza a un repo normal — pero es silencioso para un monorepo grande. |
+| Toda excepción de la allowlist deja de autorizar hasta completarse | `approved_by` debe ser un `signer` de `governance.maintainers`, `attestation_commit` debe verificar como commit firmado por un mantenedor, y `expires_at` debe estar vigente. Antes solo se leía `path` y las otras tres reglas eran decorativas. |
+| El guard exige base REMOTA calificada (`refs/remotes/…`) | Un tag o rama local llamado `origin/<rama>` ya no sirve como base: secuestraba la comparación entera. |
+| El workflow ya no cae a la copia del checkout | Si la rama de integración no trae el guard, falla con `spec-boundary-guard-ausente-en-base` en vez de ejecutar el script que el evaluado controla. |
+| El alcance del guard crece | Configs de gate por nombre a cualquier profundidad, `**` que cruza barras de verdad, autoprotección por sufijo de ruta, rutas NUL-delimitadas y rechazo de patrones patológicos. Puede bloquear lo que antes pasaba. |
+| Toda superficie sin clasificar exige atestación firmada | `tier` deja de gobernar la autorización. Cuatro riesgos por superficie deciden la firma, y ausente no es `false`. Aplica a F4/F13/F14. |
+| El sujeto de la atestación pasa a v2 | Gana `contract_sha256` y `phase_contract_sha256`. Las firmas anteriores no verifican, y la firma deja de valer si la política cambia después de firmar. |
+| `phase-gate` exige rama de integración remota | Leída de `gitFlow.integrationBranch`. Sin ella bloquea; pedir otra base es `authz-base-mismatch`. En CI, `fetch-depth: 0`. |
+| `upgrade` termina en `action-required` con el eje pendiente | Y `doctor` lo reporta, con severidades distintas por comando. |
+| El workflow gestionado gana un paso de autorización | Sin él, el eje se adjudicaba solo donde el evaluado ejecuta. |
+
+### El instalador ya no finge configuración
+
+Hasta 1.8.2, `install` escribía superficies de ejemplo (`apps/api`, `apps/web`) y cinco `<BACKEND_STACK>`. En un repo con otro layout **eso no era un ejemplo: era configuración activa**, con dos consecuencias que tardaron semanas en verse en un consumidor real:
+
+- todos los gates sobre esas superficies eran vacuos (`surface-path-unresolved`), y
+- el sujeto de la firma humana se calculaba sobre el **árbol vacío**, así que una atestación resultaba criptográficamente válida y semánticamente hueca: atestaba la nada.
+
+Ahora `install` escribe `surfaces: []` y `stack` en `null`, y el estado a medio configurar se ve desde el primer minuto. **El framework no sabe nada del repo donde cae**: instala las bases y quien instala remata la configuración. Esa es la diferencia entre un repo sin configurar y uno que *parece* configurado.
+
+## Configuración después de instalar
+
+Cinco cosas que el instalador **no puede adivinar** y sin las cuales el árbitro no mide nada. `sdlc doctor` las reclama todas.
+
+### 1. Superficies reales
+
+```jsonc
+// .sdlc/config.json
+"surfaces": [
+  { "id": "extension", "path": ".", "owner": "web-agent", "tier": "core", "hasUi": true }
+]
+```
+
+`id` es identidad persistente y `path` tiene que existir en disco. Ojo con esto: las superficies se declaran **dos veces** —aquí y en `quality-contract.yaml`— y el árbitro y la firma leen **solo el contrato**. Corregir una sola de las dos no arregla nada, y por eso `checkSurfaces` reporta `surface-declaration-divergent` cuando divergen.
+
+### 2. Stack real, o `null`
+
+`null` significa «este proyecto no tiene esa superficie» y es un valor legítimo. Lo que no se admite es un placeholder sin sustituir: `doctor` reporta `config-stack-placeholder` como error.
+
+### 3. Qué se puede medir y qué no
+
+Aquí es donde la mayoría de repos se atascan, y el framework tiene una respuesta explícita. Los umbrales por tier que trae el contrato de fábrica:
+
+| Gate | Fase | Métrica | core | standard | shell | Modo inicial |
+| --- | --- | --- | --- | --- | --- | --- |
+| `F8.changed-lines-coverage` | F8 | cobertura de **líneas cambiadas** | **90 %** | **80 %** | **0 %** | `ratchet` |
+| `F9.mutation-survivors` | F9 | mutantes supervivientes | 0 | 0 | 0 | `observe` |
+| `F9.no-coverage-mutants` | F9 | mutantes sin cobertura | 0 | 0 | 0 | `observe` |
+| `F10.dependency-violations` | F10 | violaciones de dependencias | 0 | 0 | 0 | `ratchet` |
+| `F10.dependency-cycles` | F10 | ciclos de dependencias | 0 | 0 | 0 | `ratchet` |
+
+La cobertura es de **líneas cambiadas**, no del repo entero: un repo con 12 % histórico no queda bloqueado, pero lo que toque hoy sí responde por sí mismo.
+
+**El denominador mínimo es parte del umbral, no un detalle.** «0 violaciones» y «0 violaciones sobre ≥10 módulos escaneados» son controles distintos: el primero lo cumple un repo vacío. Los de fábrica:
+
+| Gate | Denominador | Mínimo | Qué evita |
+| --- | --- | --- | --- |
+| `F8.changed-lines-coverage` | `coverage.changed_lines_total` | **1** | Que un PR sin líneas nuevas dé 100 % |
+| `F9.mutation-survivors` | `mutation.total` | **1** | Que «0 supervivientes» sea «0 mutantes generados» |
+| `F9.no-coverage-mutants` | `mutation.total` | **1** | Igual que el anterior |
+| `F10.dependency-violations` | `dependencies.modules_scanned` | **10** | Que «0 violaciones» sea «0 módulos escaneados» |
+| `F10.dependency-cycles` | `dependencies.modules_scanned` | **10** | Igual que el anterior |
+
+Por debajo del mínimo el gate no pasa ni falla: se marca como no concluyente.
+
+**La escalera de adopción (ADR 0007): ningún control nace en `block`.**
+
+| Modo | Qué hace | Cuándo se usa |
+| --- | --- | --- |
+| `observe` | Mide y reporta. Nunca bloquea. | Entrada obligatoria de todo gate nuevo |
+| `ratchet` | Bloquea solo si **empeora** respecto de la línea base | Cuando ya hay baseline promovido |
+| `block` | Bloquea contra el umbral absoluto | Solo cuando el repo ya lo cumple de forma estable |
+
+`enforcement: observe` en la cabecera del contrato es el interruptor global; un gate en `ratchet` con línea base vacía se comporta como `observe` puro. La línea base se mueve con `sdlc quality-baseline --promote`, que exige `--source ci` o un `--allow-local` explícito.
+
+**Cada probe declara su propio presupuesto y su política de ausencia:**
+
+| Probe | Métricas | Timeout | Si no emite reporte |
+| --- | --- | --- | --- |
+| `coverage` | `coverage.*` | 120 s | `warn` |
+| `deps` | `dependencies.*` | 60 s | `warn` |
+| `mutation` | `mutation.*` | 3600 s (1 h) | `skip` |
+
+`when_absent: warn` avisa pero no bloquea; `skip` lo omite en silencio, que es lo correcto para mutación, cuyo coste no siempre se paga en cada corrida. `applies_when.min_subjects` evita lanzar el probe cuando no hay nada que mutar. Y `command` es el **nombre de un script de `package.json`**, no una línea de shell: el engine lo invoca con el package manager detectado y rechaza cualquier token con metacaracteres.
+
+**Si tu repo no puede medir alguno de esos, declara el probe no disponible con motivo escrito:**
+
+```yaml
+# quality-contract.yaml
+probes:
+  - id: coverage
+    command: validate:coverage
+    unavailable:
+      reason: sin runner de tests; montarlo es un slice propio, no un ajuste
+      since: "2026-08-13"
+```
+
+Con eso, **todos** los gates que dependen de sus métricas salen `not-applicable` con ese motivo, en un bucket propio que no entra en el veredicto. La distinción es el punto entero: *no medido* e *incumplido* son cosas distintas, y un check rojo permanente que las confunde enseña a ignorar la señal. Tres contenciones para que no sea una puerta trasera:
+
+- sin `reason` escrito **no hay exención** y el gate se sigue adjudicando;
+- si la métrica aparece de todas formas, **manda el número medido** y se avisa de que la declaración sobra;
+- los gates de otras familias siguen bloqueando: la exención no se propaga.
+
+### 4. Preparación de firma
+
+```powershell
+sdlc tools-doctor --json   # el probe `commit-signing` dice qué falta
+```
+
+Comprueba `governance.maintainers`, `user.signingkey`, `gpg.format` y —con SSH— que `gpg.ssh.allowedSignersFile` exista. Antes, un consumidor descubría que no podía atestar nada **en el momento en que un gate humano se lo pedía**, con la fase ya bloqueada.
+
+Dos detalles que cuestan una tarde si nadie los dice:
+
+- **`%GS` no tiene el mismo formato en GPG y en SSH.** Con GPG es el UID completo (`Nombre <email>`); con `gpg.format=ssh` es el **principal** de `allowed_signers`, normalmente el email solo. Se aceptan las dos formas, y el error muestra el `%GS` realmente observado.
+- **Autorizar por email no autoriza una clave.** Con SSH, `allowed_signers` ya ata identidad a clave; con GPG, `%GS` es el UID que la propia clave declara, así que cualquiera puede fabricar una con tu email. Declara `fingerprint` y manda sobre el nombre:
+
+```jsonc
+"governance": {
+  "maintainers": [
+    { "signer": "juan@example.com", "fingerprint": "SHA256:…", "role": "human-review" }
+  ]
+}
+```
+
+El resultado de la verificación trae `identityBinding: "fingerprint" | "principal"` para que se sepa cuál de las dos garantías hay delante.
+
+### 5. Estado por slice
+
+`phase-status.yaml` admite un mapa `slices:` además del puntero global. Con varios slices en vuelo, el puntero solo describe uno y el árbitro quedaba ciego a los demás:
+
+```yaml
+current_slice: "slice-en-curso"   # lo que lee el workflow
+current_phase: "F8"
+
+slices:                            # lo que `sdlc status` adjudica entero
+  slice-en-curso:  { phase: "F8" }
+  otro-slice:      { phase: "F4" }
+```
+
+Es aditivo: un `phase-status.yaml` sin el mapa se comporta exactamente como antes.
+
+### 6. Límites del runtime (normalmente no hay que tocarlos)
+
+El framework lanza procesos externos —`git` sobre todo— y captura su salida. Esos límites viven en `src/file-utils.js` y **no están en ningún archivo de configuración a propósito**: cambiarlos mal rompe la propiedad que sostiene toda la verificación. Se documentan porque un repo muy grande puede necesitar subirlos.
+
+| Constante | Valor | Qué acota |
+| --- | --- | --- |
+| `CAPTURE_CEILING_BYTES` | 256 MiB | Techo de diseño: memoria retenida con el pool caliente al completo |
+| `TREE_HASH_MAX_BUFFER` | **64 MiB** | Tope por llamada del hash de árbol. Es `CAPTURE_CEILING_BYTES / 4` |
+| `AUDIT_CONCURRENCY` | 4 | Atestaciones verificadas a la vez (`src/harness.js`) |
+| `maxBuffer` (por llamada) | 1 MiB por defecto | Salida capturada de un proceso. **Un solo presupuesto entre `stdout` y `stderr`**, igual que `spawnSync` |
+| `MAX_CONCURRENT_CAPTURES` | 4 (**derivado**) | `CAPTURE_CEILING_BYTES / TREE_HASH_MAX_BUFFER`. Si subes el tope por captura, baja solo |
+| `killGraceMs` | 2 s (máx. **5 s**) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
+
+**La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con 64 MiB por llamada y 4 en vuelo, eso da exactamente el techo de 256 MiB.
+
+`CAPTURE_CEILING_BYTES` **es un límite aplicado**, no solo de diseño. La admisión reserva los **bytes declarados** de cada captura y encola en FIFO estricto cuando no caben. Dos rondas hicieron falta para llegar aquí:
+
+- la ronda 8 encontró que no había ningún tope y cinco capturas de 63 MiB retenían 315 MiB (pico de 497 MiB de RSS);
+- la ronda 9 encontró que **contar capturas tampoco bastaba**, porque el tope por captura es configurable: con el escape de 128 MiB documentado más abajo, cuatro cupos daban **512 MiB**, el doble del techo. Por eso `MAX_CONCURRENT_CAPTURES` ahora se **deriva** en vez de declararse.
+
+La reserva se decide **una vez, antes de arrancar el proceso, y solo sobre el tope declarado** — nunca sobre bytes ya recibidos. Esa línea es la que separa esto del presupuesto que se quitó en la ronda 7: aquél consultaba a mitad de la escritura, y por eso dos llamadas idénticas podían terminar distinto. Y el cupo se devuelve **cuando los buffers se sueltan de verdad**, no cuando la promesa resuelve: en un corte por desbordamiento la promesa resuelve de inmediato mientras el hijo sigue vivo, y liberar ahí admitía una segunda tanda encima de la primera.
+
+**Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Esa media es de *este* repo; rutas más largas la suben y bajan el número de archivos que caben.
+
+> **Límite conocido, con escape parcial.** Si tu árbol pasa de 64 MiB, `signoff` y el phase-gate devuelven `tree-ref-unreadable`. `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` no aceptan un parámetro por llamada —a propósito: eso dejaría abierto que alguien subiera solo una de las dos vías—, pero sí hay una variable de entorno: `SDLC_TREE_HASH_MAX_BUFFER_BYTES` se lee una sola vez y la comparten las dos. Un flag de CLI o un campo de `.sdlc/config.json` siguen pendientes de decisión de producto.
+
+```bash
+SDLC_TREE_HASH_MAX_BUFFER_BYTES=134217728 sdlc signoff --slice <id> --phase <F> --create --record
+```
+
+**Subir el tope reduce la concurrencia, no el techo.** Con 128 MiB por captura solo caben **dos** a la vez en los 256 MiB; con 256 MiB, una. Es intencional: el techo de memoria manda sobre el paralelismo. La variable exige un **entero positivo** que no supere el techo — `0.5` o un valor gigante se rechazan al arrancar, con el número delante. (`0.5` llegaba antes a publicar un tope de **cero bytes**, que hacía ilegible cualquier árbol.)
+
+Si algún día se expone como flag o config, tendrá que seguir siendo **el mismo número en las dos vías** — es lo único que garantiza que acepten y rechacen las mismas entradas.
+
+**`killGraceMs` está acotado arriba por seguridad, y el tope bajó en la ronda 8.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta. `pid_max` es un valor de wrap **configurable del kernel**, no una garantía de esta librería, así que un tope de 30 s no era defendible fuera de esta máquina — ahora son 5 s.
+
+## Firma humana: emitir, enlazar y auditar
+
+```powershell
+# Firma y ENLAZA con la evidencia de la fase en un solo paso
+sdlc signoff --slice <id> --phase <F> --create --record
+
+# Enlazar un commit que ya existe y ya está firmado (si el enlace falló antes)
+sdlc signoff --slice <id> --phase <F> --record --commit <sha>
+
+# Verificar, exigiendo además que el árbol aprobado siga siendo el actual
+sdlc signoff --slice <id> --phase <F> --verify --commit <sha> --require-fresh
+```
+
+Cuatro propiedades que conviene entender antes de usarlo:
+
+- **El sujeto se ancla al commit firmado, no al working tree.** Antes caducaba con el commit siguiente, así que no servía como registro de que una fase se aprobó. Que el árbol se haya movido después es otra pregunta: se responde con `fresh: false` y `--require-fresh`.
+- **`--record` verifica antes de escribir.** Si la firma no verifica, no escribe nada. `approved_by` se deriva del firmante que reporta git, nunca de una opción, y la referencia previa se conserva en `history`.
+- **Firmar el vacío es error duro.** Si ninguna superficie resuelve a archivos, `signoff-empty-subject`.
+- **No se firma con el árbol sucio.** El commit de atestación es vacío y firmaría el árbol de `HEAD`, no lo que tienes delante (`--allow-dirty` para saltarlo a sabiendas).
+
+### Auditoría de atestaciones
+
+`doctor` y `upgrade` re-verifican **todas** las atestaciones declaradas, no solo la de la fase en curso. Una firma que dejó de valer se descubría al llegar a su gate humano, con el trabajo ya hecho.
+
+| Veredicto | Qué significa | Efecto |
+| --- | --- | --- |
+| `invalid` | la firma existe y no vale | error en `doctor`, `action-required` en `upgrade` |
+| `unverifiable` | no hay con qué comprobarla (clon superficial, commit ausente) | aviso, pero **nunca** produce éxito |
+| `valid` | verificada | — |
+
+Un clon superficial no es culpa de nadie, así que su remedio no es «vuelve a firmar» sino traer la historia que falta — y el hallazgo lo dice. En cambio un repo sin maintainers **sí** es error: es configuración local que desactiva el verificador entero.
+
+**Coste medido** (superficie de 200 archivos, firmas válidas, mediana de tres corridas):
+
+| Atestaciones | En serie | Con pool de 4 |
+| --- | --- | --- |
+| 1 | 524 ms | 314 ms |
+| 5 | 2 490 ms | 616 ms |
+| 20 | 9 693 ms | 1 703 ms |
+| marginal | ~485 ms | **~67 ms** |
+
+El recorrido de la evidencia sin firmas cuesta ~30 ms: lo caro son los procesos de git, no leer YAML.
+
+## Modelo de riesgos de autorización (2.0.0, ADR 0008)
+
+Hasta 2.0.0 la firma humana colgaba de `tier`, y eso tenía una consecuencia
+perversa **medida**: para esquivar una firma bastaba con bajar el tier — y eso
+compraba además diez puntos menos de cobertura. La regla de gobernanza
+incentivaba degradar la calidad.
+
+Desde 2.0.0 son dos ejes separados: **`tier` mide, los riesgos autorizan.**
+
+```yaml
+# quality-contract.yaml — se genera desde config.surfaces
+surfaces:
+  - id: extension
+    path: .
+    tier: core                    # solo umbrales de calidad
+    money_path: false
+    regulated_data: false
+    security_critical: true       # <all_urls> + content script en cualquier origen
+    state_machine_critical: false
+```
+
+La obligación de firma desaparece **solo** si los cuatro riesgos están presentes,
+son booleanos válidos y los cuatro son `false`. Ausente, `null`, una cadena o un
+nombre mal escrito **obligan**: *no clasificado* no es *no aplica*, y un error de
+tecleo se paga con una firma de más, nunca con una de menos.
+
+Aplica a las fases con gate humano que tienen árbol que atestar —F4, F13 y F14—.
+En F2/F3 no hay código que firmar, y exigirlo allí produciría un bloqueo del que
+no se sale sin tocar la política que el control existe para proteger.
+
+### Qué se compara, y contra qué
+
+`phase-gate` es el **único** que adjudica. Compara la obligación efectiva entre
+la rama de integración y HEAD, superficie a superficie, emparejando por `id`:
+
+| Situación | ¿Downgrade? |
+| --- | --- |
+| `true → false` por reclasificación | sí |
+| La superficie desaparece | sí — la continuidad no se puede demostrar |
+| Split o merge de superficies | sí, por las bajas: producen el mismo diff que borrarlas |
+| El `path` se estrecha (`.` → `docs/`) | sí, baja parcial: la obligación queda intacta y el sujeto se vacía |
+| Rename con `id` estable | no por sí mismo |
+| Alta de una superficie nueva | no |
+| Se baja `governance.humanGate.policy` | sí, aunque ninguna superficie cambie |
+| Se quita `human_gate` de una fase | sí — es la puerta que gobierna todo el modelo |
+
+La rama base sale de `gitFlow.integrationBranch` y se califica a
+`refs/remotes/origin/<rama>`, **no** de lo que proponga el PR: elegir la base es
+elegir qué downgrades son detectables. Un tag llamado `origin/develop` no sirve
+como base, a propósito. En CI hace falta `fetch-depth: 0`.
+
+### El sujeto de la atestación, v2
+
+```
+{ slice, phase, tree_hash, contract_sha256, phase_contract_sha256 }
+```
+
+Los dos hashes nuevos cierran dos huecos distintos. `contract_sha256` hace que
+**una firma deje de valer si la política cambia después de firmar**
+(`authz-contract-drift`) — y se compara contra HEAD, no solo contra el ref
+atestado, porque recomputar en el ref atestado da siempre el mismo número y la
+mutación posterior sería invisible por construcción.
+
+No es frescura: que el `tree_hash` se mueva sigue siendo un **aviso**, porque el
+código cambia todo el tiempo y eso no invalida una aprobación. La política no
+cambia todo el tiempo.
+
+`phase_contract_sha256` entra porque `phase.human_gate` es el AND exterior de
+todo el modelo y vivía en un archivo que el sujeto no cubría.
+
+Una atestación emitida con el sujeto anterior se reconoce como tal
+(`signoff-subject-v1`) en lugar de reportarse como un *mismatch* genérico: la
+acción a tomar es re-firmar, no investigar.
+
+### La política, y sus límites
+
+```yaml
+governance:
+  humanGate:
+    policy: declarative          # attestation | declarative | none
+    overrides:
+      F2: declarative
+```
+
+Por **repositorio**, con override por **fase**. Ni por superficie —una fase se
+firma una vez, y dos políticas sobre la misma fase no tendrían veredicto
+definido— ni por slice, que es una unidad de trabajo del evaluado.
+
+La política **solo decide donde el riesgo no obliga**. Donde obliga,
+`attestation` es obligatoria sin excepción configurable. Y `none` no se degrada a
+su versión laxa cuando no se sostiene —`surfaces: []`, o alguna superficie
+crítica—: se **rechaza**.
+
+### Dónde se adjudica
+
+| Hecho | `doctor` | `upgrade` | `phase-gate` | CI |
+| --- | --- | --- | --- | --- |
+| Superficie sin clasificar | error | acción requerida | **bloquea** | como el gate |
+| Downgrade BASE→HEAD | error | acción requerida | **bloquea** | como el gate |
+| Sujeto v1 o deriva de política | error | acción requerida | **bloquea** | como el gate |
+| BASE irresoluble | aviso | aviso | **bloquea** (con puerta) | **bloquea** |
+
+`doctor` corre donde se desarrolla y no está concediendo nada; el gate sí. Por
+eso una base irresoluble avisa en uno y bloquea en el otro.
+
+Y el paso de autorización vive en el **workflow gestionado**: sin él, el eje
+quedaría adjudicado únicamente en la máquina del agente, y no habría evasión que
+inventar — bastaría no correr el comando.
+
+## Puente de Codex — preflight obligatorio
+
+Si delegas trabajo a Codex (ver `AGENTS.md`), ejecuta esto antes:
+
+```powershell
+node scripts/codex-session-check.mjs           # cuenta, plan, vencimiento
+node scripts/codex-session-check.mjs --probe   # además, una llamada real
+```
+
+Cubre tres modos de fallo que no se parecen entre sí y ninguno se ve hasta que algo se rompe a mitad de trabajo:
+
+1. **Sesión de otra cuenta** — la terminal sigue con la anterior aunque creas que cambiaste.
+2. **Credencial rechazada por el servidor** — está en disco y sin vencer, pero se inició sesión con otra cuenta desde otro sitio. `codex login status` responde «Logged in using ChatGPT» y sale `0` mientras la llamada real falla. Solo `--probe` lo detecta, y por eso es opt-in: gasta cuota.
+3. **Proceso con la credencial vieja en memoria** — un `codex` arrancado antes del último login. Se detecta comparando su arranque con la fecha de `auth.json`, y **la reparación es cerrar y reabrir la app**, no matar procesos: matarlos deja al puente sin su sesión compartida y el siguiente trabajo se cuelga sin escribir log.
+
+El preflight no imprime tokens ni el `account_id` completo, y el plan **avisa pero no bloquea**: ve el plan, no la cuota restante.
 
 ## Modos
 

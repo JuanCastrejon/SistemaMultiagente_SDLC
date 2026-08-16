@@ -100,6 +100,8 @@ templates:
     target: scripts/continua.ps1
   - source: scripts/continua.mjs
     target: scripts/continua.mjs
+  - source: scripts/codex-session-check.mjs
+    target: scripts/codex-session-check.mjs
   - source: scripts/publish-trace.ps1
     target: scripts/publish-trace.ps1
   - source: scripts/export-graphify-obsidian.py
@@ -245,6 +247,8 @@ templates:
     target: .claude/skills/commit/SKILL.md
   - source: .github/skills/commit/SKILL.md
     target: .github/skills/commit/SKILL.md
+  - source: .github/skills/codex-sesion/SKILL.md
+    target: .github/skills/codex-sesion/SKILL.md
   - source: .github/skills/resume/SKILL.md
     target: .github/skills/resume/SKILL.md
   - source: .github/skills/save/SKILL.md

@@ -46,9 +46,39 @@ function baseEvidence(phase, slice, extra = {}) {
 
 fs.mkdirSync(target, { recursive: true });
 run(["install", "--target", target, "--mode", "greenfield", "--project-name", "Demo", "--json"]);
-// Las superficies por defecto (apps/api core, apps/web standard) tienen que
-// existir en disco: sin esto checkSurfaces las marca fantasma y bloquea
-// SIEMPRE, independiente de lo que digan los gates.
+// El instalador ya no escribe superficies de ejemplo: las declara este test,
+// que es lo que hace un consumidor real. Tienen que existir tambien en disco,
+// porque si no checkSurfaces las marca fantasma y bloquea SIEMPRE,
+// independiente de lo que digan los gates.
+{
+  const configPath = path.join(target, ".sdlc", "config.json");
+  const installed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  // Los cuatro riesgos van CLASIFICADOS, como los declara un consumidor real
+  // desde 2.0.0: sin clasificar, el ADR 0008 obliga a atestacion firmada en toda
+  // fase con gate humano, y este caso —que mide herencia de gates de CALIDAD— se
+  // pondria rojo por una razon que no esta midiendo.
+  const sinRiesgos = { moneyPath: false, regulatedData: false, securityCritical: false, stateMachineCritical: false };
+  installed.surfaces = [
+    { id: "backend", path: "apps/api", owner: "api-agent", tier: "core", ...sinRiesgos },
+    { id: "web", path: "apps/web", owner: "web-agent", tier: "standard", hasUi: true, ...sinRiesgos }
+  ];
+  fs.writeFileSync(configPath, JSON.stringify(installed, null, 2), "utf8");
+  run(["upgrade", "--target", target, "--accept-managed", ".sdlc/config.json", "--json"]);
+}
+// El consumidor tiene que ser un repo git con rama de integracion REMOTA: desde
+// 2.0.0 `phase-gate` compara la obligacion de autorizacion contra la base
+// declarada, y no poder resolverla bloquea a proposito.
+for (const args of [
+  ["init", "--quiet"],
+  ["config", "user.email", "test@example.com"],
+  ["config", "user.name", "Test"],
+  ["add", "-A"],
+  ["commit", "--quiet", "-m", "consumidor instalado"],
+  ["update-ref", "refs/remotes/origin/develop", "HEAD"]
+]) {
+  execFileSync("git", args, { cwd: target });
+}
+
 fs.mkdirSync(path.join(target, "apps", "api"), { recursive: true });
 fs.writeFileSync(path.join(target, "apps", "api", "index.ts"), "export const api = 1;\n", "utf8");
 fs.mkdirSync(path.join(target, "apps", "web"), { recursive: true });

@@ -20,6 +20,14 @@ if (!fs.existsSync(configPath)) {
 
 const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 const surfaces = Array.isArray(config.surfaces) ? config.surfaces : [];
+// Cero superficies no es "todo en orden": es un repo sin configurar, y con
+// esta misma salida en verde nadie lo notaba. El instalador ya no escribe
+// superficies de ejemplo, asi que declararlas es un paso explicito.
+if (surfaces.length === 0) {
+  fail("config.surfaces esta vacio: no hay nada que trazar y ningun gate mide nada. Declarar las superficies reales del repo");
+  process.exit(1);
+}
+
 const missing = surfaces.filter((surface) => !fs.existsSync(path.join(target, surface.path)));
 
 if (missing.length > 0) {

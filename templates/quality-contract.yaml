@@ -32,6 +32,21 @@ probes:
   # `command` es el NOMBRE de un script de package.json, no una linea de shell:
   # el engine lo invoca con el package manager detectado y rechaza cualquier
   # token con metacaracteres.
+  #
+  # Un probe que este repo NO PUEDE ejecutar todavia se declara asi:
+  #
+  #   unavailable:
+  #     reason: sin runner de tests; montarlo es un slice propio, no un ajuste
+  #     since: "2026-08-13"          # opcional
+  #
+  # Con eso, TODOS los gates que dependen de sus metricas salen
+  # `not-applicable` con ese motivo, en vez de `not-measured`. NO MEDIDO e
+  # INCUMPLIDO son cosas distintas: un check rojo permanente que no las
+  # distingue ensena a ignorar la senal, y bajar los umbrales para que pase
+  # seria teatro. La exencion va sobre el PROBE (la capacidad que falta), nunca
+  # gate por gate, y sin `reason` escrito no hay exencion. Si la metrica
+  # aparece de todas formas, manda el numero medido y se avisa de que la
+  # declaracion sobra.
   - id: coverage
     command: validate:coverage
     emits: coverage/coverage-summary.json
@@ -40,6 +55,10 @@ probes:
     when_absent: warn
 
   - id: deps
+    # El id del probe no es el espacio de nombres de sus metricas: emite
+    # `dependencies.*`. `metrics_prefix` es lo que usa la declaracion de
+    # `unavailable` para saber a que gates alcanza.
+    metrics_prefix: dependencies
     command: validate:deps
     emits: reports/dependencies.json
     format: dependency-cruiser

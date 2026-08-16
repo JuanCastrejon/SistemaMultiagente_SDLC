@@ -343,6 +343,10 @@ export function commandResume(options) {
     head: runtime.git.head,
     activeChanges,
     latestCheckpoint: runtime.vault.latestCheckpoint,
+    // Un checkpoint con las secciones narrativas sin redactar no es
+    // continuidad: es `git log` con encabezados. Se dice aqui, donde alguien
+    // decide si puede retomar sin la conversacion.
+    latestCheckpointNarrative: checkpointNarrativeOf(runtime.vault.latestCheckpoint),
     readinessStatus: "unknown",
     promotionStatus: "draft-local",
     nextCommand: blockedByPhaseGate ? `Completar evidencia/artefactos de ${phaseGate.phase} con ${phaseGate.owner}.` : runtime.state.phase === "definition" ? "/enrich-us o Continua con analista-requisitos-migracion" : "Continua",
@@ -367,6 +371,13 @@ export function commandResume(options) {
           `- phase: ${result.phase}`,
           `- branch: ${result.branch ?? "unknown"}`,
           `- latest-checkpoint: ${result.latestCheckpoint ?? "none"}`,
+          ...(result.latestCheckpointNarrative && !result.latestCheckpointNarrative.complete
+            ? [
+                `- checkpoint-narrativa: **sin redactar** (${result.latestCheckpointNarrative.pending.length} secciones: ${result.latestCheckpointNarrative.pending.join(", ")})`
+              ]
+            : result.latestCheckpointNarrative
+              ? ["- checkpoint-narrativa: redactada"]
+              : []),
           `- next-command: ${result.nextCommand}`,
           `- phase-gate: ${phaseGate?.status ?? "unknown"}`,
           "",
@@ -563,15 +574,62 @@ export function commandSave(options) {
     ensureDir(path.dirname(checkpointPath));
     writeText(checkpointPath, content);
   }
+  // El checkpoint nace INCOMPLETO por diseno: el CLI escribe los huecos y el
+  // agente los llena. Lo que faltaba era decirlo. Medido en manga-translator-mvp:
+  // los 12 checkpoints del vault, incluido el mas reciente, tenian las cinco
+  // secciones narrativas en `_(pendiente de redactar)_`, y `resume` los
+  // presentaba como continuidad valida. Un checkpoint que solo trae `git log`
+  // no evita volver a la conversacion, que es para lo que existe.
+  const narrative = analyzeCheckpointNarrative(content);
   return {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
       dry_run: noMutate,
       event,
-      checkpoint: checkpointPath
+      checkpoint: checkpointPath,
+      narrative,
+      ...(narrative.complete
+        ? {}
+        : {
+            message:
+              `El checkpoint queda INCOMPLETO: faltan por redactar ${narrative.pending.length} secciones ` +
+              `(${narrative.pending.join(", ")}). Las llena el agente, no el CLI: sin ellas el checkpoint no ` +
+              "se puede retomar sin volver a la conversacion."
+          })
     }
   };
+}
+
+const NARRATIVE_PLACEHOLDER = "_(pendiente de redactar)_";
+
+function checkpointNarrativeOf(checkpointPath) {
+  if (!checkpointPath) return null;
+  const body = readTextIfExists(checkpointPath);
+  return body ? analyzeCheckpointNarrative(body) : null;
+}
+
+/**
+ * Que secciones narrativas de un checkpoint siguen sin redactar.
+ *
+ * Se calcula leyendo el CUERPO, no un campo de frontmatter: un campo que
+ * declara "completo" es exactamente igual de facil de escribir que la seccion
+ * misma, y se queda obsoleto en cuanto alguien edita el archivo.
+ */
+export function analyzeCheckpointNarrative(body) {
+  const pending = [];
+  let currentSection = null;
+  for (const line of String(body ?? "").split("\n")) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line);
+    if (heading) {
+      currentSection = heading[1];
+      continue;
+    }
+    if (currentSection && line.trim() === NARRATIVE_PLACEHOLDER && !pending.includes(currentSection)) {
+      pending.push(currentSection);
+    }
+  }
+  return { complete: pending.length === 0, pending };
 }
 
 export function commandContinua(options) {

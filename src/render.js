@@ -60,28 +60,25 @@ export function defaultConfig({ target, mode = "greenfield", projectName, projec
     },
     mode,
     scale: "feature",
+    // Nada falso en disco. Antes se escribian `<BACKEND_STACK>` y las
+    // superficies de ejemplo `apps/api`/`apps/web`, y en un repo con otro
+    // layout eso no era un ejemplo: era configuracion activa que hacia vacuo
+    // todo gate sobre ellas (`surface-path-unresolved`) y dejaba el sujeto de
+    // la firma humana en el hash del arbol VACIO — una atestacion valida que
+    // no atesta nada. Se descubrio en manga-translator-mvp semanas despues de
+    // instalar, con el check en rojo permanente entre tanto.
+    //
+    // `null` y `[]` dicen la verdad: esto todavia no esta configurado. Y
+    // `doctor` lo marca como error desde el primer minuto, en vez de dejar que
+    // parezca configurado.
     stack: {
-      backend: "<BACKEND_STACK>",
-      frontend: "<FRONTEND_STACK>",
-      database: "<DATABASE_STACK>",
-      designSystem: "<DESIGN_SYSTEM>",
-      mobile: "<MOBILE_STACK>"
+      backend: null,
+      frontend: null,
+      database: null,
+      designSystem: null,
+      mobile: null
     },
-    surfaces: [
-      {
-        id: "backend",
-        path: "apps/api",
-        owner: "api-agent",
-        tier: "core"
-      },
-      {
-        id: "web",
-        path: "apps/web",
-        owner: "web-agent",
-        tier: "standard",
-        hasUi: true
-      }
-    ],
+    surfaces: [],
     agents: {
       controlPlane: ["planificador-opus", "orquestador-opus"],
       specialistPlane: ["product-owner-agent", "project-manager-agent", "analista-requisitos", "arquitecto", "api-agent", "web-agent", "qa-test-architect-agent", "qa-security-review"]

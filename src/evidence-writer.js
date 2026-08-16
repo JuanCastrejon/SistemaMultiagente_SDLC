@@ -11,11 +11,12 @@
 // La frescura de la evidencia se decide comparando arboles, nunca relojes.
 // ---------------------------------------------------------------------------
 
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { ensureDir, listIgnoredPaths, pathExists, readTextIfExists, writeText } from "./file-utils.js";
+import { TREE_HASH_MAX_BUFFER, ensureDir, listIgnoredPaths, pathExists, readTextIfExists, spawnCapture, writeText } from "./file-utils.js";
 
 function sha256Text(value) {
   return crypto.createHash("sha256").update(value, "utf8").digest("hex");
@@ -89,6 +90,239 @@ export function computeTreeHash(target, surfacePaths = []) {
     if (digest) parts.push(`${relative}:${digest}`);
   }
   return { hash: sha256Text(parts.join("\n")), files: parts.length };
+}
+
+// Rutas de superficie tal como se declaran en el contrato ("." , "src",
+// "apps/web/") normalizadas a la forma que usa git: separador `/`, sin `./`
+// inicial ni `/` final. `.` y `` significan "todo el arbol".
+function normalizeSurfacePrefix(surfacePath) {
+  const normalized = String(surfacePath ?? "")
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  return normalized === "." ? "" : normalized;
+}
+
+function isUnderSurface(relativePath, prefixes) {
+  return prefixes.some((prefix) => prefix === "" || relativePath === prefix || relativePath.startsWith(`${prefix}/`));
+}
+
+/**
+ * Hash estable del arbol de las superficies TAL COMO QUEDO EN UN COMMIT, leido
+ * de git, no del working tree.
+ *
+ * Por que existe ademas de `computeTreeHash`: el sujeto de la firma humana
+ * (P5) tiene que poder re-verificarse manana, en CI, y dentro de diez commits.
+ * Anclarlo al working tree hace que la firma caduque en cuanto alguien edita
+ * cualquier archivo — reproducido en el consumidor manga-translator-mvp, donde
+ * la atestacion de F5 daba `signoff-subject-mismatch` un solo commit despues de
+ * emitirse, y por tanto no servia como registro de que esa fase se aprobo.
+ *
+ * NO es intercambiable con `computeTreeHash` y no debe compararse contra el:
+ * aquel hashea el CONTENIDO de cada archivo del working tree con sha256; este
+ * usa el object id que git ya calculo para cada blob. Los dos son deterministas
+ * y derivados de contenido, pero sus valores no coinciden. La frescura se mide
+ * comparando dos llamadas a ESTA funcion sobre dos refs distintas.
+ *
+ * @param {string} target
+ * @param {string[]} surfacePaths
+ * @param {string} ref  Commit-ish. Su arbol es lo que se hashea.
+ * @returns {{ok: boolean, hash: string|null, files: number, code: string|null, detail: string|null}}
+ */
+export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
+  // EL MISMO tope que la via asincrona, a proposito. Ver `TREE_HASH_MAX_BUFFER`
+  // en file-utils.js: mientras el numero sea el mismo, las dos vias aceptan y
+  // rechazan las mismas entradas. Esta via no necesita el limite por memoria
+  // (`spawnSync` bloquea el hilo: nunca hay dos a la vez), pero tener margen de
+  // sobra aqui no vale lo que cuesta que las dos discrepen.
+  const listed = spawnSync("git", ["ls-tree", "-r", "-z", ref], {
+    cwd: target,
+    encoding: "buffer",
+    maxBuffer: TREE_HASH_MAX_BUFFER
+  });
+  if (listed.status !== 0) {
+    return {
+      ok: false,
+      hash: null,
+      files: 0,
+      code: "tree-ref-unreadable",
+      detail: (listed.stderr?.toString("utf8") ?? "").trim() || `git ls-tree fallo sobre '${ref}'`
+    };
+  }
+  return hashLsTree(listed.stdout.toString("utf8"), surfacePaths);
+}
+
+export const RUTA_CONTRATO_CALIDAD = "quality-contract.yaml";
+
+/**
+ * El `contract_sha256` del sujeto v2 (ADR 0008, D3).
+ *
+ * Es el MISMO calculo que el `tree_hash`, filtrado a un solo archivo: sha256
+ * sobre la entrada `ruta:oid` que git reporta para el contrato EN EL REF
+ * ATESTADO. No se lee del working tree ni se recibe declarado.
+ *
+ * Por que reutilizar `computeTreeHashAtRef` en vez de leer bytes: mantiene una
+ * sola definicion de "que significa el hash de algo en un ref". Dos funciones
+ * que hashean lo mismo de dos maneras acaban discrepando, y una discrepancia
+ * entre lo que firma `signoff` y lo que verifica `phase-gate` es un fallo de
+ * seguridad silencioso — es exactamente el motivo por el que las vias sincrona
+ * y asincrona comparten `hashLsTree`.
+ *
+ * `files: 0` significa que el contrato NO existe en ese ref. No se devuelve un
+ * hash del vacio: se devuelve un error, porque una atestacion que dice cubrir
+ * una politica inexistente no cubre nada.
+ */
+export const RUTA_CONTRATO_FASES = "phase-contract.yaml";
+
+// Sentinela para el contrato de fases que NO vive en el repo del consumidor: el
+// harness cae al que trae el framework. No es un hueco — al contrario, es el
+// caso en el que el evaluado no puede editarlo. Lo que si es un cambio
+// detectable es AÑADIRLO al repo, porque eso mueve el hash de este sentinela a
+// uno real y, si el nuevo trae `human_gate: false`, la comparacion BASE->HEAD
+// lo ve como la transicion que es.
+export const CONTRATO_FASES_DEL_FRAMEWORK = "framework-default";
+
+function hashDeArchivoEnRef(target, ruta, ref) {
+  const resultado = computeTreeHashAtRef(target, [ruta], ref);
+  if (!resultado.ok) return { ok: false, hash: null, code: resultado.code, detail: resultado.detail };
+  return { ok: true, hash: resultado.files === 0 ? null : resultado.hash, code: null, detail: null };
+}
+
+export function computeContractSha256AtRef(target, ref = "HEAD") {
+  const resultado = hashDeArchivoEnRef(target, RUTA_CONTRATO_CALIDAD, ref);
+  if (!resultado.ok) return resultado;
+  if (resultado.hash === null) {
+    return {
+      ok: false,
+      hash: null,
+      code: "contract-missing-at-ref",
+      detail: `${RUTA_CONTRATO_CALIDAD} no existe en '${ref}': no hay politica que la atestacion pueda cubrir`
+    };
+  }
+  return resultado;
+}
+
+/**
+ * El segundo hash del sujeto v2 (ADR 0008, G4 punto 4).
+ *
+ * `phase.human_gate` es el AND exterior de todo el modelo de autorizacion y
+ * vive en OTRO archivo, que el sujeto no cubria: poner `human_gate: false` en
+ * F13 apagaba el gate entero sin mover un solo riesgo ni un solo hash.
+ *
+ * A diferencia del contrato de calidad, este PUEDE no estar en el repo: el
+ * harness cae al que trae el framework, y ese el consumidor no lo edita. Se
+ * devuelve el sentinela en vez de un error.
+ */
+export function computePhaseContractSha256AtRef(target, ref = "HEAD") {
+  const resultado = hashDeArchivoEnRef(target, RUTA_CONTRATO_FASES, ref);
+  if (!resultado.ok) return resultado;
+  return { ok: true, hash: resultado.hash ?? CONTRATO_FASES_DEL_FRAMEWORK, code: null, detail: null };
+}
+
+/**
+ * Igual, sin bloquear el hilo: la usa el pool de la auditoria. Comparte con la
+ * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.
+ */
+export async function computeTreeHashAtRefAsync(target, surfacePaths = [], ref = "HEAD") {
+  // EL MISMO tope que la via sincrona. Aqui SI acota memoria de verdad: esta
+  // via corre en el pool de la auditoria (AUDIT_CONCURRENCY en vuelo,
+  // harness.js), y `TREE_HASH_MAX_BUFFER` esta dimensionado para que todas
+  // juntas no pasen del techo de diseño. Ver el comentario del propio
+  // `TREE_HASH_MAX_BUFFER` en file-utils.js: el numero salio de tres intentos,
+  // y los dos primeros rompian la paridad.
+  const listed = await spawnCapture("git", ["ls-tree", "-r", "-z", ref], { cwd: target, maxBuffer: TREE_HASH_MAX_BUFFER });
+  if (!listed.ok) {
+    return {
+      ok: false,
+      hash: null,
+      files: 0,
+      code: "tree-ref-unreadable",
+      detail: listed.stderr.trim() || `git ls-tree fallo sobre '${ref}'`
+    };
+  }
+  return hashLsTree(listed.stdout, surfacePaths);
+}
+
+// Parte PURA del hash de arbol: recibe la salida de `ls-tree -r -z` y decide.
+// Vive separada para que las dos variantes de IO no puedan divergir en el
+// criterio, que es lo unico que importa aqui.
+function hashLsTree(stdout, surfacePaths) {
+  const prefixes = [...new Set((surfacePaths ?? []).map(normalizeSurfacePrefix))].sort();
+  const parts = [];
+  for (const entry of String(stdout ?? "").split("\0")) {
+    if (!entry) continue;
+    // `<mode> SP <type> SP <object> TAB <path>`
+    const tab = entry.indexOf("\t");
+    if (tab === -1) continue;
+    const [, type, object] = entry.slice(0, tab).split(/\s+/);
+    if (type !== "blob") continue;
+    const relative = entry.slice(tab + 1);
+    const first = relative.split("/")[0];
+    if (ALWAYS_SKIPPED.has(first)) continue;
+    if (!isUnderSurface(relative, prefixes)) continue;
+    parts.push(`${relative}:${object}`);
+  }
+
+  parts.sort();
+  return { ok: true, hash: sha256Text(parts.join("\n")), files: parts.length, code: null, detail: null };
+}
+
+/**
+ * Enlaza una atestacion ya verificada con la evidencia de su fase.
+ *
+ * Por que el CLI puede escribir esto y NO puede escribir `quality_metrics`: son
+ * cosas distintas. `quality_metrics` contiene los valores que el gate juzga, asi
+ * que redactarlos a mano es fabricar el veredicto. `attestation_commit` es un
+ * PUNTERO no autoritativo: `phase-gate` toma ese sha y reconstruye desde git el
+ * arbol, la ancestria, la firma criptografica, el estado `%G?`, el firmante
+ * permitido y el trailer con el sujeto. Cambiar el YAML a mano no puede encender
+ * el gate; lo unico que hace es decir donde mirar.
+ *
+ * Dos condiciones que no son negociables, y por eso viven aqui y no en quien
+ * llama:
+ *  - `approved_by` se DERIVA del firmante que git reporta (`%GS`), nunca se
+ *    acepta como opcion del usuario. Si lo eligiera quien firma, volveria a ser
+ *    texto libre.
+ *  - la referencia anterior se conserva en `history`. Re-firmar no borra a quien
+ *    aprobo antes.
+ *
+ * Quien llama debe haber verificado el commit ANTES: esta funcion escribe, no
+ * juzga.
+ */
+export function recordAttestation({ target, slice, phase, commitSha, signer, now = new Date() }) {
+  const absolute = evidencePath(target, slice, phase);
+  const raw = readTextIfExists(absolute);
+  if (!raw) {
+    return {
+      ok: false,
+      code: "evidence-missing",
+      detail: `no existe ${path.relative(target, absolute)}: la atestacion no puede enlazarse a una fase sin evidencia escrita`
+    };
+  }
+
+  let document;
+  try {
+    document = YAML.parse(raw) ?? {};
+  } catch (error) {
+    return { ok: false, code: "evidence-unparseable", detail: `${path.relative(target, absolute)} no es YAML legible: ${error.message}` };
+  }
+
+  const previous = document.human_gate_signoff;
+  if (previous && previous.attestation_commit !== commitSha) {
+    document.history = Array.isArray(document.history) ? document.history : [];
+    document.history.push({ replaced_at: now.toISOString(), human_gate_signoff: previous });
+  }
+
+  document.human_gate_signoff = {
+    required: true,
+    approved_by: signer,
+    approved_at: now.toISOString(),
+    signature_class: "attestation",
+    attestation_commit: commitSha
+  };
+
+  writeText(absolute, YAML.stringify(document));
+  return { ok: true, code: null, path: absolute, replacedPrevious: Boolean(previous && previous.attestation_commit !== commitSha) };
 }
 
 export function evidencePath(target, slice, phase) {

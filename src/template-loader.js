@@ -143,21 +143,81 @@ export function interpolate(content, context) {
 // superficie evita el modo de fallo mas comun de generar YAML por texto,
 // que es una indentacion de bloque mal alineada que produce un documento
 // invalido sin que nada lo detecte hasta que alguien lo parsea.
+// Los cuatro riesgos de autorizacion (ADR 0008, D1) se PROPAGAN desde
+// `config.surfaces` cuando el consumidor los declara alli, y NO se inventan
+// cuando no lo hace.
+//
+// La tentacion es emitir `false` en los cuatro para que un repo recien
+// instalado no salga obligado. Seria exactamente el error que el ADR nombra:
+// *no clasificado* no es *no aplica*. Escribir `false` por defecto es que el
+// framework clasifique el riesgo del consumidor por el, en un archivo que el
+// consumidor no ha leido — y encima con el valor que menos protege. Un repo sin
+// clasificar sale obligado, y eso es la respuesta correcta.
+const RIESGOS_EN_CONFIG = {
+  money_path: "moneyPath",
+  regulated_data: "regulatedData",
+  security_critical: "securityCritical",
+  state_machine_critical: "stateMachineCritical"
+};
+
 export function buildQualityContractSurfaces(surfaces) {
   if (surfaces.length === 0) return "[]";
   const entries = surfaces.map((surface) => {
     const tier = surface.tier ?? "standard";
-    const moneyPath = Boolean(surface.moneyPath);
-    const hasUi = Boolean(surface.hasUi);
-    return `{ id: ${JSON.stringify(surface.id)}, path: ${JSON.stringify(surface.path)}, tier: ${JSON.stringify(tier)}, money_path: ${moneyPath}, has_ui: ${hasUi} }`;
+    const campos = [
+      `id: ${JSON.stringify(surface.id)}`,
+      `path: ${JSON.stringify(surface.path)}`,
+      `tier: ${JSON.stringify(tier)}`
+    ];
+    for (const [enContrato, enConfig] of Object.entries(RIESGOS_EN_CONFIG)) {
+      if (typeof surface[enConfig] === "boolean") campos.push(`${enContrato}: ${surface[enConfig]}`);
+    }
+    campos.push(`has_ui: ${Boolean(surface.hasUi)}`);
+    return `{ ${campos.join(", ")} }`;
   });
   return `[${entries.join(", ")}]`;
 }
 
+// La matriz de trazabilidad se genera desde config.surfaces por el mismo
+// motivo que el contrato de calidad (P6): el template traia `apps/api`,
+// `apps/web` y `apps/mobile` fijos, asi que en cualquier repo con otro layout
+// declaraba superficies inexistentes con owners inventados.
+//
+// `indent` alinea el JSON generado con la posicion que ocupa dentro del
+// template, para que el archivo resultante siga siendo JSON valido y legible.
+export function buildSurfaceTraceability(surfaces, indent = 2) {
+  const pad = " ".repeat(indent);
+  const reindent = (value) => JSON.stringify(value, null, 2).split("\n").join(`\n${pad}`);
+  const roots = [...new Set([...surfaces.map((surface) => surface.path), "docs", "openspec"])];
+  const entries = surfaces.map((surface) => ({
+    id: surface.id,
+    owner: surface.owner,
+    tier: surface.tier ?? "standard",
+    pathPrefixes: [`${String(surface.path).replace(/\/+$/, "")}/`],
+    references: { requirements: [], userStories: [], useCases: [], adrs: [] },
+    notes: ""
+  }));
+  return { roots: reindent(roots), surfaces: reindent(entries) };
+}
+
+function surfacesOwnedBy(surfaces, owner) {
+  const owned = surfaces.filter((surface) => surface.owner === owner).map((surface) => surface.path);
+  return owned.length > 0 ? owned.join(", ") : "(sin superficie declarada todavia)";
+}
+
 function buildContext(config) {
   const surfaces = Array.isArray(config.surfaces) ? config.surfaces : [];
+  const traceability = buildSurfaceTraceability(surfaces);
   return {
     ...config,
+    surfaceTraceabilityRoots: traceability.roots,
+    surfaceTraceabilitySurfaces: traceability.surfaces,
+    // Las fichas de agente decian `{{surfaces.0.path}}` y `{{surfaces.1.path}}`:
+    // asumian que la superficie 0 es del api-agent y la 1 del web-agent, que
+    // era cierto solo mientras el instalador escribiera sus dos superficies de
+    // ejemplo. Se resuelve por OWNER, que es el dato que de verdad las liga.
+    surfacesOwnedByApiAgent: surfacesOwnedBy(surfaces, "api-agent"),
+    surfacesOwnedByWebAgent: surfacesOwnedBy(surfaces, "web-agent"),
     surfacesTable: surfaces
       .map((surface) => `| \`${surface.id}\` | \`${surface.path}\` | \`${surface.owner}\` |`)
       .join("\n"),

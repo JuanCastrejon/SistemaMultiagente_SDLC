@@ -7,3 +7,11 @@ coverage/
 dist/
 *.log
 
+
+.codex-out/
+
+# Configuracion local de Claude Code y worktrees de agentes en paralelo.
+# `agents/` SI se versiona: son la definicion de los roles de revision y su
+# reparto de modelos, que es contenido del repo. Lo demas es de esta maquina.
+.claude/settings.local.json
+.claude/worktrees/

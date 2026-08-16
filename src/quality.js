@@ -23,7 +23,14 @@ import { evaluateQualityGates } from "./quality-gates.js";
 import { appendQualityEvidence, computeTreeHash, evidencePath } from "./evidence-writer.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { detectPackageManager, loadPhaseContract, runPackageScript } from "./harness.js";
-import { checkProbeAnchors, checkSurfaces, loadQualityContract, resolveProbeChain, resolveTier } from "./quality-adjudicate.js";
+import {
+  checkProbeAnchors,
+  checkSurfaces,
+  loadQualityContract,
+  resolveProbeChain,
+  resolveTier,
+  resolveUnavailableProbes
+} from "./quality-adjudicate.js";
 import { loadBaseline, loadBaselineMetrics, promoteBaseline } from "./quality-baseline.js";
 import { detectEvidenceMismatch } from "./quality-verify.js";
 import { resolveEffectiveSource } from "./ci-detect.js";
@@ -262,8 +269,23 @@ export async function commandQualityGate(options = {}) {
     inheritedByOrigin.get(gate.phase).push(gate);
   }
 
+  // Probes que el contrato declara no disponibles con motivo escrito: sus
+  // gates salen `not-applicable` en vez de `not-measured`. Ver
+  // resolveUnavailableProbes.
+  const unavailable = resolveUnavailableProbes(contract);
+  surfaceFindings.push(...unavailable.findings);
+  const unavailableProbes = unavailable.resolved;
+
   const groups = [
-    evaluateQualityGates({ gates: ownGates, metrics, phase, tier, baseline, declaredByContract: effectiveDeclaredIds })
+    evaluateQualityGates({
+      gates: ownGates,
+      metrics,
+      phase,
+      tier,
+      baseline,
+      declaredByContract: effectiveDeclaredIds,
+      unavailableProbes
+    })
   ];
   const inherited = [];
   // Heredar una metrica es heredar tambien EL ARBOL sobre el que se midio. Sin
@@ -292,7 +314,8 @@ export async function commandQualityGate(options = {}) {
         phase: originPhase,
         tier,
         baseline,
-        declaredByContract: effectiveDeclaredIds
+        declaredByContract: effectiveDeclaredIds,
+        unavailableProbes
       })
     );
     inherited.push({
@@ -341,7 +364,8 @@ export async function commandQualityGate(options = {}) {
     evaluated: groups.flatMap((g) => g.evaluated),
     violations: groups.flatMap((g) => g.violations),
     warnings: groups.flatMap((g) => g.warnings),
-    vacuous: groups.flatMap((g) => g.vacuous)
+    vacuous: groups.flatMap((g) => g.vacuous),
+    notApplicable: groups.flatMap((g) => g.notApplicable ?? [])
   };
 
   const surfaceErrors = surfaceFindings.filter((finding) => finding.level === "error");
@@ -369,7 +393,13 @@ export async function commandQualityGate(options = {}) {
     enforcement: contract.enforcement ?? "observe",
     evidence: evidenceWritten,
     probes: probeResults,
-    surfaceFindings
+    surfaceFindings,
+    // Mismo contenido bajo el nombre que usa `adjudicateFromEvidence`. Los dos
+    // caminos de adjudicacion publicaban la misma lista con claves distintas, y
+    // quien leia `findings` en la salida de `quality-gate` veia un `blocked`
+    // sin ninguna razon a la vista — que es justo lo contrario de lo que este
+    // comando existe para dar.
+    findings: surfaceFindings
   };
 
   const exitCode = blocked && exitCodeMode ? EXIT_ACTION_REQUIRED : EXIT_OK;

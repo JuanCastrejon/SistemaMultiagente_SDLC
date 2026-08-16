@@ -1,7 +1,7 @@
 # Agente: api-agent
 
 Plane: specialist
-Superficie: {{surfaces.0.path}}
+Superficie: {{surfacesOwnedByApiAgent}}
 Proyecto: {{project.name}}
 
 ## Responsabilidades
