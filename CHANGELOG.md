@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.0.3] — 2026-08-16
+
+### Fixed — `upgrade` pisaba en silencio overrides ya aceptados
+
+- **Un archivo registrado como override (`sdlc upgrade --accept-managed <path>`) dejaba de estar protegido en el SIGUIENTE `upgrade`, aunque esa corrida no tocara ese archivo para nada.** `detectConflicts` comparaba el disco contra la plantilla fresca de la version destino, pero para decidir si un archivo gestionado tenia "divergencia local" comparaba solo contra el sha del **manifiesto** — y tras aceptar un override, ese sha pasa a ser justamente el del override, no el de la plantilla del framework. Un archivo cuyo disco coincidia con "lo ultimo escrito" (el override) se leia como "sin conflicto, sin cambios", y sin conflicto no habia nada que re-aceptar: el path quedaba fuera de `skipWrite` y `writeManagedFiles` lo pisaba con la plantilla nueva sin avisar, sin reportar conflicto y sin dejar rastro salvo una entrada obsoleta en `.sdlc/overrides.yaml`. Encontrado en adopcion real (13 personas `.agent.md`, `ownership-matrix.md`, `semantic-guardrails.json`, `surface-traceability.json` y los identity docs del repo clobbereados durante la adopcion), no leyendo el codigo primero — restaurado y sorteado a mano parcheando el sha rastreado en `.sdlc/install-manifest.json` y su checksum en vez de corregirse en el origen. Ahora `detectConflicts` tambien conflictua cuando el disco coincide con un override vigente en `overrides.yaml`, aunque tambien coincida con el sha del manifiesto; el flujo de `--accept-managed`/auto-aceptacion que ya existia para overrides repetidos se encarga de conservarlo sin volver a pedir nada.
+
+- **Relacionado: un archivo gestionado borrado a proposito reaparecia solo con volver a correr `upgrade`.** `detectConflicts` se saltaba por completo cualquier path que ya no existiera en disco, asi que una eliminacion deliberada nunca generaba conflicto ni quedaba registrada en ningun lado — el siguiente `upgrade` la recreaba desde la plantilla sin preguntar. Ahora una eliminacion de un archivo gestionado bloquea como conflicto explicito (`archivo gestionado eliminado localmente`) hasta que se confirma con `--accept-managed`/`--accept-all-managed`; una vez aceptada, queda registrada en `overrides.yaml` con `deleted: true` y se respeta indefinidamente en corridas posteriores, no solo en la inmediata siguiente.
+
+  Regresion cubierta en `tests/upgrade-overrides.test.mjs`: (a) un override aceptado sobrevive a un `upgrade` no relacionado, incluida mas de una corrida seguida; (b) un archivo eliminado a proposito no reaparece, ni en la corrida siguiente ni en las posteriores.
+
 ## [2.0.2] — 2026-08-16
 
 ### Fixed — `doctor` y las skills externas del stack
