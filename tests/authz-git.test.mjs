@@ -18,11 +18,12 @@ import os from "node:os";
 import path from "node:path";
 import {
   adjudicarAutorizacion,
+  auditarAutorizacion,
   leerContratoEnRef,
   ramaDeIntegracionDeclarada,
   resolverBaseDeAutorizacion
 } from "../src/authz-git.js";
-import { evaluatePhaseReadiness } from "../src/harness.js";
+import { auditAttestations, evaluatePhaseReadiness } from "../src/harness.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-authz-git-"));
 
@@ -365,6 +366,138 @@ function montarRepo(nombre, { subdir = "", contrato = CONTRATO_LIMPIO, fases = F
   assert.ok(resultado.blockers.includes("authz-human-gate-removed"), JSON.stringify(resultado.blockers));
   assert.ok(resultado.evidence.authorization, "la autorizacion se reporta aunque la evidencia no exista");
   assert.equal(resultado.evidence.exists, false);
+}
+
+// --- 15. `exige` no depende de que exista la ref remota (H7 de la ronda 18) -
+// F2/F3 no tienen arbol que atestar: el early-return devolvia `enHead.exige`
+// ("attestation" con puerta) cuando la base no resolvia, y "ninguna" cuando
+// si. Misma entrada, salida distinta segun el entorno.
+{
+  const { raiz, target } = montarRepo("exige-f2");
+  git(raiz, ["update-ref", "-d", "refs/remotes/origin/develop"]);
+  const sinRef = adjudicarAutorizacion({
+    target,
+    phaseId: "F2",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F2", human_gate: true }
+  });
+  assert.equal(sinRef.exige, "ninguna", JSON.stringify(sinRef));
+
+  const { target: targetConRef } = montarRepo("exige-f2-b");
+  const conRef = adjudicarAutorizacion({
+    target: targetConRef,
+    phaseId: "F2",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F2", human_gate: true }
+  });
+  assert.equal(conRef.exige, "ninguna", JSON.stringify(conRef));
+}
+
+// --- 16. `authz-base-unreachable`: la ref existe, el DAG no conecta ---------
+// Sin ancestro comun entre HEAD y la remota no hay obligacion contra la que
+// comparar. Se monta con `commit-tree` sin padre: segunda raiz, mismo arbol.
+{
+  const { raiz, target } = montarRepo("dag-roto");
+  const aislado = git(raiz, ["commit-tree", "HEAD^{tree}", "-m", "raiz aislada"]).trim();
+  git(raiz, ["update-ref", "refs/remotes/origin/develop", aislado]);
+  const base = resolverBaseDeAutorizacion(target);
+  assert.equal(base.code, "authz-base-unreachable", JSON.stringify(base));
+
+  // Y la severidad es la misma de base-unresolvable: con puerta bloquea, sin
+  // puerta avisa.
+  const conPuerta = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: true }
+  });
+  assert.ok(conPuerta.bloqueos.some((b) => b.code === "authz-base-unreachable"), JSON.stringify(conPuerta.bloqueos));
+  const sinPuerta = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: false }
+  });
+  assert.ok(sinPuerta.avisos.some((a) => a.code === "authz-base-unreachable"), JSON.stringify(sinPuerta.avisos));
+}
+
+// --- 17. la auditoria no calla cuando la BASE no se puede leer (H8) --------
+// `doctor` y `upgrade` reportan: una auditoria que calla cuando no puede mirar
+// se lee como una auditoria que miro y no encontro nada.
+{
+  const { target } = montarRepo("auditoria-base-rota", { contrato: "surfaces: [\n" });
+  fs.writeFileSync(path.join(target, "quality-contract.yaml"), CONTRATO_LIMPIO, "utf8");
+  const findings = auditarAutorizacion(target, { surfaces: [SUPERFICIE_LIMPIA] });
+  assert.ok(
+    findings.some((f) => f.code === "authz-base-contract-invalid" && f.level === "error"),
+    JSON.stringify(findings)
+  );
+
+  // Contracara: BASE legible y sin cambios -> la auditoria no inventa ruido.
+  const { target: targetLimpio } = montarRepo("auditoria-limpia");
+  const limpios = auditarAutorizacion(targetLimpio, { surfaces: [SUPERFICIE_LIMPIA] });
+  assert.deepEqual(limpios, [], JSON.stringify(limpios));
+}
+
+// --- 18. una fase CON puerta y SIN evidencia no pasa el gate (ronda 19) ----
+// La comprobacion del signoff vivia dentro de `if (evidence.exists)`: en una
+// fase sin `evidence_required`, no escribir (o borrar) el archivo de evidencia
+// abria la puerta sin firma y sin bloqueos. Quinta instancia del patron del
+// detector tras la condicion que detecta — la ronda 18 izo la adjudicacion y
+// dejo el signoff en el mismo sitio.
+{
+  const { target } = montarRepo("puerta-sin-evidencia", { fases: FASES_CON_PUERTA });
+  const bloqueado = evaluatePhaseReadiness(target, "F13", "slice-s18");
+  assert.equal(bloqueado.status, "blocked", JSON.stringify(bloqueado.blockers));
+  assert.ok(bloqueado.blockers.includes("human-gate-signoff-missing"), JSON.stringify(bloqueado.blockers));
+
+  // Y con el archivo CORRUPTO pasa lo mismo: sin evidencia legible no hay
+  // firma que comprobar, sea porque no existe o porque no se puede leer.
+  const dirCorrupto = path.join(target, ".github", "agent-state", "evidence", "slice-s18");
+  fs.mkdirSync(dirCorrupto, { recursive: true });
+  fs.writeFileSync(path.join(dirCorrupto, "F13.yaml"), "{ no soy yaml", "utf8");
+  const corrompido = evaluatePhaseReadiness(target, "F13", "slice-s18");
+  assert.equal(corrompido.status, "blocked", JSON.stringify(corrompido.blockers));
+  assert.ok(corrompido.blockers.includes("human-gate-signoff-missing"), JSON.stringify(corrompido.blockers));
+
+  // Contracara: sin puerta y sin cambios, el gate sigue saliendo limpio — el
+  // bloqueo nuevo es de la puerta, no del archivo.
+  const { target: sinPuerta } = montarRepo("sin-puerta-limpia", { fases: FASES_SIN_PUERTA });
+  const listo = evaluatePhaseReadiness(sinPuerta, "F13", "slice-s18b");
+  assert.equal(listo.status, "ok", JSON.stringify(listo.blockers));
+}
+
+// --- 19. la auditoria ve la evidencia ilegible (ronda 19) -------------------
+// Un YAML roto se saltaba en silencio: ni contaba ni se reportaba. Corromper
+// la evidencia era la forma barata de esconder una atestacion podrida.
+{
+  const { target } = montarRepo("auditoria-evidencia-rota", { fases: FASES_CON_PUERTA });
+  const dir = path.join(target, ".github", "agent-state", "evidence", "slice-s19");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "F13.yaml"), "{ no soy yaml", "utf8");
+  const auditoria = await auditAttestations(target);
+  assert.ok(
+    auditoria.findings.some((f) => String(f.code).startsWith("evidence-unreadable:") && f.level === "error"),
+    JSON.stringify(auditoria.findings)
+  );
+}
+
+// --- 20. quality-contract invalido en BASE tambien bloquea la adjudicacion -
+// El caso 5 prueba `leerContratoEnRef` solo; el bloqueo que lo convierte
+// (paso 2 de `adjudicarAutorizacion`) no lo ejercitaba nadie — descubierto
+// mutandolo en la ronda 19.
+{
+  const { target } = montarRepo("calidad-rota-base", { contrato: "surfaces: [\n" });
+  const veredicto = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: true }
+  });
+  assert.ok(
+    veredicto.bloqueos.some((b) => b.code === "authz-base-contract-invalid"),
+    JSON.stringify(veredicto.bloqueos)
+  );
 }
 
 console.log("authz-git: PASS");

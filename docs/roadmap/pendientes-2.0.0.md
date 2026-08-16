@@ -207,34 +207,67 @@ instalar PowerShell nativo en el home de WSL (tarball 7.6.3, sin sudo): libuv
 no resuelve `pwsh.exe` por interop, y `run-regression` necesita un pwsh de
 verdad. `checkPowerShell` ahora también prueba `pwsh.exe` en Linux.
 
-## Para retomar en la próxima sesión — estado a 2026-08-15
+## Ronda 19 — la otra mitad del guard, auditada (2026-08-16)
 
-Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `0382d05` más el commit
-de la ronda 18** (`25d1fa6`, por empujar al cierre de esta sesión). [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
-abierto contra `develop` y `MERGEABLE`; el #40 (`develop` → `main`) sigue
-esperando a que #41 entre.
+Cerró la deuda declarada más vieja: la mitad de la ATESTACIÓN (recomputación
+del sujeto, verificación de firma, deriva de política) que nadie había
+auditado. Registro en `.codex-out/ronda-19/hallazgos.md`. El rastreador cayó
+por límite de concurrencia (declarado); mutador y refutador corrieron, y el
+barrido lo hizo la sesión principal.
+
+- [x] ~~SERIO — la comprobación del signoff vivía tras la evidencia.~~ Quinta
+      instancia del patrón: una fase CON puerta y SIN `evidence_required`
+      pasaba el gate **sin firma** con solo no escribir (o borrar/corromper)
+      el archivo de evidencia. Reproducido antes de arreglar. Ahora la puerta
+      bloquea sin evidencia legible, exista o no el archivo.
+- [x] ~~MEDIO — `auditAttestations` saltaba la evidencia ilegible en
+      silencio.~~ Corromper el YAML era la forma barata de esconder una
+      atestación podrida de `doctor`/`upgrade`. Ahora es hallazgo de error.
+- [x] ~~MENOR (r18) — `exige` divergente para F2/F3~~ y ~~la mitad de
+      auditoría que se saltaba en silencio con contratos ilegibles~~. Cerrados.
+- [x] ~~`authz-base-unreachable` sin caso~~ (DAG desconectado con
+      `commit-tree`, caso 16) — y de propina, el bloqueo por
+      quality-contract inválido en BASE tampoco tenía test (caso 20).
+- [x] ~~M2/M5/M6/M7 sobrevivían la suite completa; v1 sin test.~~ La garantía
+      de la huella, el canon del sujeto, la recomputación en el ref atestado
+      y la deriva de política ahora tienen su test y su mutante muerto.
+- **La mitad de la atestación sostuvo los seis ataques** del refutador con
+      firmas reales (SSH y GPG): commit banal firmado, subject falseado,
+      wildcards, v1, deriva selectiva — todos refutados. Sin bypass
+      end-to-end.
+- [ ] **Decisión de ADR — frescura obligatoria.** El replay de una atestación
+      vieja pasa el gate con `fresh: false` como AVISO y la fase avanza. Es
+      doctrina explícita del ADR 0008 («el árbol movido no invalida una
+      aprobación»), no un defecto. Pero `--require-fresh` solo existe en
+      `signoff --verify` y NADA lo invoca desde `phase-gate`: si algún
+      consumidor quiere frescura obligatoria, hay que decidirlo en el ADR y
+      cablearlo.
+
+Lección de método anotada en el artefacto: mutar por ancla de cadena cae en
+la primera ocurrencia y enseña huecos falsos — verificar siempre que la
+mutación tocó el sitio que se quería mutar (nos costó dos falsos sobrevivientes
+y un test real de propina).
+
+## Para retomar en la próxima sesión — estado a 2026-08-16
+
+Rama `fix/rupturas-declaradas-y-pgid`. **#41 ya está fusionado a `develop`
+(c833945, con `--admin` y el motivo escrito en el PR).** El #40
+(`develop` → `main`) quedó **congelado por decisión del mantenedor** hasta
+cerrar los pendientes; las rondas 18 y 19 cerraron los suyos y queda la
+lista de abajo.
 
 Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
 `npm run validate` en verde, 204 archivos de documentación con sus anclas.
 
 ### Lo primero, en este orden
 
-- [x] ~~**Empujar los 9 commits locales.**~~ Hecho; primera corrida real de
-      Actions: `validate` verde en Linux, `frontera de especificacion` roja con
-      exactamente las 3 violaciones diseñadas (el escenario bootstrap que
-      justifica el `--admin`).
-- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Ejecutada y cerrada: tres SERIO y dos
-      MEDIO arreglados, dos MENOR declarados arriba. La pregunta «¿se puede
-      publicar 2.0.0 con esto?» tiene respuesta: **sí, con los dos MENOR
-      declarados** — nada de lo encontrado era explotable sin controlar ya
-      BASE.
-- [ ] **Mergear #41 con `--admin`.** Es la única vez: el PR introduce a la vez
-      el job `spec-boundary` y la allowlist que lo desbloquea, y una excepción
-      solo cuenta cuando ya está en la base. Del siguiente en adelante el
-      control se sostiene solo. Está escrito en el cuerpo del PR y en la
-      cabecera de `.github/agent-state/spec-boundary-allowlist.yaml`.
-- [ ] **Mergear #40 a `main`**, también con `--admin` mientras haya un solo
-      maintainer.
+- [x] ~~Empujar / ronda 18 / merge #41.~~ Hecho (ronda 18 en `25d1fa6`,
+      merge `c833945`).
+- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Cerrada; dos MENOR que quedaron
+      abiertos se cerraron en la ronda 19.
+- [x] ~~**Ronda 19: la otra mitad del guard.**~~ Auditada; ver su sección.
+- [ ] **Decidir la frescura obligatoria** (ver ronda 19) y, con el criterio
+      del mantenedor satisfecho, **mergear #40 a `main`** con `--admin`.
 - [ ] **Decidir npm**: `gh workflow run publish.yml`, **nunca `npm publish` a
       mano**.
 
@@ -256,15 +289,13 @@ Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
 
 ### Deuda declarada que sigue abierta
 
-- [ ] **La otra mitad del guard de frontera no se auditó.** El script declara
-      que es «la mitad barata por RUTA» y que la autorización real la aporta la
-      atestación. Las rondas 16 y 17 auditaron la primera mitad; la segunda
-      —recomputación del sujeto, verificación GPG, enlace con la evidencia— no
-      la ha mirado nadie con la misma lupa.
+- [x] ~~**La otra mitad del guard de frontera no se auditó.**~~ **Auditada en
+      la ronda 19** (2026-08-16): sostuvo los ataques con firmas reales; lo
+      que había era cableado y tests, ambos cerrados.
 - [ ] **El allowlist del guard no comprueba contenido, solo rutas.** Una
       excepción autoriza cambios ilimitados a esa ruta hasta que caduque. La
-      granularidad por contenido es trabajo del ADR 0008 aplicado al allowlist,
-      y no se hizo.
+      granularidad por contenido es trabajo del ADR 0008 aplicado al
+      allowlist, y no se hizo. Es el pendiente grande que queda.
 - [ ] **`maxBuffer` de 64 MiB nunca se puso a prueba** con un diff real que lo
       desborde.
 

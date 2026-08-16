@@ -22,7 +22,9 @@ import {
   buildAttestationMessage,
   computeSubjectSha256,
   createAttestationCommit,
+  judgeSignoff,
   parseAttestationMessage,
+  subjectV1,
   verifySignoff
 } from "../src/signoff.js";
 
@@ -105,6 +107,62 @@ assert.equal(created.ok, true, JSON.stringify(created));
 const verified = verifySignoff({ target, commitSha: created.commitSha, subject, maintainers });
 assert.equal(verified.ok, true, JSON.stringify(verified));
 assert.equal(verified.signer, SIGNER_UID);
+
+// 1b. La HUELLA de la clave manda (ronda 19, M2): declararla EXCLUYE la union
+// por principal, y una huella que no emparea rechaza aunque el email sea el
+// correcto. El mutante que comparaba solo el PREFIJO de la huella pasaba la
+// suite entera — por eso la huella erronea difiere solo en el ULTIMO caracter.
+const huellaCasiBuena = `${fingerprint.slice(0, -1)}${fingerprint.endsWith("0") ? "1" : "0"}`;
+const porHuella = verifySignoff({
+  target,
+  commitSha: created.commitSha,
+  subject,
+  maintainers: [{ signer: SIGNER_UID, fingerprint }]
+});
+assert.equal(porHuella.ok, true, JSON.stringify(porHuella));
+assert.equal(porHuella.identityBinding, "fingerprint");
+const huellaErrada = verifySignoff({
+  target,
+  commitSha: created.commitSha,
+  subject,
+  maintainers: [{ signer: SIGNER_UID, fingerprint: huellaCasiBuena }]
+});
+assert.equal(huellaErrada.ok, false, JSON.stringify(huellaErrada));
+assert.equal(huellaErrada.code, "signoff-signer-not-maintainer", "huella declarada que no emparea excluye la union por principal");
+
+// 1c. El canon del sujeto esta ANCLADO (ronda 19, M5): todos los tests
+// computaban el hash EN VIVO — crear y verificar compartian la funcion — asi
+// que cambiar el formato del canon era invisible para la suite. Estos
+// literales SON el contrato: si el canon cambia, toda atestacion firmada deja
+// de valer, y eso tiene que ser un fallo, no un dato.
+assert.equal(
+  computeSubjectSha256({ slice: "s1", phase: "F13", tree_hash: "abc", contract_sha256: "c1", phase_contract_sha256: "p1" }),
+  "d2534302c50b03e8062f914f81130886f50708db5df0c8721ea1230147eacbf6"
+);
+assert.equal(
+  computeSubjectSha256(subjectV1({ slice: "s1", phase: "F13", tree_hash: "abc", contract_sha256: "c1", phase_contract_sha256: "p1" })),
+  "f339f759e38897f375d3a5737e0ade109e343ee477f50ab4d53d541fe5425507"
+);
+
+// 1d. Un sujeto v1 firmado se rechaza con su codigo propio (ronda 19, M8): la
+// distincion dice QUE hacer — re-firmar, no investigar — y nadie la probaba.
+// El mensaje se firma con el hash v1 de un sujeto v2: solo casa si la
+// atestacion se emitio con el formato anterior.
+const sujetoV2 = { slice: "slice-money", phase: "F13", tree_hash: "treehash123", contract_sha256: "c1", phase_contract_sha256: "p1" };
+const mensajeV1 = buildAttestationMessage({
+  slice: sujetoV2.slice,
+  phase: sujetoV2.phase,
+  subjectSha256: computeSubjectSha256(subjectV1(sujetoV2))
+});
+const factsV1 = {
+  ancestor: true,
+  exists: true,
+  verifyOk: true,
+  log: ["G", SIGNER_UID, fingerprint, fingerprint, mensajeV1].join("\0")
+};
+const v1 = judgeSignoff({ facts: factsV1, commitSha: "abc123def456", subject: sujetoV2, maintainers, headRef: "HEAD" });
+assert.equal(v1.ok, false, JSON.stringify(v1));
+assert.equal(v1.code, "signoff-subject-v1", JSON.stringify(v1));
 
 // 2. El codigo cambio despues de la firma: el subject (tree_hash) ya no
 // coincide. Una firma vieja no puede aprobar contenido nuevo.

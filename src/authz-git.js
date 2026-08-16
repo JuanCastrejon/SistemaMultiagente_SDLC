@@ -201,7 +201,12 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
     // `fetch-depth: 0` es requisito del workflow. Ahi el detector si corre.
     const destino = puerta ? bloqueos : avisos;
     destino.push({ code: base.code, detail: base.detail });
-    return { ok: bloqueos.length === 0, exige: enHead.exige, bloqueos, avisos, base: null };
+    // El early-return de antes devolvia `enHead.exige` tal cual: para F2/F3 con
+    // puerta (sin arbol que atestar) eso era "attestation" cuando la ref remota
+    // faltaba y "ninguna" cuando existia — mismo contrato de entrada, salida
+    // distinta segun el entorno. La ronda 18 lo declaro; aqui se cierra. La
+    // regla del return final aplica igual en las dos salidas.
+    return { ok: bloqueos.length === 0, exige: puerta && conArbol ? enHead.exige : "ninguna", bloqueos, avisos, base: null };
   }
 
   const contratoBase = leerContratoEnRef(target, base.base, "quality-contract.yaml");
@@ -356,9 +361,21 @@ export function auditarAutorizacion(target, contratoHead) {
   }
 
   const contratoBase = leerContratoEnRef(target, base.base, "quality-contract.yaml");
-  if (contratoBase.presente && contratoBase.ok) {
+  if (contratoBase.code) {
+    // Ronda 18, H8: la mitad de auditoria se saltaba en silencio cuando el
+    // contrato de la BASE estaba presente pero ilegible — cero hallazgos, igual
+    // que si todo estuviera en orden. Una auditoria que calla cuando no puede
+    // mirar se lee como una auditoria que miro y no encontro nada.
+    findings.push({
+      level: "error",
+      code: contratoBase.code,
+      detail: `no se puede auditar la obligacion de la base: ${contratoBase.detail}`
+    });
+  } else if (contratoBase.presente) {
     const comparacion = compararObligacion(contratoBase.contract?.surfaces, contratoHead?.surfaces);
-    if (comparacion.ok) {
+    if (!comparacion.ok) {
+      findings.push({ level: "error", code: comparacion.code, detail: `${comparacion.lado}: ${comparacion.detail}` });
+    } else {
       for (const bajada of comparacion.downgrades) {
         findings.push({
           level: "error",

@@ -219,4 +219,45 @@ if (ready) {
   assert.equal(noVerifica.recorded, false);
 
   console.log("attestation record de commit existente: PASS");
+
+  // --- 6. el subject se recomputa en el REF ATESTADO (ronda 19, M6) --------
+  // Tras la firma, la superficie cambia y se commitea. La atestacion sigue
+  // valiendo PARA SU ARBOL — la frescura es otro eje, y el ADR 0008 lo dice
+  // asi — pero eso solo es cierto si el subject se armo con el arbol del
+  // commit firmado. Armado sobre HEAD, el trailer no casaria y esto daria
+  // `subject-mismatch`. En la geometria de todos los otros tests el commit
+  // atestado era HEAD, y confiar en el presente era indistinguible de verificar.
+  fs.writeFileSync(path.join(target, "src", "index.js"), "export const x = 2;\n", "utf8");
+  execFileSync("git", ["add", "."], { cwd: target });
+  execFileSync("git", ["commit", "--quiet", "-m", "la superficie cambia despues de firmar"], { cwd: target });
+  const trasMover = await auditAttestations(target);
+  assert.deepEqual(trasMover.findings, [], JSON.stringify(trasMover.findings));
+
+  // --- 7. la deriva de politica invalida (ronda 19, M7) ---------------------
+  // D3 del ADR 0008: cambiar quality-contract.yaml DESPUES de firmar deja la
+  // atestacion sin la politica bajo la que se emitio. Un byte de comentario
+  // basta — el hash cubre el archivo entero.
+  const contratoOriginal = fs.readFileSync(path.join(target, "quality-contract.yaml"), "utf8");
+  fs.writeFileSync(
+    path.join(target, "quality-contract.yaml"),
+    contratoOriginal.replace("enforcement: observe", "enforcement: observe # deriva"),
+    "utf8"
+  );
+  execFileSync("git", ["add", "."], { cwd: target });
+  execFileSync("git", ["commit", "--quiet", "-m", "la politica cambia despues de firmar"], { cwd: target });
+  const conDeriva = await auditAttestations(target);
+  assert.ok(
+    conDeriva.findings.some((f) => f.code === "attestation-authz-contract-drift" && f.level === "error"),
+    JSON.stringify(conDeriva.findings)
+  );
+
+  // Control: restaurado byte a byte, la firma vuelve a valer. Sin esto, el
+  // caso de arriba podria pasar por cualquier otro motivo.
+  fs.writeFileSync(path.join(target, "quality-contract.yaml"), contratoOriginal, "utf8");
+  execFileSync("git", ["add", "."], { cwd: target });
+  execFileSync("git", ["commit", "--quiet", "-m", "contrato restaurado"], { cwd: target });
+  const restaurado = await auditAttestations(target);
+  assert.deepEqual(restaurado.findings, [], JSON.stringify(restaurado.findings));
+
+  console.log("attestation ref atestado y deriva: PASS");
 }
