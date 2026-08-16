@@ -92,7 +92,17 @@ jobs:
             // `owner` es obligatorio en el schema; `tier` sale del enum
             // core|standard|shell. Una superficie mal formada haria fallar
             // doctor por config-schema y ocultaria lo que esta regresion mide.
-            c.surfaces = [{ id: 'src', path: 'src', owner: 'regression', tier: 'standard' }];
+            //
+            // Los cuatro riesgos (ADR 0008, RIESGOS_AUTORIZACION) tienen que
+            // venir declarados como booleano: sin ellos la superficie queda
+            // REALMENTE sin clasificar y `upgrade`/`doctor` salen accion-
+            // requerida (2) a proposito — es la regla que 2.0.1 dejo de
+            // confundir con 'clasificada con riesgos'. Esta superficie de
+            // prueba no es de verdad riesgosa, asi que se clasifica en false.
+            c.surfaces = [{
+              id: 'src', path: 'src', owner: 'regression', tier: 'standard',
+              moneyPath: false, regulatedData: false, securityCritical: false, stateMachineCritical: false
+            }];
             fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
           "
       # `quality-contract.yaml` se GENERA desde config.surfaces, asi que editar
