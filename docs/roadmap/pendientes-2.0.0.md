@@ -233,13 +233,13 @@ barrido lo hizo la sesión principal.
       firmas reales (SSH y GPG): commit banal firmado, subject falseado,
       wildcards, v1, deriva selectiva — todos refutados. Sin bypass
       end-to-end.
-- [ ] **Decisión de ADR — frescura obligatoria.** El replay de una atestación
-      vieja pasa el gate con `fresh: false` como AVISO y la fase avanza. Es
-      doctrina explícita del ADR 0008 («el árbol movido no invalida una
-      aprobación»), no un defecto. Pero `--require-fresh` solo existe en
-      `signoff --verify` y NADA lo invoca desde `phase-gate`: si algún
-      consumidor quiere frescura obligatoria, hay que decidirlo en el ADR y
-      cablearlo.
+- [x] ~~**Decisión de ADR — frescura obligatoria.**~~ **Decidido el
+      2026-08-16: la doctrina se mantiene para 2.0.0** — el árbol movido es
+      AVISO (`fresh: false`), la política mutada invalida. Es doctrina escrita
+      del ADR 0008 (líneas 139–142) y hasta el CHANGELOG la explica. Si algún
+      consumidor necesita frescura obligatoria en un gate, `--require-fresh`
+      ya existe en `signoff --verify` y cablearlo a `phase-gate` es un cambio
+      pequeño — se hace cuando alguien lo pida, no antes.
 
 Lección de método anotada en el artefacto: mutar por ancla de cadena cae en
 la primera ocurrencia y enseña huecos falsos — verificar siempre que la
@@ -272,8 +272,10 @@ Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
 - [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Cerrada; dos MENOR que quedaron
       abiertos se cerraron en la ronda 19.
 - [x] ~~**Ronda 19: la otra mitad del guard.**~~ Auditada; ver su sección.
-- [ ] **Decidir la frescura obligatoria** (ver ronda 19) y, con el criterio
-      del mantenedor satisfecho, **mergear #40 a `main`** con `--admin`.
+- [x] ~~**Decidir la frescura obligatoria**~~ (decidido 2026-08-16: doctrina
+      vigente, ver ronda 19) y ~~la firma del propio repo~~ (guard en `ok`).
+      Queda: **mergear #40 a `main`** con `--admin` (su CI está rojo por el
+      bootstrap main-sin-allowlist — mismo motivo que #41) y **decidir npm**.
 - [ ] **Decidir npm**: `gh workflow run publish.yml`, **nunca `npm publish` a
       mano**.
 
@@ -341,19 +343,15 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
 
 ## Espera decisión del mantenedor
 
-- [ ] **Firma del propio repo del framework.** El job `spec-boundary` de
-      `.github/workflows/ci.yml` ya corre el guard contra este repo, y hoy
-      reporta cuatro violaciones legítimas (su propio `ci.yml`, el
-      `regression-install.yml`, la fuente del guard y su allowlist). No hay
-      forma de conceder la excepción porque **este repo no tiene
-      `.sdlc/config.json` con `governance.maintainers` ni firma de commits
-      configurada**: sin un `signer` real, ninguna entrada del allowlist puede
-      ser válida.
-      Hace falta, y solo lo puede dar el mantenedor: (a) la cadena exacta que
-      `git log --format=%GS` reporta para su clave, (b) firma de commits
-      activa en el repo. Con eso se escribe `.sdlc/config.json` y las
-      excepciones de las rutas que el framework edita de forma rutinaria.
-      **Hasta entonces, ese job deja el repo sin poder mergear.**
+- [x] ~~**Firma del propio repo del framework.**~~ **Resuelto** (verificado
+      2026-08-16): `.sdlc/config.json` existe con `governance.maintainers`
+      (`juandavidcastrejonbermudes@gmail.com`, principal de `allowed_signers`,
+      y desde esta fecha también la **huella** de la clave — la unión por
+      principal es la débil que la ronda 19 documentó), la firma de commits SSH
+      está activa (`%G?` = G), la allowlist con las cinco excepciones está
+      mergeada en `develop` (caducidad 2026-11-13), y el guard corrido contra
+      este repo da **`status: ok`**. El job ya no bloquea nada: el PR que
+      edita `.sdlc/config.json` pasa por su propia excepción, sin `--admin`.
 
 
 - [ ] **Publicar 2.0.0.** Estado a 2026-08-16: el ADR 0008 está **implementado
@@ -377,14 +375,20 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
       rupturas. Las rupturas nuevas se declaran **al implementarlas**, no ahora
       — declarar una ruptura que el código no ejerce es el defecto que esta
       misma rama ya cometió dos veces.
-- [ ] **Periodo de gracia del fail-closed retroactivo.** El contraste
-      adversarial recomendó bloquear desde el primer gate. El coste de
-      migración de los consumidores ya instalados es decisión de producto.
-- [ ] **Reconciliar el ADR 0007.** Su línea 29 describe la firma humana como
-      review `APPROVED` verificado por `gh api`; `src/signoff.js` implementa
-      commit firmado y su cabecera argumenta por qué la vía de plataforma es
-      insatisfacible con un solo maintainer. ¿Addendum o revisión propia del
-      ADR?
+- [x] ~~**Periodo de gracia del fail-closed retroactivo.**~~ **Decidido el
+      2026-08-16: sin periodo de gracia, como está implementado.** Las
+      atestaciones v1 se rechazan desde el primer gate (verificado por la
+      ronda 19 con firma real: `signoff-subject-v1`, error/invalid), y el
+      coste de migración lo cubre la guía escrita: CHANGELOG con las trece
+      rupturas, `migrations/2.0.0/up.mjs` dejando constancia, y el comando de
+      re-firmado en cada mensaje de error. Un periodo de gracia sería una
+      ventana donde lo ya migrado convive con lo que no — la complejidad no
+      la paga ningún consumidor real: hay uno.
+- [x] ~~**Reconciliar el ADR 0007.**~~ **Ya estaba reconciliado** — el ítem
+      quedó viejo: la línea 29 lleva desde el 2026-08-14 la nota
+      **SUPERSEDIDO** apuntando al addendum, que deja el mecanismo (`gh api`
+      sobre reviews) y el disparador (`tier`) reemplazados por la atestación
+      por commit firmado del ADR 0008. Verificado hoy contra el archivo.
 
 ## ~~Implementar el ADR 0008~~ — HECHO (2026-08-15)
 

@@ -27,7 +27,8 @@
     "maintainers": [
       {
         "name": "Juan David Castrejon B.",
-        "signer": "juandavidcastrejonbermudes@gmail.com"
+        "signer": "juandavidcastrejonbermudes@gmail.com",
+        "fingerprint": "SHA256:/yWAQqvIUiTtEanYB7Mk4J2d3tnsKTIUrBl+kPOhtRQ"
       }
     ]
   }
