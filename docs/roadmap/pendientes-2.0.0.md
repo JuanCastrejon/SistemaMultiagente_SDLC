@@ -190,13 +190,11 @@ Registro completo en `.codex-out/ronda-18/hallazgos.md`.
       todos los ids con override en cualquiera de los dos contratos.
 - [x] ~~MENOR — la severidad de `base-unresolvable` (bloqueo con puerta, aviso
       sin puerta) no tenía test (M6).~~ Caso 13.
-- [ ] **MENOR abierto — `exige` divergente para F2/F3 con puerta** según exista
-      la ref remota (early-return pasa `enHead.exige`, el final fuerza
-      `"ninguna"`). Ningún consumidor se rompe hoy. Junto con el doble
-      vocabulario `"ninguna"`/`"none"`.
-- [ ] **MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
-      upgrade) se salta en silencio con contratos ilegibles. Comandos de
-      reporte, no de enforcement.
+- [x] ~~MENOR abierto — `exige` divergente para F2/F3 con puerta~~ Cerrado en
+      la ronda 19 (caso 15).
+- [x] ~~MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
+      upgrade) se salta en silencio con contratos ilegibles.~~ Cerrado en la
+      ronda 19 (caso 17 y los `else` de doctor/upgrade).
 
 Deuda declarada nueva, dicha de frente: la primera ejecución real del workflow
 en Actions (tras empujar `0382d05`) dejó `validate` **en verde en un runner
@@ -277,8 +275,8 @@ Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
       caso propio. `tests/authz-git.test.mjs` cubre la mayoría de forma
       estructural, y la ronda 18 añadió casos por código (10–14), pero no hay
       todavía un caso por cada código del modelo.
-- [ ] `authz-base-unreachable` (clon superficial) no tiene caso: montar un DAG
-      desconectado cuesta y se dejó fuera.
+- [x] ~~`authz-base-unreachable` (clon superficial) no tiene caso.~~ Caso 16 en
+      la ronda 19, con `commit-tree` sin padre.
 - [x] ~~Ninguna ejecución real en **GitHub Actions**.~~ Contestado el
       2026-08-15 al empujar `0382d05`: `validate` verde en un runner Linux, y
       `refs/remotes/origin/<base>` **sí** existe con `fetch-depth: 0` — el paso
@@ -350,19 +348,17 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
       **Hasta entonces, ese job deja el repo sin poder mergear.**
 
 
-- [ ] **Publicar 2.0.0.** Rama empujada y **PR abierto contra `develop`**. Falta
-      la revisión humana, el merge, y decidir si se publica a npm. El gate local
-      (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
-      `-Strict`.
-      Tras seis rondas adversariales (5 a 10) no quedaba ningún BLOQUEANTE
-      **de código**. Pero desde el 2026-08-14 **sí hay un bloqueante de
-      alcance**: el ADR 0008 entra en esta versión, y no está implementado. No
-      se publica 2.0.0 hasta que D1–D7 estén dentro.
-- [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
-      mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
-      aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
-      primer push. Hoy nada en el repo lo garantiza: en Windows esos casos se
-      saltan con `SKIP` y el verde es engañoso.
+- [ ] **Publicar 2.0.0.** Estado a 2026-08-16: el ADR 0008 está **implementado
+      y auditado** (rondas 11–19), #41 fusionado a `develop` con CI verde
+      completo — incluida `frontera de especificacion`, con la allowlist ya en
+      la base. Falta: el PR de la ronda 19 a `develop`, deshelar y mergear #40
+      a `main`, y decidir npm. El bloqueo de alcance de la sección de abajo
+      está resuelto.
+- [x] ~~**Montar un job de CI que corra la suite en Linux.**~~ Cubierto de
+      hecho: el job `validate` del `ci.yml` corre `pnpm test` completo en un
+      runner Linux, y está **verde** sobre `develop` desde el merge de #41
+      (2026-08-16) — primera corrida real que incluye los casos POSIX que en
+      Windows se saltan con SKIP.
 - [x] ~~**Número de versión del modelo de riesgos** (ADR 0008).~~ **Decidido el
       2026-08-14: entra en 2.0.0.** Se descarta la 3.0.0 que se venía asumiendo.
       Razón: 2.0.0 sigue sin publicar, y diferirlo obligaría al consumidor a dos
@@ -402,28 +398,28 @@ BASE/HEAD, definición de BASE/HEAD y códigos de salida, precedencia con
 matriz de enforcement por comando). Implementar con esos huecos abiertos es
 reabrir el diseño a mitad de camino.
 
-- [ ] `required(surface, contract)` como función pura y canónica, con tipos
+- [x] `required(surface, contract)` como función pura y canónica, con tipos
       válidos, valores desconocidos, duplicados y superficie vacía.
-- [ ] Riesgos por superficie: `money_path`, `regulated_data`,
+- [x] Riesgos por superficie: `money_path`, `regulated_data`,
       `security_critical`, `state_machine_critical`. **Ausente obliga.**
-- [ ] Sujeto v2: `{ slice, phase, tree_hash, contract_sha256 }`. Hoy el
+- [x] Sujeto v2: `{ slice, phase, tree_hash, contract_sha256 }`. Hoy el
       `tree_hash` cubre solo las superficies, así que en un repo con superficies
       bajo `apps/` el contrato de la raíz queda fuera y la política se puede
       mutar sin invalidar ninguna atestación.
-- [ ] Obligación efectiva BASE → HEAD por superficie, con `id` como identidad
+- [x] Obligación efectiva BASE → HEAD por superficie, con `id` como identidad
       persistente. Borrar, renombrar o mover cuenta como downgrade si no se
       puede demostrar continuidad. BASE irresoluble bloquea.
-- [ ] Sujeto de **autorización de reducción**, distinto del de atestación de
+- [x] Sujeto de **autorización de reducción**, distinto del de atestación de
       fase: `{ base_sha, head_sha, contract_sha256_base, contract_sha256_head,
       surface_ids[] }`.
-- [ ] Enforcement en `phase-gate`, y solo ahí: `signoff` no adjudica downgrades
+- [x] Enforcement en `phase-gate`, y solo ahí: `signoff` no adjudica downgrades
       porque no conoce el BASE de la evaluación.
-- [ ] Rechazo visible de atestaciones v1 en `doctor` y `upgrade`.
-- [ ] Divergencia config/contrato pasa de `warning` a **error**.
-- [ ] Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
+- [x] Rechazo visible de atestaciones v1 en `doctor` y `upgrade`.
+- [x] Divergencia config/contrato pasa de `warning` a **error**.
+- [x] Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
       derivada de riesgos.
-- [ ] Alcance de `humanGate.policy`: por repositorio, superficie, fase o slice.
-- [ ] Los ocho tests mínimos que enumera el ADR antes de publicar.
+- [x] Alcance de `humanGate.policy`: por repositorio, superficie, fase o slice.
+- [x] Los ocho tests mínimos que enumera el ADR antes de publicar.
 
 ## Deuda técnica conocida
 
