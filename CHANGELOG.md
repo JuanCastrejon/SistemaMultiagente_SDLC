@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.0.2] — 2026-08-16
+
+### Fixed — `doctor` y las skills externas del stack
+
+- **`skill-mirror-without-canonical` avisaba de cualquier skill en un mirror (`.claude/skills`, `.agents/skills`, `.windsurf/skills`) sin carpeta hermana en `.github/skills`, sin consultar el manifiesto.** Un consumidor con stack externo real declarado via `externalCollections` o `crossMirrorSkills` en `scripts/agent-skills.manifest.json` quedaba con decenas de avisos permanentes, indistinguibles de un espejo huerfano de verdad — encontrado adoptando 2.0.1 en un consumidor real (`FacturacionDian`, 2026-08-16). Ahora `doctor` lee el manifiesto y exime a las skills que declara a proposito; una skill sin canonica y sin declarar sigue avisando.
+
 ## [2.0.1] — 2026-08-16
 
 ### Fixed — modelo de riesgos de autorizacion (ADR 0008)
