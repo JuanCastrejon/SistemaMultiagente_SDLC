@@ -262,8 +262,20 @@ export async function commandQualityGate(options = {}) {
   const effectiveDeclaredIds = byDeclaredIds.length > 0 ? declaredGateIds : null;
 
   const ownGates = declaredGates.filter((gate) => !gate.phase || gate.phase === phase);
+  // La HERENCIA solo nace de una declaracion explicita de quality_gates (la
+  // F14 de ADR 0007 P7 declara gates de F8/F10 a proposito). El fallback
+  // historico (fase SIN declaracion, contrato v1) existe para evaluar los
+  // gates de la PROPIA fase — no para heredar los de las demas: con el loop
+  // de herencia leyendo `declaredGates` con el fallback aplicado, cualquier
+  // fase sin declaracion exigia evidencia legible de F8/F9/F10 (error
+  // `inherited-evidence-missing`) y quedaba bloqueada para siempre, aunque
+  // el propio phase-contract documenta que "sin quality_gates, la fase no
+  // adjudica calidad". Encontrado en adopcion real: el consumidor
+  // legacy brownfield con el slice activo en F1 no pudo poner quality-verify
+  // en verde por esta via (2026-08-16).
+  const inheritableGates = byDeclaredIds.length > 0 ? byDeclaredIds : [];
   const inheritedByOrigin = new Map();
-  for (const gate of declaredGates) {
+  for (const gate of inheritableGates) {
     if (!gate.phase || gate.phase === phase) continue;
     if (!inheritedByOrigin.has(gate.phase)) inheritedByOrigin.set(gate.phase, []);
     inheritedByOrigin.get(gate.phase).push(gate);
