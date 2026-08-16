@@ -500,4 +500,29 @@ function montarRepo(nombre, { subdir = "", contrato = CONTRATO_LIMPIO, fases = F
   );
 }
 
+
+// --- 21. clasificada con riesgos NO es sin clasificar (fix 2.0.1) ---------
+// La auditoria de doctor/upgrade confundia las dos: un repo plenamente
+// clasificado con riesgos reales tenia error permanente con un remedio ya
+// hecho. Encontrado al adoptar 2.0.0 en FacturacionDian.
+{
+  const criticaClasificada = CONTRATO_LIMPIO.replace('security_critical: false', 'security_critical: true');
+  const { target } = montarRepo('audit-clasificada', { contrato: criticaClasificada });
+  const clasificada = auditarAutorizacion(target, { surfaces: [{ id: 'app', path: 'src', tier: 'core', money_path: false, regulated_data: false, security_critical: true, state_machine_critical: false }] });
+  assert.ok(!clasificada.some((f) => f.level === 'error'), JSON.stringify(clasificada));
+  assert.ok(
+    clasificada.some((f) => f.code === 'authz-attestation-demanded' && f.level === 'info' && f.detail.includes('app')),
+    JSON.stringify(clasificada)
+  );
+
+  // Y la que SI falta un riesgo sigue siendo error, nombrando solo a esa.
+  const incompleta = auditarAutorizacion(target, { surfaces: [
+    { id: 'buena', path: 'src', tier: 'core', money_path: false, regulated_data: false, security_critical: false, state_machine_critical: false },
+    { id: 'mala', path: 'src2', tier: 'core', money_path: true, regulated_data: false }
+  ] });
+  const error = incompleta.find((f) => f.code === 'authz-surfaces-unclassified');
+  assert.ok(error && error.level === 'error', JSON.stringify(incompleta));
+  assert.ok(error.detail.includes('mala') && !error.detail.includes('buena'), error.detail);
+}
+
 console.log("authz-git: PASS");
