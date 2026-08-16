@@ -251,6 +251,32 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
   if (contractVersion < CONTRACT_VERSION_EXPECTED) {
     evidenceWarnings.push(`contract-version-outdated:v${contractVersion}`);
   }
+  // La adjudicacion del ADR 0008 corre SIEMPRE: sin puerta, sin evidencia, con
+  // evidencia invalida. Al izarla fuera de `if (phase.human_gate)` (ronda 17)
+  // se quedo dentro de `if (evidence.exists)` y del `else` de `if (!read.ok)`
+  // — la ronda 18 lo encontro: en una fase sin `evidence_required`, un archivo
+  // de evidencia ausente o corrupto dejaba el gate en verde sin UNA sola
+  // comprobacion de autorizacion. Tercera instancia del mismo defecto: la
+  // adjudicacion no puede vivir detras de ninguna condicion que un downgrade
+  // pueda apagar, y borrar la evidencia es gratis.
+  const contratoCalidad = loadQualityContract(target);
+  const autorizacion = adjudicarAutorizacion({
+    target,
+    phaseId: phase.id,
+    contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
+    faseHead: phase,
+    fasesHead: contract
+  });
+  evidence.authorization = {
+    exige: autorizacion.exige,
+    base: autorizacion.base,
+    avisos: autorizacion.avisos.map((a) => a.code)
+  };
+  for (const bloqueo of autorizacion.bloqueos) {
+    evidenceBlockers.push(bloqueo.code);
+    evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
+  }
+
   if (evidence.exists) {
     const read = readEvidenceFile(evidenceAbsolute);
     evidence.valid = read.ok;
@@ -313,32 +339,9 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         }
       }
       // El gate humano deja de ser un campo de texto que el propio agente puede
-      // escribir: exige la referencia a un review verificable.
-      // La adjudicacion del ADR 0008 corre SIEMPRE, no solo cuando la fase
-      // tiene puerta. Ponerla dentro de `if (phase.human_gate)` era el defecto
-      // mas grave de esta implementacion: `authz-human-gate-removed` —el codigo
-      // que detecta que alguien apago la puerta— vivia DETRAS de la puerta que
-      // detecta. Apagarla hacia que su detector no corriera.
-      //
-      // El coste es aceptable porque `evaluatePhaseReadiness` se llama una vez
-      // por invocacion del gate, no una vez por fase.
-      const contratoCalidad = loadQualityContract(target);
-      const autorizacion = adjudicarAutorizacion({
-        target,
-        phaseId: phase.id,
-        contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
-        faseHead: phase
-      });
-      evidence.authorization = {
-        exige: autorizacion.exige,
-        base: autorizacion.base,
-        avisos: autorizacion.avisos.map((a) => a.code)
-      };
-      for (const bloqueo of autorizacion.bloqueos) {
-        evidenceBlockers.push(bloqueo.code);
-        evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
-      }
-
+      // escribir: exige la referencia a un review verificable. La adjudicacion
+      // ya corrio fuera de este bloque: lo unico que hay aqui necesita leer la
+      // evidencia, y por eso si vive detras de `read.ok`.
       if (phase.human_gate) {
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {

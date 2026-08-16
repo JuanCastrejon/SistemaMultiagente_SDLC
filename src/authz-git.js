@@ -171,7 +171,7 @@ export function leerContratoEnRef(target, ref, ruta) {
  * Devuelve BLOQUEOS, no un booleano: quien llama necesita el codigo y el detalle
  * para poder decirle a una persona que hacer.
  */
-export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead, baseSolicitada = null }) {
+export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead, fasesHead = null, baseSolicitada = null }) {
   const bloqueos = [];
   const avisos = [];
 
@@ -226,7 +226,19 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
       // fuera la mitad del modelo — la que decide donde el riesgo no obliga.
       // Anidarla dentro del caso "hay downgrades" la hacia inalcanzable
       // justo en el escenario que existe para cubrir.
-      for (const debil of compararPolitica(contratoBase.contract, contratoHead, [phaseId])) {
+      //
+      // Y se comparan TODAS las fases con override, no solo la que se gatea:
+      // nadie invoca el gate de todas las fases en cada corrida, asi que
+      // debilitar el override de F5 pasaba limpio por el gate de F8 (ronda 18,
+      // mutante M3). El id con override que nadie vuelve a gatear era invisible.
+      const idsPolitica = [
+        ...new Set([
+          String(phaseId),
+          ...Object.keys(contratoBase.contract?.governance?.humanGate?.overrides ?? {}),
+          ...Object.keys(contratoHead?.governance?.humanGate?.overrides ?? {})
+        ])
+      ];
+      for (const debil of compararPolitica(contratoBase.contract, contratoHead, idsPolitica)) {
         bloqueos.push({
           code: "authz-policy-downgrade",
           detail: `la politica de gate humano bajo de ${debil.desde} a ${debil.hasta} en ${debil.phaseId}: debilitar la politica es un downgrade de autorizacion aunque ninguna superficie cambie`
@@ -243,13 +255,41 @@ export function adjudicarAutorizacion({ target, phaseId, contratoHead, faseHead,
 
   // 3. La puerta tambien se puede quitar, y eso es un downgrade (G4 punto 4).
   const fasesBase = leerContratoEnRef(target, base.base, "phase-contract.yaml");
-  if (fasesBase.presente && fasesBase.ok) {
-    const faseEnBase = (fasesBase.contract?.phases ?? []).find((f) => String(f?.id) === String(phaseId));
-    if (faseEnBase && Boolean(faseEnBase.human_gate) && !puerta) {
-      bloqueos.push({
-        code: "authz-human-gate-removed",
-        detail: `la fase ${phaseId} tenia gate humano en la base y ya no. \`human_gate\` es la puerta que gobierna todo el modelo de autorizacion: quitarla es el downgrade mas grande posible`
-      });
+  if (fasesBase.code) {
+    // La misma doctrina que el paso 2 con el contrato de calidad: no poder
+    // leer el contrato de fases de la BASE no puede parecerse a "no habia
+    // ninguna puerta que quitar". La ronda 18 lo reproducjo — YAML roto en
+    // BASE con la puerta quitada en HEAD devolvia ok:true sin bloqueos ni
+    // avisos: el detector vivia detras de su propia condicion de lectura.
+    bloqueos.push({ code: fasesBase.code, detail: fasesBase.detail });
+  } else if (fasesBase.presente) {
+    // Y no solo la fase que se esta gateando: una fase con puerta BORRADA del
+    // contrato de HEAD no la gatea nadie, y el detector anterior solo miraba
+    // la fase actual. Se enumeran TODAS las que tenian puerta en la base.
+    const conPuertaEnBase = (fasesBase.contract?.phases ?? []).filter((f) => Boolean(f?.human_gate));
+    for (const fasePuerta of conPuertaEnBase) {
+      const idBase = String(fasePuerta?.id);
+      if (Array.isArray(fasesHead?.phases)) {
+        const enHead = fasesHead.phases.find((f) => String(f?.id) === idBase);
+        if (!enHead) {
+          bloqueos.push({
+            code: "authz-human-gate-removed",
+            detail: `la fase ${idBase} tenia gate humano en la base y desaparecio del contrato de fases. Borrar la fase que sostenia la puerta es quitar la puerta`
+          });
+        } else if (!Boolean(enHead.human_gate)) {
+          bloqueos.push({
+            code: "authz-human-gate-removed",
+            detail: `la fase ${idBase} tenia gate humano en la base y ya no. \`human_gate\` es la puerta que gobierna todo el modelo de autorizacion: quitarla es el downgrade mas grande posible`
+          });
+        }
+      } else if (idBase === String(phaseId) && !puerta) {
+        // Llamadores sin el contrato de fases completo: solo se puede hablar
+        // de la fase que se esta adjudicando.
+        bloqueos.push({
+          code: "authz-human-gate-removed",
+          detail: `la fase ${phaseId} tenia gate humano en la base y ya no. \`human_gate\` es la puerta que gobierna todo el modelo de autorizacion: quitarla es el downgrade mas grande posible`
+        });
+      }
     }
   }
 

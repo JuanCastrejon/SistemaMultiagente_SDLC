@@ -22,6 +22,7 @@ import {
   ramaDeIntegracionDeclarada,
   resolverBaseDeAutorizacion
 } from "../src/authz-git.js";
+import { evaluatePhaseReadiness } from "../src/harness.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-authz-git-"));
 
@@ -46,6 +47,24 @@ const CONTRATO_CRITICO = CONTRATO_LIMPIO.replace("security_critical: false", "se
 
 const FASES_CON_PUERTA = ["version: 2", "phases:", "  - id: F13", "    human_gate: true", ""].join("\n");
 const FASES_SIN_PUERTA = ["version: 2", "phases:", "  - id: F13", "    human_gate: false", ""].join("\n");
+const FASES_BASE_DOS = [
+  "version: 2",
+  "phases:",
+  "  - id: F13",
+  "    human_gate: true",
+  "  - id: F14",
+  "    human_gate: false",
+  ""
+].join("\n");
+const SUPERFICIE_LIMPIA = {
+  id: "app",
+  path: "src",
+  tier: "core",
+  money_path: false,
+  regulated_data: false,
+  security_critical: false,
+  state_machine_critical: false
+};
 
 /** Repo con rama de integracion remota simulada, contratos y config. */
 function montarRepo(nombre, { subdir = "", contrato = CONTRATO_LIMPIO, fases = FASES_CON_PUERTA } = {}) {
@@ -222,6 +241,130 @@ function montarRepo(nombre, { subdir = "", contrato = CONTRATO_LIMPIO, fases = F
   });
   assert.deepEqual(veredicto.bloqueos, [], JSON.stringify(veredicto.bloqueos));
   assert.equal(veredicto.exige, "declarative", "sin riesgos declarados, el coste no aparece");
+}
+
+// --- 10. el contrato de FASES ilegible en BASE bloquea, no calla ---------
+// La ronda 18 lo reproducjo: `fasesBase.presente && fasesBase.ok` tragaba el
+// error de lectura y quitar la puerta devolvia ok:true. Asimetrico con el
+// quality-contract de BASE, que si bloquea (caso 5).
+{
+  const { target } = montarRepo("fases-rotas-base", { fases: "phases: [\n  - id: sin cerrar\n" });
+  const veredicto = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: false }
+  });
+  assert.ok(
+    veredicto.bloqueos.some((b) => b.code === "authz-base-contract-invalid"),
+    JSON.stringify(veredicto.bloqueos)
+  );
+}
+
+// --- 11. debilitar el override de OTRA fase se ve en cualquier gate ------
+// M3 de la ronda 18 sobrevivia: `compararPolitica(..., [phaseId])` solo miraba
+// la fase actual, y nadie gatea todas las fases en cada corrida.
+{
+  const conOverride = CONTRATO_LIMPIO.replace(
+    "version: 1",
+    [
+      "version: 1",
+      "governance:",
+      "  humanGate:",
+      "    policy: declarative",
+      "    overrides:",
+      "      F5: attestation"
+    ].join("\n")
+  );
+  const { target } = montarRepo("override-otra-fase", { contrato: conOverride });
+  const veredicto = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: {
+      surfaces: [SUPERFICIE_LIMPIA],
+      governance: { humanGate: { policy: "declarative", overrides: { F5: "declarative" } } }
+    },
+    faseHead: { id: "F13", human_gate: true }
+  });
+  assert.ok(
+    veredicto.bloqueos.some((b) => b.code === "authz-policy-downgrade" && b.detail.includes("F5")),
+    JSON.stringify(veredicto.bloqueos)
+  );
+}
+
+// --- 12. borrar la fase con puerta del contrato HEAD es quitar la puerta -
+// S2 de la ronda 18: el detector anterior solo miraba la fase que se gateaba,
+// asi que la fase borrada —a la que nadie vuelve a gatear— era invisible.
+{
+  const { target } = montarRepo("fase-borrada", { fases: FASES_BASE_DOS });
+  const borrada = adjudicarAutorizacion({
+    target,
+    phaseId: "F14",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F14", human_gate: false },
+    fasesHead: { phases: [{ id: "F14", human_gate: false }] }
+  });
+  assert.ok(
+    borrada.bloqueos.some((b) => b.code === "authz-human-gate-removed" && b.detail.includes("F13")),
+    JSON.stringify(borrada.bloqueos)
+  );
+
+  // Contracara: la fase con puerta sigue en HEAD, misma fase gateada, cero
+  // bloqueos nuevos por enumeracion.
+  const intacta = adjudicarAutorizacion({
+    target,
+    phaseId: "F14",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F14", human_gate: false },
+    fasesHead: { phases: [{ id: "F13", human_gate: true }, { id: "F14", human_gate: false }] }
+  });
+  assert.deepEqual(intacta.bloqueos, [], JSON.stringify(intacta.bloqueos));
+}
+
+// --- 13. la severidad de base-unresolvable depende de la puerta ---------
+// M6 de la ronda 18 sobrevivia: ningun test conducia hasta el early-return
+// y afirmaba bloqueo CON puerta contra aviso SIN puerta.
+{
+  const { raiz, target } = montarRepo("base-fuera");
+  git(raiz, ["update-ref", "-d", "refs/remotes/origin/develop"]);
+  const conPuerta = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: true }
+  });
+  assert.ok(
+    conPuerta.bloqueos.some((b) => b.code === "authz-base-unresolvable"),
+    JSON.stringify(conPuerta.bloqueos)
+  );
+  const sinPuerta = adjudicarAutorizacion({
+    target,
+    phaseId: "F13",
+    contratoHead: { surfaces: [SUPERFICIE_LIMPIA] },
+    faseHead: { id: "F13", human_gate: false }
+  });
+  assert.ok(
+    sinPuerta.avisos.some((a) => a.code === "authz-base-unresolvable"),
+    JSON.stringify(sinPuerta.avisos)
+  );
+  assert.deepEqual(sinPuerta.bloqueos, [], JSON.stringify(sinPuerta.bloqueos));
+}
+
+// --- 14. el cableado: la adjudicacion corre SIN archivo de evidencia ----
+// H1 y M1 de la ronda 18. La llamada vivia dentro de `if (evidence.exists)`:
+// en una fase sin `evidence_required`, borrar la evidencia dejaba el gate en
+// verde sin UNA comprobacion de autorizacion. Y la regresion central (M1,
+// adjudicacion solo con puerta) sobrevivia la suite completa porque ningun
+// test ejercitaba este cable. Este caso muere si la adjudicacion vuelve a
+// colgar de cualquier condicion: sin evidencia que exista y sin puerta.
+{
+  const { target } = montarRepo("cableado-sin-evidencia", { fases: FASES_CON_PUERTA });
+  fs.writeFileSync(path.join(target, "phase-contract.yaml"), FASES_SIN_PUERTA, "utf8");
+  const resultado = evaluatePhaseReadiness(target, "F13", "slice-cableado");
+  assert.equal(resultado.status, "blocked", JSON.stringify(resultado.blockers));
+  assert.ok(resultado.blockers.includes("authz-human-gate-removed"), JSON.stringify(resultado.blockers));
+  assert.ok(resultado.evidence.authorization, "la autorizacion se reporta aunque la evidencia no exista");
+  assert.equal(resultado.evidence.exists, false);
 }
 
 console.log("authz-git: PASS");

@@ -539,7 +539,11 @@ function checkCommand(command, args = ["--version"]) {
 }
 
 function checkPowerShell() {
-  for (const command of process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"]) {
+  // En WSL, `pwsh` a secas no resuelve: libuv busca el nombre literal en el
+  // PATH y no prueba la extension `.exe` que el interop de WSL si ejecuta. Sin
+  // el segundo intento, `doctor` reportaba `runtime-pwsh` en error en el
+  // entorno POSIX declarado del proyecto, con PowerShell 7 instalado.
+  for (const command of process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh", "pwsh.exe"]) {
     const result = spawnSync(command, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
       encoding: "utf8",
       shell: false
