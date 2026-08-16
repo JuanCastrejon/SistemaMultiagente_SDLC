@@ -8,7 +8,7 @@
 // siempre — contradiciendo el propio phase-contract v2, que documenta que
 // "sin quality_gates, la fase no adjudica calidad".
 //
-// Encontrado en adopcion real (FacturacionDian, 2026-08-16): el slice activo
+// Encontrado en adopcion real (consumidor brownfield, 2026-08-16): el slice activo
 // en F1 no podia poner quality-verify en verde aunque F1 no mide nada.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";

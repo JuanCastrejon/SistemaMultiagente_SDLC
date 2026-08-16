@@ -271,7 +271,7 @@ export async function commandQualityGate(options = {}) {
   // `inherited-evidence-missing`) y quedaba bloqueada para siempre, aunque
   // el propio phase-contract documenta que "sin quality_gates, la fase no
   // adjudica calidad". Encontrado en adopcion real: el consumidor
-  // FacturacionDian con el slice activo en F1 no pudo poner quality-verify
+  // legacy brownfield con el slice activo en F1 no pudo poner quality-verify
   // en verde por esta via (2026-08-16).
   const inheritableGates = byDeclaredIds.length > 0 ? byDeclaredIds : [];
   const inheritedByOrigin = new Map();
