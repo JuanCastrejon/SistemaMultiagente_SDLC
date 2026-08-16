@@ -50,7 +50,7 @@ export function requiredForSurface(surface) {
  * que el gate humano de cada fase va a exigir. Confundirlas dejaba a todo repo
  * plenamente clasificado con un error permanente `authz-surfaces-unclassified`
  * cuyo remedio («clasifica los cuatro riesgos») ya estaba hecho. Encontrado al
- * adoptar 2.0.0 en el consumidor real (FacturacionDian, 2026-08-16).
+ * adoptar 2.0.0 en el consumidor real (un consumidor real, 2026-08-16).
  */
 export function superficiesSinClasificar(surfaces) {
   if (!Array.isArray(surfaces)) return [];
