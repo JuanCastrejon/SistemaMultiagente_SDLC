@@ -173,6 +173,8 @@ El `min_denominator` es lo que separa un gate que juzga de uno vacuo: «0 violac
 
 En CI se ejecuta la copia del guard que vive en la rama de integración —no la del checkout del PR— y su allowlist se lee de la base vía `git show`: una excepción creada en el mismo PR no autoriza nada hasta estar mergeada.
 
+Desde 2.0.0 cada excepción del allowlist apunta a una **atestación firmada de verdad** (`attestation_commit` verificable, `approved_by` en `governance.maintainers`, `expires_at` vigente), y verificar una firma SSH exige `gpg.ssh.allowedSignersFile` — una config que un runner de CI no tiene. La solución: las claves **públicas** de los maintainers viajan en el repo, en `.sdlc/allowed_signers`, y el guard las usa solo. Es seguro por construcción: lo que se verifica —el commit de la atestación— viene fijado por la allowlist de la base; cambiar este archivo solo puede *negar* validaciones legítimas, nunca fabricarlas.
+
 Una salvedad honesta: si la rama base todavía no tiene el script (bootstrap, primera adopción), el workflow avisa y cae a la copia del checkout. Mientras dure esa ventana el guard sí es editable por el PR, y se cierra sola en cuanto el guard existe en la base.
 
 ### Firma humana verificable y cierre
@@ -363,6 +365,8 @@ Dos detalles que cuestan una tarde si nadie los dice:
 
 El resultado de la verificación trae `identityBinding: "fingerprint" | "principal"` para que se sepa cuál de las dos garantías hay delante.
 
+Y un paso más que el doctor no puede dar por ti: **comita las claves públicas en `.sdlc/allowed_signers`** (el formato de `allowed_signers` de SSH, una línea por mantenedor). Sin ese archivo, la verificación de firmas —y con ella la validación de cada excepción del allowlist— solo funciona en tu máquina, donde tu `gpg.ssh.allowedSignersFile` existe; un runner o un clon fresco no pueden validar nada. La clave pública no es un secreto: es el material que hay que distribuir, igual que una clave GPG en un keyserver.
+
 ### 5. Estado por slice
 
 `phase-status.yaml` admite un mapa `slices:` además del puntero global. Con varios slices en vuelo, el puntero solo describe uno y el árbitro quedaba ciego a los demás:
@@ -501,7 +505,10 @@ la rama de integración y HEAD, superficie a superficie, emparejando por `id`:
 | Rename con `id` estable | no por sí mismo |
 | Alta de una superficie nueva | no |
 | Se baja `governance.humanGate.policy` | sí, aunque ninguna superficie cambie |
+| Se baja el **override de otra fase** | sí, aunque la fase que se está gateando sea otra: nadie gatea todas las fases en cada corrida |
 | Se quita `human_gate` de una fase | sí — es la puerta que gobierna todo el modelo |
+| La fase con puerta **desaparece** del contrato | sí — borrar la fase que sostenía la puerta es quitar la puerta |
+| El contrato de fases de la BASE es ilegible | bloquea — no poder leer la obligación anterior no es no tener nada que comparar |
 
 La rama base sale de `gitFlow.integrationBranch` y se califica a
 `refs/remotes/origin/<rama>`, **no** de lo que proponga el PR: elegir la base es
@@ -558,9 +565,21 @@ crítica—: se **rechaza**.
 | Downgrade BASE→HEAD | error | acción requerida | **bloquea** | como el gate |
 | Sujeto v1 o deriva de política | error | acción requerida | **bloquea** | como el gate |
 | BASE irresoluble | aviso | aviso | **bloquea** (con puerta) | **bloquea** |
+| Fase con puerta sin evidencia legible | — | — | **bloquea** | como el gate |
+| Archivo de evidencia ilegible | error | acción requerida | bloquea si hay puerta | como el gate |
 
 `doctor` corre donde se desarrolla y no está concediendo nada; el gate sí. Por
 eso una base irresoluble avisa en uno y bloquea en el otro.
+
+Las dos filas nuevas de abajo son la lección que costó cinco instancias
+aprender: **una comprobación no puede vivir detrás de la condición que existe
+para detectar**. La comprobación del signoff corría solo si el archivo de
+evidencia existía y parseaba — así que una fase con puerta y sin
+`evidence_required` pasaba el gate sin firma con solo borrar el archivo. Ahora
+la puerta **es** la exigencia: sin evidencia legible no hay firma que
+comprobar, y eso bloquea exista o no el archivo. Y la auditoría reporta la
+evidencia que no puede leer en vez de saltársela en silencio — corromper el
+YAML ya no es la forma barata de esconder una atestación podrida.
 
 Y el paso de autorización vive en el **workflow gestionado**: sin él, el eje
 quedaría adjudicado únicamente en la máquina del agente, y no habría evasión que
