@@ -94,4 +94,17 @@ jobs:
             echo "codigo: spec-boundary-guard-ausente-en-base"
             exit 1
           fi
+          # El guard verifica las atestaciones de la allowlist con
+          # `git verify-commit`, y una firma SSH solo verifica si existe
+          # `gpg.ssh.allowedSignersFile`. Esa config es del ENTORNO y un runner
+          # no la tiene: sin esto, toda entrada del allowlist moria con "no
+          # verifica como commit firmado" — `allowed` quedaba vacio en CI
+          # aunque local validara. La clave PUBLICA viaja en el repo
+          # (.sdlc/allowed_signers). Seguro porque lo que se verifica no lo
+          # elige este checkout: attestation_commit y maintainers vienen de
+          # BASE; cambiar este archivo solo puede NEGAR validaciones, nunca
+          # fabricarlas.
+          if [ -f .sdlc/allowed_signers ]; then
+            git config gpg.ssh.allowedSignersFile "$PWD/.sdlc/allowed_signers"
+          fi
           node "$TRUSTED" --base "$BASE" --json

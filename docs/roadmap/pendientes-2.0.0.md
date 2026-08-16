@@ -190,13 +190,11 @@ Registro completo en `.codex-out/ronda-18/hallazgos.md`.
       todos los ids con override en cualquiera de los dos contratos.
 - [x] ~~MENOR — la severidad de `base-unresolvable` (bloqueo con puerta, aviso
       sin puerta) no tenía test (M6).~~ Caso 13.
-- [ ] **MENOR abierto — `exige` divergente para F2/F3 con puerta** según exista
-      la ref remota (early-return pasa `enHead.exige`, el final fuerza
-      `"ninguna"`). Ningún consumidor se rompe hoy. Junto con el doble
-      vocabulario `"ninguna"`/`"none"`.
-- [ ] **MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
-      upgrade) se salta en silencio con contratos ilegibles. Comandos de
-      reporte, no de enforcement.
+- [x] ~~MENOR abierto — `exige` divergente para F2/F3 con puerta~~ Cerrado en
+      la ronda 19 (caso 15).
+- [x] ~~MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
+      upgrade) se salta en silencio con contratos ilegibles.~~ Cerrado en la
+      ronda 19 (caso 17 y los `else` de doctor/upgrade).
 
 Deuda declarada nueva, dicha de frente: la primera ejecución real del workflow
 en Actions (tras empujar `0382d05`) dejó `validate` **en verde en un runner
@@ -207,34 +205,77 @@ instalar PowerShell nativo en el home de WSL (tarball 7.6.3, sin sudo): libuv
 no resuelve `pwsh.exe` por interop, y `run-regression` necesita un pwsh de
 verdad. `checkPowerShell` ahora también prueba `pwsh.exe` en Linux.
 
-## Para retomar en la próxima sesión — estado a 2026-08-15
+## Ronda 19 — la otra mitad del guard, auditada (2026-08-16)
 
-Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `0382d05` más el commit
-de la ronda 18** (`25d1fa6`, por empujar al cierre de esta sesión). [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
-abierto contra `develop` y `MERGEABLE`; el #40 (`develop` → `main`) sigue
-esperando a que #41 entre.
+Cerró la deuda declarada más vieja: la mitad de la ATESTACIÓN (recomputación
+del sujeto, verificación de firma, deriva de política) que nadie había
+auditado. Registro en `.codex-out/ronda-19/hallazgos.md`. El rastreador cayó
+por límite de concurrencia (declarado); mutador y refutador corrieron, y el
+barrido lo hizo la sesión principal.
+
+- [x] ~~SERIO — la comprobación del signoff vivía tras la evidencia.~~ Quinta
+      instancia del patrón: una fase CON puerta y SIN `evidence_required`
+      pasaba el gate **sin firma** con solo no escribir (o borrar/corromper)
+      el archivo de evidencia. Reproducido antes de arreglar. Ahora la puerta
+      bloquea sin evidencia legible, exista o no el archivo.
+- [x] ~~MEDIO — `auditAttestations` saltaba la evidencia ilegible en
+      silencio.~~ Corromper el YAML era la forma barata de esconder una
+      atestación podrida de `doctor`/`upgrade`. Ahora es hallazgo de error.
+- [x] ~~MENOR (r18) — `exige` divergente para F2/F3~~ y ~~la mitad de
+      auditoría que se saltaba en silencio con contratos ilegibles~~. Cerrados.
+- [x] ~~`authz-base-unreachable` sin caso~~ (DAG desconectado con
+      `commit-tree`, caso 16) — y de propina, el bloqueo por
+      quality-contract inválido en BASE tampoco tenía test (caso 20).
+- [x] ~~M2/M5/M6/M7 sobrevivían la suite completa; v1 sin test.~~ La garantía
+      de la huella, el canon del sujeto, la recomputación en el ref atestado
+      y la deriva de política ahora tienen su test y su mutante muerto.
+- **La mitad de la atestación sostuvo los seis ataques** del refutador con
+      firmas reales (SSH y GPG): commit banal firmado, subject falseado,
+      wildcards, v1, deriva selectiva — todos refutados. Sin bypass
+      end-to-end.
+- [x] ~~**Decisión de ADR — frescura obligatoria.**~~ **Decidido el
+      2026-08-16: la doctrina se mantiene para 2.0.0** — el árbol movido es
+      AVISO (`fresh: false`), la política mutada invalida. Es doctrina escrita
+      del ADR 0008 (líneas 139–142) y hasta el CHANGELOG la explica. Si algún
+      consumidor necesita frescura obligatoria en un gate, `--require-fresh`
+      ya existe en `signoff --verify` y cablearlo a `phase-gate` es un cambio
+      pequeño — se hace cuando alguien lo pida, no antes.
+
+Lección de método anotada en el artefacto: mutar por ancla de cadena cae en
+la primera ocurrencia y enseña huecos falsos — verificar siempre que la
+mutación tocó el sitio que se quería mutar (nos costó dos falsos sobrevivientes
+y un test real de propina).
+
+**Revisión cruzada (Opus 5, 2026-08-16):** verificó las rondas 18 y 19 contra
+el repo —no contra el informe— y confirmó PRs, CI, suite Windows/POSIX y una
+barrida de mutación propia (12/12). «Nada que corregir. Trabajo sólido.»
+Notó, con razón, que los hallazgos son de la misma familia que introdujo el
+propio arreglo de la ronda 17. Esto cierra la segunda voz pendiente que el
+checkpoint declaraba (Codex sigue sin cuota hasta el 12–13 de septiembre,
+pero ya no bloquea nada).
+
+## Para retomar en la próxima sesión — estado a 2026-08-16
+
+Rama `fix/rupturas-declaradas-y-pgid`. **#41 ya está fusionado a `develop`
+(c833945, con `--admin` y el motivo escrito en el PR).** El #40
+(`develop` → `main`) quedó **congelado por decisión del mantenedor** hasta
+cerrar los pendientes; las rondas 18 y 19 cerraron los suyos y queda la
+lista de abajo.
 
 Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
 `npm run validate` en verde, 204 archivos de documentación con sus anclas.
 
 ### Lo primero, en este orden
 
-- [x] ~~**Empujar los 9 commits locales.**~~ Hecho; primera corrida real de
-      Actions: `validate` verde en Linux, `frontera de especificacion` roja con
-      exactamente las 3 violaciones diseñadas (el escenario bootstrap que
-      justifica el `--admin`).
-- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Ejecutada y cerrada: tres SERIO y dos
-      MEDIO arreglados, dos MENOR declarados arriba. La pregunta «¿se puede
-      publicar 2.0.0 con esto?» tiene respuesta: **sí, con los dos MENOR
-      declarados** — nada de lo encontrado era explotable sin controlar ya
-      BASE.
-- [ ] **Mergear #41 con `--admin`.** Es la única vez: el PR introduce a la vez
-      el job `spec-boundary` y la allowlist que lo desbloquea, y una excepción
-      solo cuenta cuando ya está en la base. Del siguiente en adelante el
-      control se sostiene solo. Está escrito en el cuerpo del PR y en la
-      cabecera de `.github/agent-state/spec-boundary-allowlist.yaml`.
-- [ ] **Mergear #40 a `main`**, también con `--admin` mientras haya un solo
-      maintainer.
+- [x] ~~Empujar / ronda 18 / merge #41.~~ Hecho (ronda 18 en `25d1fa6`,
+      merge `c833945`).
+- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Cerrada; dos MENOR que quedaron
+      abiertos se cerraron en la ronda 19.
+- [x] ~~**Ronda 19: la otra mitad del guard.**~~ Auditada; ver su sección.
+- [x] ~~**Decidir la frescura obligatoria**~~ (decidido 2026-08-16: doctrina
+      vigente, ver ronda 19) y ~~la firma del propio repo~~ (guard en `ok`).
+      Queda: **mergear #40 a `main`** con `--admin` (su CI está rojo por el
+      bootstrap main-sin-allowlist — mismo motivo que #41) y **decidir npm**.
 - [ ] **Decidir npm**: `gh workflow run publish.yml`, **nunca `npm publish` a
       mano**.
 
@@ -244,8 +285,8 @@ Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
       caso propio. `tests/authz-git.test.mjs` cubre la mayoría de forma
       estructural, y la ronda 18 añadió casos por código (10–14), pero no hay
       todavía un caso por cada código del modelo.
-- [ ] `authz-base-unreachable` (clon superficial) no tiene caso: montar un DAG
-      desconectado cuesta y se dejó fuera.
+- [x] ~~`authz-base-unreachable` (clon superficial) no tiene caso.~~ Caso 16 en
+      la ronda 19, con `commit-tree` sin padre.
 - [x] ~~Ninguna ejecución real en **GitHub Actions**.~~ Contestado el
       2026-08-15 al empujar `0382d05`: `validate` verde en un runner Linux, y
       `refs/remotes/origin/<base>` **sí** existe con `fetch-depth: 0` — el paso
@@ -256,15 +297,13 @@ Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
 
 ### Deuda declarada que sigue abierta
 
-- [ ] **La otra mitad del guard de frontera no se auditó.** El script declara
-      que es «la mitad barata por RUTA» y que la autorización real la aporta la
-      atestación. Las rondas 16 y 17 auditaron la primera mitad; la segunda
-      —recomputación del sujeto, verificación GPG, enlace con la evidencia— no
-      la ha mirado nadie con la misma lupa.
+- [x] ~~**La otra mitad del guard de frontera no se auditó.**~~ **Auditada en
+      la ronda 19** (2026-08-16): sostuvo los ataques con firmas reales; lo
+      que había era cableado y tests, ambos cerrados.
 - [ ] **El allowlist del guard no comprueba contenido, solo rutas.** Una
       excepción autoriza cambios ilimitados a esa ruta hasta que caduque. La
-      granularidad por contenido es trabajo del ADR 0008 aplicado al allowlist,
-      y no se hizo.
+      granularidad por contenido es trabajo del ADR 0008 aplicado al
+      allowlist, y no se hizo. Es el pendiente grande que queda.
 - [ ] **`maxBuffer` de 64 MiB nunca se puso a prueba** con un diff real que lo
       desborde.
 
@@ -304,34 +343,28 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
 
 ## Espera decisión del mantenedor
 
-- [ ] **Firma del propio repo del framework.** El job `spec-boundary` de
-      `.github/workflows/ci.yml` ya corre el guard contra este repo, y hoy
-      reporta cuatro violaciones legítimas (su propio `ci.yml`, el
-      `regression-install.yml`, la fuente del guard y su allowlist). No hay
-      forma de conceder la excepción porque **este repo no tiene
-      `.sdlc/config.json` con `governance.maintainers` ni firma de commits
-      configurada**: sin un `signer` real, ninguna entrada del allowlist puede
-      ser válida.
-      Hace falta, y solo lo puede dar el mantenedor: (a) la cadena exacta que
-      `git log --format=%GS` reporta para su clave, (b) firma de commits
-      activa en el repo. Con eso se escribe `.sdlc/config.json` y las
-      excepciones de las rutas que el framework edita de forma rutinaria.
-      **Hasta entonces, ese job deja el repo sin poder mergear.**
+- [x] ~~**Firma del propio repo del framework.**~~ **Resuelto** (verificado
+      2026-08-16): `.sdlc/config.json` existe con `governance.maintainers`
+      (`juandavidcastrejonbermudes@gmail.com`, principal de `allowed_signers`,
+      y desde esta fecha también la **huella** de la clave — la unión por
+      principal es la débil que la ronda 19 documentó), la firma de commits SSH
+      está activa (`%G?` = G), la allowlist con las cinco excepciones está
+      mergeada en `develop` (caducidad 2026-11-13), y el guard corrido contra
+      este repo da **`status: ok`**. El job ya no bloquea nada: el PR que
+      edita `.sdlc/config.json` pasa por su propia excepción, sin `--admin`.
 
 
-- [ ] **Publicar 2.0.0.** Rama empujada y **PR abierto contra `develop`**. Falta
-      la revisión humana, el merge, y decidir si se publica a npm. El gate local
-      (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
-      `-Strict`.
-      Tras seis rondas adversariales (5 a 10) no quedaba ningún BLOQUEANTE
-      **de código**. Pero desde el 2026-08-14 **sí hay un bloqueante de
-      alcance**: el ADR 0008 entra en esta versión, y no está implementado. No
-      se publica 2.0.0 hasta que D1–D7 estén dentro.
-- [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
-      mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
-      aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
-      primer push. Hoy nada en el repo lo garantiza: en Windows esos casos se
-      saltan con `SKIP` y el verde es engañoso.
+- [ ] **Publicar 2.0.0.** Estado a 2026-08-16: el ADR 0008 está **implementado
+      y auditado** (rondas 11–19), #41 fusionado a `develop` con CI verde
+      completo — incluida `frontera de especificacion`, con la allowlist ya en
+      la base. Falta: el PR de la ronda 19 a `develop`, deshelar y mergear #40
+      a `main`, y decidir npm. El bloqueo de alcance de la sección de abajo
+      está resuelto.
+- [x] ~~**Montar un job de CI que corra la suite en Linux.**~~ Cubierto de
+      hecho: el job `validate` del `ci.yml` corre `pnpm test` completo en un
+      runner Linux, y está **verde** sobre `develop` desde el merge de #41
+      (2026-08-16) — primera corrida real que incluye los casos POSIX que en
+      Windows se saltan con SKIP.
 - [x] ~~**Número de versión del modelo de riesgos** (ADR 0008).~~ **Decidido el
       2026-08-14: entra en 2.0.0.** Se descarta la 3.0.0 que se venía asumiendo.
       Razón: 2.0.0 sigue sin publicar, y diferirlo obligaría al consumidor a dos
@@ -342,14 +375,20 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
       rupturas. Las rupturas nuevas se declaran **al implementarlas**, no ahora
       — declarar una ruptura que el código no ejerce es el defecto que esta
       misma rama ya cometió dos veces.
-- [ ] **Periodo de gracia del fail-closed retroactivo.** El contraste
-      adversarial recomendó bloquear desde el primer gate. El coste de
-      migración de los consumidores ya instalados es decisión de producto.
-- [ ] **Reconciliar el ADR 0007.** Su línea 29 describe la firma humana como
-      review `APPROVED` verificado por `gh api`; `src/signoff.js` implementa
-      commit firmado y su cabecera argumenta por qué la vía de plataforma es
-      insatisfacible con un solo maintainer. ¿Addendum o revisión propia del
-      ADR?
+- [x] ~~**Periodo de gracia del fail-closed retroactivo.**~~ **Decidido el
+      2026-08-16: sin periodo de gracia, como está implementado.** Las
+      atestaciones v1 se rechazan desde el primer gate (verificado por la
+      ronda 19 con firma real: `signoff-subject-v1`, error/invalid), y el
+      coste de migración lo cubre la guía escrita: CHANGELOG con las trece
+      rupturas, `migrations/2.0.0/up.mjs` dejando constancia, y el comando de
+      re-firmado en cada mensaje de error. Un periodo de gracia sería una
+      ventana donde lo ya migrado convive con lo que no — la complejidad no
+      la paga ningún consumidor real: hay uno.
+- [x] ~~**Reconciliar el ADR 0007.**~~ **Ya estaba reconciliado** — el ítem
+      quedó viejo: la línea 29 lleva desde el 2026-08-14 la nota
+      **SUPERSEDIDO** apuntando al addendum, que deja el mecanismo (`gh api`
+      sobre reviews) y el disparador (`tier`) reemplazados por la atestación
+      por commit firmado del ADR 0008. Verificado hoy contra el archivo.
 
 ## ~~Implementar el ADR 0008~~ — HECHO (2026-08-15)
 
@@ -371,28 +410,28 @@ BASE/HEAD, definición de BASE/HEAD y códigos de salida, precedencia con
 matriz de enforcement por comando). Implementar con esos huecos abiertos es
 reabrir el diseño a mitad de camino.
 
-- [ ] `required(surface, contract)` como función pura y canónica, con tipos
+- [x] `required(surface, contract)` como función pura y canónica, con tipos
       válidos, valores desconocidos, duplicados y superficie vacía.
-- [ ] Riesgos por superficie: `money_path`, `regulated_data`,
+- [x] Riesgos por superficie: `money_path`, `regulated_data`,
       `security_critical`, `state_machine_critical`. **Ausente obliga.**
-- [ ] Sujeto v2: `{ slice, phase, tree_hash, contract_sha256 }`. Hoy el
+- [x] Sujeto v2: `{ slice, phase, tree_hash, contract_sha256 }`. Hoy el
       `tree_hash` cubre solo las superficies, así que en un repo con superficies
       bajo `apps/` el contrato de la raíz queda fuera y la política se puede
       mutar sin invalidar ninguna atestación.
-- [ ] Obligación efectiva BASE → HEAD por superficie, con `id` como identidad
+- [x] Obligación efectiva BASE → HEAD por superficie, con `id` como identidad
       persistente. Borrar, renombrar o mover cuenta como downgrade si no se
       puede demostrar continuidad. BASE irresoluble bloquea.
-- [ ] Sujeto de **autorización de reducción**, distinto del de atestación de
+- [x] Sujeto de **autorización de reducción**, distinto del de atestación de
       fase: `{ base_sha, head_sha, contract_sha256_base, contract_sha256_head,
       surface_ids[] }`.
-- [ ] Enforcement en `phase-gate`, y solo ahí: `signoff` no adjudica downgrades
+- [x] Enforcement en `phase-gate`, y solo ahí: `signoff` no adjudica downgrades
       porque no conoce el BASE de la evaluación.
-- [ ] Rechazo visible de atestaciones v1 en `doctor` y `upgrade`.
-- [ ] Divergencia config/contrato pasa de `warning` a **error**.
-- [ ] Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
+- [x] Rechazo visible de atestaciones v1 en `doctor` y `upgrade`.
+- [x] Divergencia config/contrato pasa de `warning` a **error**.
+- [x] Precedencia entre `phase.human_gate`, `humanGate.policy` y la obligación
       derivada de riesgos.
-- [ ] Alcance de `humanGate.policy`: por repositorio, superficie, fase o slice.
-- [ ] Los ocho tests mínimos que enumera el ADR antes de publicar.
+- [x] Alcance de `humanGate.policy`: por repositorio, superficie, fase o slice.
+- [x] Los ocho tests mínimos que enumera el ADR antes de publicar.
 
 ## Deuda técnica conocida
 

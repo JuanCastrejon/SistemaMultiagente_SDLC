@@ -277,16 +277,22 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
     evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
   }
 
-  if (evidence.exists) {
-    const read = readEvidenceFile(evidenceAbsolute);
-    evidence.valid = read.ok;
-    if (!read.ok) {
-      evidence.errors = read.errors;
-      // Evidencia invalida solo bloquea donde la evidencia es obligatoria; en
-      // el resto de fases se reporta sin detener el flujo.
-      if (evidence.required) evidenceBlockers.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
-      else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
-    } else {
+    if (evidence.exists) {
+      const read = readEvidenceFile(evidenceAbsolute);
+      evidence.valid = read.ok;
+      if (!read.ok) {
+        evidence.errors = read.errors;
+        // Evidencia invalida solo bloquea donde la evidencia es obligatoria; en
+        // el resto de fases se reporta sin detener el flujo.
+        if (evidence.required) evidenceBlockers.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+        else evidenceWarnings.push(`${read.code}:${path.relative(target, evidenceAbsolute)}`);
+        // ...excepto si la fase tiene PUERTA (ronda 19): la comprobacion del
+        // signoff vive detras de `read.ok`, asi que una fase con puerta y sin
+        // `evidence_required` pasaba el gate con solo borrar o corromper el
+        // archivo. La puerta ES la exigencia: sin evidencia legible no hay
+        // firma que comprobar, y eso bloquea.
+        if (phase.human_gate) evidenceBlockers.push("human-gate-signoff-missing");
+      } else {
       // Las expectativas vienen del contrato de la fase: si declara gates de
       // calidad PROPIOS tiene que traer mediciones, y si tiene gate humano
       // tiene que traer firma. Sin esto, una evidencia valida pero VACIA
@@ -387,6 +393,13 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         }
       }
     }
+  } else if (phase.human_gate) {
+    // Ronda 19: la comprobacion del signoff vivia dentro de
+    // `if (evidence.exists)`, asi que una fase CON puerta y SIN
+    // `evidence_required` pasaba el gate sin firma — bastaba con no escribir
+    // (o borrar) el archivo de evidencia. Si la fase tiene puerta, la
+    // ausencia de evidencia es la ausencia de firma: bloquea.
+    evidenceBlockers.push("human-gate-signoff-missing");
   }
 
   // phase-contract v2: la fase puede declarar que gates del contrato de calidad
@@ -1250,7 +1263,23 @@ export async function auditAttestations(target) {
       if (!file.endsWith(".yaml")) continue;
       const phase = file.replace(/\.yaml$/, "");
       const read = readEvidenceFile(path.join(sliceDir, file));
-      const commitSha = read.ok ? read.evidence?.human_gate_signoff?.attestation_commit ?? null : null;
+      if (!read.ok) {
+        // Ronda 19: un archivo de evidencia ilegible se saltaba en silencio —
+        // ni contaba ni se reportaba, y el corruption local de la evidencia era
+        // la forma barata de esconder una atestacion podrida de `doctor` y
+        // `upgrade`. No se le atribuye veredicto de firma (no se sabe si
+        // declaraba una); se reporta como ERROR porque es estado local, no
+        // historia faltante.
+        result.findings.push({
+          level: "error",
+          code: `evidence-unreadable:${read.code}`,
+          slice: sliceEntry.name,
+          phase,
+          detail: `la evidencia no se puede leer: ${read.errors?.[0] ?? read.code}`
+        });
+        continue;
+      }
+      const commitSha = read.evidence?.human_gate_signoff?.attestation_commit ?? null;
       if (!commitSha) continue;
       pendientes.push({ slice: sliceEntry.name, phase, commitSha });
     }

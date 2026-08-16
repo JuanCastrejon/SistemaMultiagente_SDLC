@@ -1,0 +1,5 @@
+# Claves PUBLICAS autorizadas a firmar commits de este repo (allowed_signers de SSH).
+# La clave privada nunca vive aqui: este archivo es el material que se DISTRIBUYE.
+# Lo lee el guard de frontera para poder verificar las atestaciones de la
+# allowlist en entornos sin configuracion de usuario, como un runner de CI.
+juandavidcastrejonbermudes@gmail.com namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINxfiPckFBZUOmuWV9gajZnMYhey+KesE1K+zPCh9I3y

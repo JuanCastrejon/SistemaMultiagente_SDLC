@@ -139,6 +139,27 @@ function gitText(args) {
   return git(args, { allowFailure: true }).stdout.trim();
 }
 
+// ─── Firmas SSH verificables en cualquier entorno ──────────────────────────
+//
+// `verify-commit` de una firma SSH exige `gpg.ssh.allowedSignersFile`, y esa
+// config vive en el ENTORNO del que corre el guard: en un runner de CI no
+// existe, y toda entrada del allowlist moria con "no verifica como commit
+// firmado" — descubierto en el primer PR que necesito validar una excepcion de
+// verdad (2026-08-16): local en verde, CI en rojo con `allowed: []`.
+//
+// El repo puede llevar su propio `.sdlc/allowed_signers` con las claves
+// PUBLICAS de sus maintainers — no es secreto, es el material que hay que
+// distribuir. Leerlo del checkout es seguro porque lo que se verifica NO lo
+// elige el checkout: el `attestation_commit` viene fijado por la allowlist de
+// la BASE y los maintainers tambien. Cambiar este archivo solo puede NEGAR
+// validaciones a entradas legitimas, nunca fabricarlas: la firma del commit
+// fijado tiene que casar con la clave listada para ese principal.
+const SIGNERS_CFG = (() => {
+  if (!fs.existsSync(".sdlc/allowed_signers")) return [];
+  const ruta = `${process.cwd().replaceAll("\\", "/")}/.sdlc/allowed_signers`;
+  return ["-c", `gpg.ssh.allowedSignersFile=${ruta}`];
+})();
+
 // Rutas SIEMPRE por salida NUL-delimitada.
 //
 // `core.quotePath=false` gobierna unicamente los bytes >= 0x80. git aplica
@@ -414,11 +435,11 @@ function evaluarEntrada(entrada, firmantes, ahora) {
       // la misma regla que este guard aplica a su propio diff.
       problemas.push(`\`attestation_commit\` no esta en el historial accesible (¿clon superficial?): ${entrada.attestation_commit}`);
     } else {
-      const verificado = git(["verify-commit", entrada.attestation_commit], { allowFailure: true });
+      const verificado = git([...SIGNERS_CFG, "verify-commit", entrada.attestation_commit], { allowFailure: true });
       if (verificado.error) {
         problemas.push(`la atestacion ${entrada.attestation_commit.slice(0, 12)} no verifica como commit firmado`);
       } else {
-        const firmante = gitText(["log", "-1", "--format=%GS", entrada.attestation_commit]);
+        const firmante = gitText([...SIGNERS_CFG, "log", "-1", "--format=%GS", entrada.attestation_commit]);
         if (firmantes.length > 0 && !firmantes.includes(firmante)) {
           problemas.push(`la atestacion la firma \`${firmante}\`, que no esta en governance.maintainers`);
         }

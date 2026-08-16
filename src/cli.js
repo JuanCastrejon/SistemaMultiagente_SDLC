@@ -737,7 +737,19 @@ async function commandDoctor(options) {
   // gate bloquea.
   {
     const contratoCalidad = loadQualityContract(target);
-    if (contratoCalidad.ok) findings.push(...auditarAutorizacion(target, contratoCalidad.contract));
+    if (contratoCalidad.ok) {
+      findings.push(...auditarAutorizacion(target, contratoCalidad.contract));
+    } else {
+      // Sin esta rama, un contrato ausente o ilegible dejaba el eje de
+      // autorizacion en CERO hallazgos — indistinguible de "todo en orden".
+      findings.push({
+        level: "error",
+        code: contratoCalidad.code,
+        detail: `el eje de autorizacion no se pudo auditar: ${
+          contratoCalidad.detail ?? "quality-contract.yaml no se puede leer"
+        }. Sin contrato no hay superficies con las que auditar la obligacion`
+      });
+    }
   }
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
@@ -1319,7 +1331,20 @@ async function commandUpgrade(options) {
   // enterarse ahi —con el trabajo hecho— es exactamente lo que la auditoria de
   // atestaciones de 2.0.0 vino a evitar para las firmas.
   const contratoTrasUpgrade = loadQualityContract(target);
-  const autorizacion = contratoTrasUpgrade.ok ? auditarAutorizacion(target, contratoTrasUpgrade.contract) : [];
+  // Con el contrato ilegible tras la migracion, la lista vacia dejaba el eje
+  // fuera del payload — y un eje ausente no puede contribuir a `action-required`
+  // justo en el comando que existe para decirlo.
+  const autorizacion = contratoTrasUpgrade.ok
+    ? auditarAutorizacion(target, contratoTrasUpgrade.contract)
+    : [
+        {
+          level: "error",
+          code: contratoTrasUpgrade.code,
+          detail: `el eje de autorizacion no se pudo auditar tras la migracion: ${
+            contratoTrasUpgrade.detail ?? "quality-contract.yaml no se puede leer"
+          }`
+        }
+      ];
   const autorizacionBloqueante = autorizacion.filter((finding) => finding.level === "error");
   const bloqueado = pendientes.length > 0 || autorizacionBloqueante.length > 0;
   return {
