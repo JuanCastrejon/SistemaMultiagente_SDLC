@@ -55,7 +55,90 @@ jobs:
         run: |
           node ./bin/sdlc.js init --target ./tmp-consumer --mode ${{ matrix.mode }} --project-name "Regression ${{ matrix.mode }}" --json
 
-      - name: Doctor
+      # Desde 2.0.0 el instalador NO escribe superficies de ejemplo: escribirlas
+      # era configuracion activa disfrazada de plantilla, y de ahi salian gates
+      # vacuos y firmas sobre el arbol vacio. La consecuencia buscada es que un
+      # repo recien instalado salga en ERROR hasta que alguien declare las
+      # superficies reales -- incluido este.
+      #
+      # Se afirma ese error ANTES de configurar, en vez de saltarselo: si algun
+      # dia `doctor` dejara de exigirlo, esta regresion tiene que enterarse.
+      - name: Doctor sin configurar (tiene que fallar)
+        shell: bash
+        run: |
+          if node ./bin/sdlc.js doctor --target ./tmp-consumer --json > /tmp/doctor-sin-config.json 2>&1; then
+            echo "FALLO: doctor deberia salir != 0 con las superficies sin declarar"
+            cat /tmp/doctor-sin-config.json
+            exit 1
+          fi
+          grep -q "config-surfaces-empty" /tmp/doctor-sin-config.json || {
+            echo "FALLO: doctor fallo, pero no por config-surfaces-empty"
+            cat /tmp/doctor-sin-config.json
+            exit 1
+          }
+          echo "OK: doctor exige declarar superficies, como debe"
+
+      # Lo que hace un consumidor de verdad: declarar su superficie y regenerar
+      # el contrato desde el config.
+      - name: Declarar una superficie real
+        shell: bash
+        run: |
+          mkdir -p ./tmp-consumer/src
+          echo "export const x = 1;" > ./tmp-consumer/src/index.js
+          node -e "
+            const fs = require('fs');
+            const p = './tmp-consumer/.sdlc/config.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            // `owner` es obligatorio en el schema; `tier` sale del enum
+            // core|standard|shell. Una superficie mal formada haria fallar
+            // doctor por config-schema y ocultaria lo que esta regresion mide.
+            c.surfaces = [{ id: 'src', path: 'src', owner: 'regression', tier: 'standard' }];
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+          "
+      # `quality-contract.yaml` se GENERA desde config.surfaces, asi que editar
+      # el config y no regenerar deja drift. Hay que hacer DOS cosas con eso, y
+      # la primera es la que se olvido: AFIRMAR que se detecta.
+      #
+      # Sin este paso, el `upgrade` de abajo borra el estado que esta regresion
+      # existe para vigilar -- `diff` solo se observaria ya reparado, y el dia
+      # que dejara de ver un contrato desincronizado la matriz seguiria verde.
+      # Es exactamente el error que ya se cometio con `doctor` y
+      # `config-surfaces-empty`: reparar antes de comprobar deja el control
+      # ciego.
+      - name: El drift se detecta ANTES de regenerar
+        shell: bash
+        run: |
+          set +e
+          salida=$(node ./bin/sdlc.js diff --target ./tmp-consumer --json)
+          codigo=$?
+          set -e
+          echo "$salida"
+          SALIDA="$salida" CODIGO="$codigo" node -e '
+            const codigo = Number(process.env.CODIGO);
+            if (codigo === 0) {
+              console.error("::error::diff salio 0 con el contrato desincronizado: la deteccion de drift dejo de funcionar.");
+              process.exit(1);
+            }
+            const payload = JSON.parse(process.env.SALIDA);
+            if (payload.status !== "diff") {
+              console.error(`::error::se esperaba status=diff y llego status=${payload.status}`);
+              process.exit(1);
+            }
+            const tocados = [...(payload.changed ?? []), ...(payload.missing ?? [])].map((x) => (typeof x === "string" ? x : x?.path ?? ""));
+            if (!tocados.some((p) => p.includes("quality-contract.yaml"))) {
+              console.error(`::error::diff falla, pero no nombra quality-contract.yaml: ${JSON.stringify(tocados)}`);
+              process.exit(1);
+            }
+          '
+
+      # Y la segunda: repararlo. Es lo que la propia migracion le dice al
+      # consumidor que haga, asi que la regresion tiene que hacer lo mismo.
+      - name: Regenerar el contrato
+        shell: bash
+        run: |
+          node ./bin/sdlc.js upgrade --target ./tmp-consumer --json
+
+      - name: Doctor ya configurado
         run: |
           node ./bin/sdlc.js doctor --target ./tmp-consumer --json
 

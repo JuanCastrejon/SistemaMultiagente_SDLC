@@ -34,6 +34,23 @@ function runAllowingFailure(args, options = {}) {
   }
 }
 
+function upgradeAplicado(args, mensaje) {
+  const salida = runAllowingFailure(args);
+  const payload = JSON.parse(salida);
+  if (payload.status === "ok") return payload;
+  // `action-required` SOLO por autorizacion: el resto de razones sigue siendo
+  // un fallo. Aceptar cualquier `action-required` convertiria estos casos en
+  // una asercion vacia.
+  assert.equal(payload.status, "action-required", mensaje ?? salida);
+  const otras = (payload.attestations?.findings ?? []).length;
+  assert.equal(otras, 0, `upgrade pendiente por algo que no es autorizacion: ${salida}`);
+  assert.ok(
+    (payload.authorization ?? []).some((f) => f.level === "error"),
+    `upgrade en action-required sin motivo de autorizacion: ${salida}`
+  );
+  return payload;
+}
+
 function runStatus(args) {
   return spawnSync("node", [cli, ...args], {
     cwd: repoRoot,
@@ -125,13 +142,28 @@ assert.match(doctorSinSuperficies, /config-surfaces-empty/);
 
 const greenfieldConfigPath = path.join(greenfield, ".sdlc", "config.json");
 const configuredGreenfield = JSON.parse(fs.readFileSync(greenfieldConfigPath, "utf8"));
-configuredGreenfield.surfaces = [{ id: "app", path: "src", owner: "api-agent", tier: "core" }];
+configuredGreenfield.surfaces = [
+  {
+    id: "app",
+    path: "src",
+    owner: "api-agent",
+    tier: "core",
+    moneyPath: false,
+    regulatedData: false,
+    securityCritical: false,
+    stateMachineCritical: false
+  }
+];
 fs.writeFileSync(greenfieldConfigPath, JSON.stringify(configuredGreenfield, null, 2), "utf8");
 fs.mkdirSync(path.join(greenfield, "src"), { recursive: true });
 fs.writeFileSync(path.join(greenfield, "src", "index.js"), "export const app = 1;\n", "utf8");
-run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+// Con las superficies ya clasificadas, el upgrade termina limpio: el coste del
+// ADR 0008 aparece donde el riesgo lo justifica y no sobre todo el mundo. El
+// caso contrario —sin clasificar— se prueba mas abajo, en el bloque del gate
+// humano.
+runAllowingFailure(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
 
-run(["doctor", "--target", greenfield, "--json"]);
+runAllowingFailure(["doctor", "--target", greenfield, "--json"]);
 run(["diff", "--target", greenfield, "--json"]);
 
 // El manifiesto se versiona, y en Windows con `core.autocrlf=true` git lo
@@ -145,7 +177,7 @@ run(["diff", "--target", greenfield, "--json"]);
   const lf = fs.readFileSync(manifestPath, "utf8");
   fs.writeFileSync(manifestPath, lf.replace(/\n/g, "\r\n"), "utf8");
 
-  const doctorCrlf = JSON.parse(run(["doctor", "--target", greenfield, "--json"]));
+  const doctorCrlf = JSON.parse(runAllowingFailure(["doctor", "--target", greenfield, "--json"]));
   assert.ok(
     !doctorCrlf.findings.some((finding) => finding.code === "manifest-integrity"),
     "CRLF en el manifiesto no puede leerse como manipulacion"
@@ -306,8 +338,7 @@ fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization"
 run(["install", "--target", legacy100, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);
 simulateInstalledFrameworkVersion(legacy100, "1.0.0");
 
-const upgrade100Output = JSON.parse(run(["upgrade", "--target", legacy100, "--to-version", "1.5.0", "--json"]));
-assert.equal(upgrade100Output.status, "ok");
+const upgrade100Output = upgradeAplicado(["upgrade", "--target", legacy100, "--to-version", "1.5.0", "--json"]);
 assert.ok(upgrade100Output.backup);
 assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.0.1-applied.txt")));
 assert.ok(fs.existsSync(path.join(legacy100, ".sdlc", "migrations", "1.1.0-applied.txt")));
@@ -332,8 +363,7 @@ fs.copyFileSync(path.join(repoRoot, "examples", "legacy-inventory-modernization"
 run(["install", "--target", legacy110, "--mode", "legacy", "--project-name", "Legacy Inventory Modernization", "--json"]);
 simulateInstalledFrameworkVersion(legacy110, "1.1.0");
 
-const upgrade110Output = JSON.parse(run(["upgrade", "--target", legacy110, "--to-version", "1.5.0", "--json"]));
-assert.equal(upgrade110Output.status, "ok");
+const upgrade110Output = upgradeAplicado(["upgrade", "--target", legacy110, "--to-version", "1.5.0", "--json"]);
 assert.ok(upgrade110Output.backup);
 assert.ok(!fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.0.1-applied.txt")));
 assert.ok(!fs.existsSync(path.join(legacy110, ".sdlc", "migrations", "1.1.0-applied.txt")));
@@ -508,14 +538,61 @@ const humanGateUnverifiable = JSON.parse(
   run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
 );
 assert.ok(!humanGateUnverifiable.blockers.includes("human-gate-signoff-missing"));
-// Un `approved_by` suelto es una DECLARACION: texto que el propio agente puede
-// escribir. Se nombra como tal, en vez de confundirla con una revision de
-// plataforma a la que solo le falta el identificador.
-assert.ok(
-  humanGateUnverifiable.warnings.includes("human-gate-signoff-declarative"),
-  JSON.stringify(humanGateUnverifiable.warnings)
+
+// Se DES-clasifica a proposito: es el estado en el que queda un consumidor que
+// actualiza desde 1.x, y el que el ADR 0008 declara que debe obligar.
+{
+  const configPath = path.join(greenfield, ".sdlc", "config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.surfaces = config.surfaces.map(({ moneyPath, regulatedData, securityCritical, stateMachineCritical, ...resto }) => resto);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
+  runAllowingFailure(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+}
+const humanGateSinClasificar = JSON.parse(
+  runAllowingFailure(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
 );
-assert.equal(humanGateUnverifiable.evidence.signatureClass, "declarative");
+// Desde el ADR 0008 este repo greenfield tiene sus superficies SIN CLASIFICAR
+// —el instalador no inventa los cuatro riesgos, porque *no clasificado* no es
+// *no aplica*—, asi que la obligacion derivada de riesgos exige atestacion y un
+// `approved_by` suelto deja de alcanzar. El bloqueo dice ademas que comando
+// emite la firma.
+assert.ok(
+  humanGateSinClasificar.blockers.includes("authz-attestation-missing"),
+  JSON.stringify(humanGateSinClasificar.blockers)
+);
+assert.equal(humanGateSinClasificar.evidence.authorization.exige, "attestation");
+
+// Y la CONTRACARA, que es la que prueba que el coste sigue al riesgo en vez de
+// caer sobre todo el mundo: con las cuatro clasificaciones en `false`, la misma
+// evidencia declarativa vuelve a ser un AVISO y la fase no bloquea por
+// autorizacion. Sin este caso, "obliga siempre" pasaria el test de arriba.
+{
+  const configPath = path.join(greenfield, ".sdlc", "config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const previas = config.surfaces;
+  config.surfaces = previas.map((s) => ({
+    ...s,
+    moneyPath: false,
+    regulatedData: false,
+    securityCritical: false,
+    stateMachineCritical: false
+  }));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
+  run(["upgrade", "--target", greenfield, "--accept-managed", ".sdlc/config.json", "--json"]);
+
+  const clasificado = JSON.parse(
+    run(["phase-gate", "--target", greenfield, "--phase", "F13", "--slice", "slice-hg2", "--json"])
+  );
+  assert.ok(
+    !clasificado.blockers.includes("authz-attestation-missing"),
+    JSON.stringify(clasificado.blockers)
+  );
+  assert.ok(
+    clasificado.warnings.includes("human-gate-signoff-declarative"),
+    JSON.stringify(clasificado.warnings)
+  );
+  assert.equal(clasificado.evidence.signatureClass, "declarative");
+}
 
 // Una atestacion DECLARADA que no verifica es peor que ninguna: afirma una
 // garantia que no existe, asi que bloquea en vez de avisar.
@@ -690,11 +767,10 @@ assert.equal(badAccept.status, 1);
 assert.ok(JSON.parse(badAccept.stdout).unknownAccepts.includes("docs/no-existe.md"));
 
 // Con --accept-managed el upgrade completa y el archivo local se conserva.
-const acceptedUpgrade = JSON.parse(run([
+const acceptedUpgrade = upgradeAplicado([
   "upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION,
   "--accept-managed", ".github/AGENTS.md", "--json"
-]));
-assert.equal(acceptedUpgrade.status, "ok");
+]);
 assert.deepEqual(acceptedUpgrade.accepted, [".github/AGENTS.md"]);
 assert.equal(fs.readFileSync(customizedPath, "utf8"), customizedContent);
 assert.ok(fs.existsSync(path.join(overrideRepo, ".sdlc", "overrides.yaml")));
@@ -705,7 +781,7 @@ assert.ok(overrideDoctor.findings.some((f) => f.code === "managed-file-override"
 assert.ok(!overrideDoctor.findings.some((f) => f.code === "managed-file-drift" && f.path === ".github/AGENTS.md"));
 
 // Un segundo upgrade ya no pide aceptar de nuevo lo mismo.
-assert.equal(JSON.parse(run(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"])).status, "ok");
+upgradeAplicado(["upgrade", "--target", overrideRepo, "--to-version", FRAMEWORK_VERSION, "--json"]);
 
 // Si el archivo cambia despues de aceptarlo, el override queda stale.
 fs.writeFileSync(customizedPath, `${customizedContent}\nOtra edicion posterior.\n`, "utf8");

@@ -152,6 +152,73 @@ export function computeTreeHashAtRef(target, surfacePaths = [], ref = "HEAD") {
   return hashLsTree(listed.stdout.toString("utf8"), surfacePaths);
 }
 
+export const RUTA_CONTRATO_CALIDAD = "quality-contract.yaml";
+
+/**
+ * El `contract_sha256` del sujeto v2 (ADR 0008, D3).
+ *
+ * Es el MISMO calculo que el `tree_hash`, filtrado a un solo archivo: sha256
+ * sobre la entrada `ruta:oid` que git reporta para el contrato EN EL REF
+ * ATESTADO. No se lee del working tree ni se recibe declarado.
+ *
+ * Por que reutilizar `computeTreeHashAtRef` en vez de leer bytes: mantiene una
+ * sola definicion de "que significa el hash de algo en un ref". Dos funciones
+ * que hashean lo mismo de dos maneras acaban discrepando, y una discrepancia
+ * entre lo que firma `signoff` y lo que verifica `phase-gate` es un fallo de
+ * seguridad silencioso — es exactamente el motivo por el que las vias sincrona
+ * y asincrona comparten `hashLsTree`.
+ *
+ * `files: 0` significa que el contrato NO existe en ese ref. No se devuelve un
+ * hash del vacio: se devuelve un error, porque una atestacion que dice cubrir
+ * una politica inexistente no cubre nada.
+ */
+export const RUTA_CONTRATO_FASES = "phase-contract.yaml";
+
+// Sentinela para el contrato de fases que NO vive en el repo del consumidor: el
+// harness cae al que trae el framework. No es un hueco — al contrario, es el
+// caso en el que el evaluado no puede editarlo. Lo que si es un cambio
+// detectable es AÑADIRLO al repo, porque eso mueve el hash de este sentinela a
+// uno real y, si el nuevo trae `human_gate: false`, la comparacion BASE->HEAD
+// lo ve como la transicion que es.
+export const CONTRATO_FASES_DEL_FRAMEWORK = "framework-default";
+
+function hashDeArchivoEnRef(target, ruta, ref) {
+  const resultado = computeTreeHashAtRef(target, [ruta], ref);
+  if (!resultado.ok) return { ok: false, hash: null, code: resultado.code, detail: resultado.detail };
+  return { ok: true, hash: resultado.files === 0 ? null : resultado.hash, code: null, detail: null };
+}
+
+export function computeContractSha256AtRef(target, ref = "HEAD") {
+  const resultado = hashDeArchivoEnRef(target, RUTA_CONTRATO_CALIDAD, ref);
+  if (!resultado.ok) return resultado;
+  if (resultado.hash === null) {
+    return {
+      ok: false,
+      hash: null,
+      code: "contract-missing-at-ref",
+      detail: `${RUTA_CONTRATO_CALIDAD} no existe en '${ref}': no hay politica que la atestacion pueda cubrir`
+    };
+  }
+  return resultado;
+}
+
+/**
+ * El segundo hash del sujeto v2 (ADR 0008, G4 punto 4).
+ *
+ * `phase.human_gate` es el AND exterior de todo el modelo de autorizacion y
+ * vive en OTRO archivo, que el sujeto no cubria: poner `human_gate: false` en
+ * F13 apagaba el gate entero sin mover un solo riesgo ni un solo hash.
+ *
+ * A diferencia del contrato de calidad, este PUEDE no estar en el repo: el
+ * harness cae al que trae el framework, y ese el consumidor no lo edita. Se
+ * devuelve el sentinela en vez de un error.
+ */
+export function computePhaseContractSha256AtRef(target, ref = "HEAD") {
+  const resultado = hashDeArchivoEnRef(target, RUTA_CONTRATO_FASES, ref);
+  if (!resultado.ok) return resultado;
+  return { ok: true, hash: resultado.hash ?? CONTRATO_FASES_DEL_FRAMEWORK, code: null, detail: null };
+}
+
 /**
  * Igual, sin bloquear el hilo: la usa el pool de la auditoria. Comparte con la
  * version sincrona el calculo (`hashLsTree`), que es donde vive el criterio.

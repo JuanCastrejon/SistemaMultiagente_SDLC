@@ -8,6 +8,38 @@ primero, porque bloquea al resto.
 
 ---
 
+## Ronda 11 — ¿queda deuda para una 2.0.1? Ya no
+
+Registro en `.codex-out/ronda-11/hallazgos.md`. La ronda murió por cuota tras
+entregar **6 hallazgos, todos ejecutados**; el contrato incremental los salvó.
+
+- [x] ~~SERIO — la matriz de regresión quedaba ROJA tras el `install` de
+      2.0.0.~~ Reproducido: `init` sale 0 pero `doctor` sale **1** con
+      `config-surfaces-empty`, porque desde 2.0.0 el instalador ya no escribe
+      superficies de ejemplo. **El propio control de release del repo estaba
+      roto por el cambio.** El workflow ahora (a) **afirma** ese error antes de
+      configurar —si algún día `doctor` dejara de exigirlo, la regresión se
+      entera— y (b) declara una superficie real, que es lo que hace un
+      consumidor. Verificado en WSL de punta a punta.
+- [x] ~~Los cinco MENORES «cerrados» seguían teniendo variantes vivas.~~ Codex
+      confirmó que mis cinco mutantes mueren, y encontró **cinco variantes
+      nuevas que pasaban**. Todas cerradas, y todas verificadas volviendo a
+      aplicar **su** mutación exacta: **5 muertos, 0 sobreviven**.
+      - **NFD parcial:** normalizar solo `e`+U+0301 no tocaba el vector de la
+        eñe. Ahora hay cuatro vectores NFD independientes y se comprueba cada
+        uno por separado — una normalización parcial sobrevive a una comparación
+        global si el resto coincide.
+      - **`runPool` degradado a 2:** el caso del default solo exigía
+        `1 < máximo <= 4`. Ahora afirma `=== AUDIT_CONCURRENCY`.
+      - **Detalle del `ls-tree` = solo el ref:** satisfacía un `includes(...)`
+        sin explicar nada. Ahora se exige **igualdad exacta** con la vía
+        síncrona.
+      - **`trip` retrasado un 40 % de la gracia:** una cota relativa sola dejaba
+        pasar 800 ms de bloqueo del pool. Ahora hay **cota absoluta** además.
+      - **Sin comparador de orden:** el caso verificaba una salida *accidental*
+        de `readdirSync`. El comparador se extrajo a `compareByUtf8Bytes`,
+        exportado, y se prueba contra una entrada deliberadamente desordenada.
+
 ## Ronda 10 — un BLOQUEANTE más, cerrado
 
 Registro en `.codex-out/ronda-10/hallazgos.md`.
@@ -62,12 +94,19 @@ incremental salvó 5 hallazgos antes de morir.
       con solo un warning (`Detected unsettled top-level await`). Ahora hay un
       vigilante global que sale con **código 1** y mensaje. Esto valía más que el
       mutante que lo destapó.
-- [ ] **SERIO abierto — el pgid sigue sin identidad segura.** Bajar la gracia a
-      5 s reduce la ventana pero no la cierra, y Codex midió además que un hijo
-      legítimo que necesite 5,5 s de limpieza recibe `SIGKILL`. Cierre real:
-      cgroup en POSIX y Job Object en Windows. **Hasta entonces, 5 s es
-      mitigación de riesgo residual, no cierre** — y así está escrito en el
-      código.
+- [x] ~~SERIO — el pgid sin identidad segura.~~ **Cerrado para el caso que
+      importa.** Ya no se dispara contra un número: `killTreeForce` compara el
+      `starttime` del líder (campo 22 de `/proc/<pid>/stat`) con el anotado al
+      arrancarlo. Un pid reciclado trae otro `starttime`, así que **se detecta y
+      no se manda nada**. Verificado en WSL: dos encarnaciones distintas dan
+      `starttime` distinto, un pid inexistente devuelve `null` sin lanzar, y un
+      nombre con paréntesis y espacios no rompe el parseo (se corta desde el
+      último `)`, que es el error clásico al leer ese archivo).
+      **Ventana residual declarada, no oculta:** si el líder ya fue recogido no
+      hay `/proc` que leer, y ahí solo queda el sondeo con la señal 0 — que
+      confirma que el grupo existe, no que sea nuestro. Cerrar *eso* pide
+      contención del SO (cgroup, Job Object), que es un slice propio. En
+      Windows no aplica: no hay `/proc` ni grupos POSIX.
 
 ## Ronda 8 — los tres SERIOS, atacados
 
@@ -97,38 +136,212 @@ Registro completo de la ronda en `.codex-out/ronda-8/hallazgos.md`.
 
 También cerrado de los mutantes supervivientes: el de `+1 KiB` al límite
 combinado (caso nuevo 5c, corte exacto sin margen — mutación verificada) y el
-de `MAX_KILL_GRACE_MS` (arriba). **Quedan cinco MENORES sin atacar**, todos
-ejecutados y confirmados por Codex sobre la copia POSIX — ninguno bloquea:
+de `MAX_KILL_GRACE_MS` (arriba).
 
-- [ ] `.normalize("NFC")` en `decodeCapture` → 14/14 verde. Un principal de
-      firma en NFD podría juzgarse distinto en las dos vías.
-- [ ] `Math.min(4, …)` en vez de `Math.min(concurrency, …)` en `runPool` →
-      14/14 verde. El grado de paralelismo que pida un consumidor se ignora.
-- [ ] Orden por bytes: cambiar `Buffer.compare` por comparación UTF-16 → 14/14
-      verde. `Z`, `a`, `ñ` ordenan igual por ambos criterios.
-- [ ] Detalle de error del `ls-tree` async → 14/14 verde: el caso del ref
-      inexistente compara solo `ok` y `code`, no el diagnóstico.
-- [ ] `trip` con resolución retrasada 1 s → 14/14 verde: el caso 6 solo exige
-      <10 s, no la propiedad comentada de liberar el hueco del pool de inmediato.
+**Los cinco MENORES: cerrados.** Se atacaron todos antes de publicar 2.0.0, para
+no arrastrar deuda a una 2.0.1. Cada uno se verificó **volviendo a aplicar el
+mutante que Codex dejó vivo**: los cinco mueren ahora.
+
+- [x] ~~`.normalize("NFC")` en `decodeCapture`.~~ Caso nuevo con una cadena en
+      **NFD** real: se comprueba que async y sync entregan los mismos bytes y
+      que el texto llega **literal**. Normalizar aquí cambiaría el sujeto de una
+      firma.
+- [x] ~~`runPool` ignoraba la concurrencia pedida.~~ Se ejercita con **dos
+      valores distintos del default** (1 y 2) y se afirma el máximo simultáneo
+      exacto. Probar solo el default no probaba nada del parámetro.
+- [x] ~~Orden por bytes indistinguible de UTF-16.~~ `Z`, `a` y `ñ` ordenan
+      **igual** por ambos criterios. Se añadieron `！` (U+FF01) y `😀`
+      (U+1F600), que ordenan **al revés** — en UTF-16 el emoji usa surrogates
+      menores que FF01. El caso afirma además que el conjunto discrimina.
+- [x] ~~Detalle de error del `ls-tree` async.~~ Ahora se compara también el
+      diagnóstico, no solo `ok` y `code`. Es lo único que le dice a quien opera
+      *por qué* no se pudo leer la referencia.
+- [x] ~~`trip` con resolución retrasada.~~ El umbral se mide **contra la
+      gracia** (debe resolver en menos de la mitad), no contra un 10 s flojo que
+      dejaba pasar un retraso de 1 s.
+
+## Ronda 18 — la tercera instancia, cerrada (2026-08-15)
+
+Sobre `a602f5c`, que nadie había revisado. Tres lentes despachadas (rastreador,
+mutador, refutador) más síntesis en sesión principal; ninguna se cayó. Codex
+sin cuota hasta el 12–13 de septiembre: la segunda voz fue local, declarado.
+Registro completo en `.codex-out/ronda-18/hallazgos.md`.
+
+- [x] ~~SERIO — «la adjudicación corre SIEMPRE» era falso: la tercera instancia
+      del patrón.~~ Al izarla fuera de `if (phase.human_gate)`, la llamada quedó
+      dentro de `if (evidence.exists)` y del `else` de `if (!read.ok)`
+      (harness.js). En una fase sin `evidence_required`, borrar o corromper la
+      evidencia dejaba el gate **en verde sin una sola comprobación de
+      autorización**. La adjudicación corre ahora antes de mirar la evidencia.
+- [x] ~~SERIO — el detector de puerta quitada tenía su propia puerta.~~
+      `fasesBase.presente && fasesBase.ok` tragaba el YAML roto de BASE: puerta
+      quitada + contrato de fases ilegible en BASE devolvía `ok:true`
+      (reproducido). Ahora bloquea con `authz-base-contract-invalid`, como la
+      mitad quality-contract ya hacía.
+- [x] ~~SERIO — la regresión central de la 17 sobrevivía la suite COMPLETA
+      (M1, tres corridas).~~ El cableado del harness no lo ejercitaba ningún
+      test. Caso nuevo: fase sin puerta y sin evidencia, puerta quitada en
+      BASE → `blocked`. M1', M3', M6', H2' y H5' mueren, cada uno por su caso.
+- [x] ~~MEDIO — borrar la fase con puerta del contrato HEAD.~~ Nadie re-gatea
+      una fase borrada; solo se miraba la fase actual. `adjudicarAutorizacion`
+      recibe ahora `fasesHead` y enumera todas las fases con puerta de BASE.
+- [x] ~~MEDIO — debilitar el override de OTRA fase pasaba limpio (M3).~~
+      `compararPolitica` solo comparaba `[null, faseActual]`; ahora compara
+      todos los ids con override en cualquiera de los dos contratos.
+- [x] ~~MENOR — la severidad de `base-unresolvable` (bloqueo con puerta, aviso
+      sin puerta) no tenía test (M6).~~ Caso 13.
+- [ ] **MENOR abierto — `exige` divergente para F2/F3 con puerta** según exista
+      la ref remota (early-return pasa `enHead.exige`, el final fuerza
+      `"ninguna"`). Ningún consumidor se rompe hoy. Junto con el doble
+      vocabulario `"ninguna"`/`"none"`.
+- [ ] **MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
+      upgrade) se salta en silencio con contratos ilegibles. Comandos de
+      reporte, no de enforcement.
+
+Deuda declarada nueva, dicha de frente: la primera ejecución real del workflow
+en Actions (tras empujar `0382d05`) dejó `validate` **en verde en un runner
+Linux** y `frontera de especificacion` roja con **exactamente las 3 violaciones
+diseñadas** — la incógnita de `fetch-depth: 0` y `refs/remotes/origin/<base>`
+quedó contestada: el ref base resuelve en el runner. Y para POSIX hubo que
+instalar PowerShell nativo en el home de WSL (tarball 7.6.3, sin sudo): libuv
+no resuelve `pwsh.exe` por interop, y `run-regression` necesita un pwsh de
+verdad. `checkPowerShell` ahora también prueba `pwsh.exe` en Linux.
+
+## Para retomar en la próxima sesión — estado a 2026-08-15
+
+Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `0382d05` más el commit
+de la ronda 18** (`25d1fa6`, por empujar al cierre de esta sesión). [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
+abierto contra `develop` y `MERGEABLE`; el #40 (`develop` → `main`) sigue
+esperando a que #41 entre.
+
+Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
+`npm run validate` en verde, 204 archivos de documentación con sus anclas.
+
+### Lo primero, en este orden
+
+- [x] ~~**Empujar los 9 commits locales.**~~ Hecho; primera corrida real de
+      Actions: `validate` verde en Linux, `frontera de especificacion` roja con
+      exactamente las 3 violaciones diseñadas (el escenario bootstrap que
+      justifica el `--admin`).
+- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Ejecutada y cerrada: tres SERIO y dos
+      MEDIO arreglados, dos MENOR declarados arriba. La pregunta «¿se puede
+      publicar 2.0.0 con esto?» tiene respuesta: **sí, con los dos MENOR
+      declarados** — nada de lo encontrado era explotable sin controlar ya
+      BASE.
+- [ ] **Mergear #41 con `--admin`.** Es la única vez: el PR introduce a la vez
+      el job `spec-boundary` y la allowlist que lo desbloquea, y una excepción
+      solo cuenta cuando ya está en la base. Del siguiente en adelante el
+      control se sostiene solo. Está escrito en el cuerpo del PR y en la
+      cabecera de `.github/agent-state/spec-boundary-allowlist.yaml`.
+- [ ] **Mergear #40 a `main`**, también con `--admin` mientras haya un solo
+      maintainer.
+- [ ] **Decidir npm**: `gh workflow run publish.yml`, **nunca `npm publish` a
+      mano**.
+
+### Lo que quedó sin verificar de la ronda 17
+
+- [ ] Los hallazgos **razonados** (no ejecutados) sobre códigos `authz-*` sin
+      caso propio. `tests/authz-git.test.mjs` cubre la mayoría de forma
+      estructural, y la ronda 18 añadió casos por código (10–14), pero no hay
+      todavía un caso por cada código del modelo.
+- [ ] `authz-base-unreachable` (clon superficial) no tiene caso: montar un DAG
+      desconectado cuesta y se dejó fuera.
+- [x] ~~Ninguna ejecución real en **GitHub Actions**.~~ Contestado el
+      2026-08-15 al empujar `0382d05`: `validate` verde en un runner Linux, y
+      `refs/remotes/origin/<base>` **sí** existe con `fetch-depth: 0` — el paso
+      nuevo del workflow no pone rojo ningún caso legítimo. El job
+      `frontera de especificacion` bloquea con exactamente las 3 violaciones
+      diseñadas (escenario bootstrap). Falta por ver: PRs desde fork y la ref
+      `refs/pull/N/merge` en ese evento.
+
+### Deuda declarada que sigue abierta
+
+- [ ] **La otra mitad del guard de frontera no se auditó.** El script declara
+      que es «la mitad barata por RUTA» y que la autorización real la aporta la
+      atestación. Las rondas 16 y 17 auditaron la primera mitad; la segunda
+      —recomputación del sujeto, verificación GPG, enlace con la evidencia— no
+      la ha mirado nadie con la misma lupa.
+- [ ] **El allowlist del guard no comprueba contenido, solo rutas.** Una
+      excepción autoriza cambios ilimitados a esa ruta hasta que caduque. La
+      granularidad por contenido es trabajo del ADR 0008 aplicado al allowlist,
+      y no se hizo.
+- [ ] **`maxBuffer` de 64 MiB nunca se puso a prueba** con un diff real que lo
+      desborde.
+
+### Adopción de gstack — decidido, sin empezar
+
+Análisis completo en la sesión del 2026-08-15. **No entra en
+`external-tools.yaml`**: su modo `--team` escribe en el repo un hook
+`PreToolUse` con matcher genérico `Skill` que devolvería `deny` para *cualquier*
+skill si gstack no está instalado en la máquina de quien clona — interceptaría
+las nuestras. Es una superficie de gobierno, no una herramienta puntual.
+
+Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
+
+- [ ] **Enchufar el ledger de lecciones.** `src/skill-lessons.js` ya existe
+      entero —fingerprint, `occurrences`, umbral de promoción, gate humano— y
+      **nadie lo lee**: es un store de solo escritura. El mismo defecto apareció
+      tres veces mientras el mecanismo para evitarlo estaba construido y
+      desenchufado. Coste: cero código — añadir a las personas de F9/F10 un
+      bloque que ejecute `sdlc skill-lesson --target . --json` y trate toda
+      lección con `occurrences >= 2` como lente obligatoria.
+      **Ojo**: `lessons.yaml` está en `DEFAULT_LOCKED`, así que cablear el
+      `--record` a mitad de slice exige decidir el allowlist antes.
+- [ ] **Un checklist de dominio** (`testing.md` de `review/specialists`) como
+      sección de la persona de F9, con salida en `F9.yaml` validado. **Uno solo**
+      hasta que un slice real justifique otro.
+- [ ] **Escritura atómica del checkpoint.** `writeText` es `fs.writeFileSync`
+      directo sobre un vault de Obsidian que puede estar sincronizando; un save
+      cortado deja un checkpoint truncado que `analyzeCheckpointNarrative`
+      leería como **completo**. Añadir `writeTextAtomic` (tmp + rename en el
+      mismo directorio) y usarla **solo** en `commandSave`. Que falle ruidoso:
+      un `EPERM` silencioso perdería el checkpoint sin avisar.
+- [ ] **Validador Tier 1**: que los comandos `sdlc <sub>` citados en las
+      SKILL.md existan en el `switch` de `src/cli.js`. Solo subcomandos al
+      principio — validar flags contra un parser genérico daría una garantía que
+      no existe.
+
 
 ## Espera decisión del mantenedor
+
+- [ ] **Firma del propio repo del framework.** El job `spec-boundary` de
+      `.github/workflows/ci.yml` ya corre el guard contra este repo, y hoy
+      reporta cuatro violaciones legítimas (su propio `ci.yml`, el
+      `regression-install.yml`, la fuente del guard y su allowlist). No hay
+      forma de conceder la excepción porque **este repo no tiene
+      `.sdlc/config.json` con `governance.maintainers` ni firma de commits
+      configurada**: sin un `signer` real, ninguna entrada del allowlist puede
+      ser válida.
+      Hace falta, y solo lo puede dar el mantenedor: (a) la cadena exacta que
+      `git log --format=%GS` reporta para su clave, (b) firma de commits
+      activa en el repo. Con eso se escribe `.sdlc/config.json` y las
+      excepciones de las rutas que el framework edita de forma rutinaria.
+      **Hasta entonces, ese job deja el repo sin poder mergear.**
+
 
 - [ ] **Publicar 2.0.0.** Rama empujada y **PR abierto contra `develop`**. Falta
       la revisión humana, el merge, y decidir si se publica a npm. El gate local
       (`scripts/validate-local-gate.ps1`) no se ha ejecutado todavía en modo
       `-Strict`.
-      Tras seis rondas adversariales (5 a 10) no queda ningún BLOQUEANTE
-      abierto. Sí quedan un SERIO declarado (pgid) y cinco MENORES, todos
-      anotados abajo y ninguno bloqueante.
+      Tras seis rondas adversariales (5 a 10) no quedaba ningún BLOQUEANTE
+      **de código**. Pero desde el 2026-08-14 **sí hay un bloqueante de
+      alcance**: el ADR 0008 entra en esta versión, y no está implementado. No
+      se publica 2.0.0 hasta que D1–D7 estén dentro.
 - [ ] **Montar un job de CI que corra la suite en Linux.** Es el hallazgo de
       mayor palanca de toda la sesión: los dos bloqueantes de la ronda 6 **solo**
       aparecen ejercitando POSIX, y uno de ellos habría roto CI en Linux en el
       primer push. Hoy nada en el repo lo garantiza: en Windows esos casos se
       saltan con `SKIP` y el verde es engañoso.
-- [ ] **Número de versión del modelo de riesgos** (ADR 0008). No cabe en una
-      minor: «superficie sin clasificar ⇒ firma obligatoria» bloquea a todo
-      consumidor existente en su siguiente gate humano. Probablemente 3.0.0; se
-      fija al implementarlo.
+- [x] ~~**Número de versión del modelo de riesgos** (ADR 0008).~~ **Decidido el
+      2026-08-14: entra en 2.0.0.** Se descarta la 3.0.0 que se venía asumiendo.
+      Razón: 2.0.0 sigue sin publicar, y diferirlo obligaría al consumidor a dos
+      majors seguidas sobre el **mismo** mecanismo (sujeto de atestación,
+      `signoff`, `phase-gate`), con dos migraciones que se pisan. Consecuencia
+      que hay que mirar de frente: **la publicación de 2.0.0 pasa a estar
+      bloqueada** por la sección de abajo, y el CHANGELOG deja de tener cuatro
+      rupturas. Las rupturas nuevas se declaran **al implementarlas**, no ahora
+      — declarar una ruptura que el código no ejerce es el defecto que esta
+      misma rama ya cometió dos veces.
 - [ ] **Periodo de gracia del fail-closed retroactivo.** El contraste
       adversarial recomendó bloquear desde el primer gate. El coste de
       migración de los consumidores ya instalados es decisión de producto.
@@ -138,11 +351,25 @@ ejecutados y confirmados por Codex sobre la copia POSIX — ninguno bloquea:
       insatisfacible con un solo maintainer. ¿Addendum o revisión propia del
       ADR?
 
-## Implementar el ADR 0008 — modelo de riesgos de autorización
+## ~~Implementar el ADR 0008~~ — HECHO (2026-08-15)
 
-Diseño cerrado y escrito en `docs/adr/0008-modelo-de-riesgos-de-autorizacion.md`.
-**Nada de esto está implementado en 2.0.0.** Sus siete decisiones no se pueden
-partir sin dejar hueco explotable, así que van juntas.
+D1–D7 implementados. Los siete huecos de diseño se cerraron **antes** de
+escribir código, y un ataque adversarial al diseño encontró cuatro bloqueantes
+más —entre ellos que D3 no producía la propiedad que prometía— que se corrigieron
+en el ADR antes de cablear nada.
+
+Qué quedó: `src/authz.js` (puro), `src/authz-git.js` (resolución de BASE y
+adjudicación), sujeto v2 con `contract_sha256` y `phase_contract_sha256`,
+detección de deriva de política, la matriz de G7 en `doctor`/`upgrade`, el paso
+de autorización en el workflow gestionado, `tests/authz.test.mjs` con 9 de 9
+mutantes muertos, y las cinco rupturas declaradas.
+
+Antes de escribir código hay que cerrar los siete huecos de diseño que el propio
+ADR lista en «Estado de la implementación» (`required()` canónico, match
+BASE/HEAD, definición de BASE/HEAD y códigos de salida, precedencia con
+`phase.human_gate`, alcance de `humanGate.policy`, migración de evidencia v1 y
+matriz de enforcement por comando). Implementar con esos huecos abiertos es
+reabrir el diseño a mitad de camino.
 
 - [ ] `required(surface, contract)` como función pura y canónica, con tipos
       válidos, valores desconocidos, duplicados y superficie vacía.

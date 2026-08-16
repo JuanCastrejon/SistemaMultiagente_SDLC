@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "frameworkVersion": "2.0.0",
+  "project": {
+    "name": "SistemaMultiagente_SDLC",
+    "slug": "sistemamultiagente-sdlc"
+  },
+  "mode": "greenfield",
+  "surfaces": [
+    {
+      "id": "engine",
+      "path": "src",
+      "owner": "mantenedor",
+      "tier": "core",
+      "moneyPath": false
+    }
+  ],
+  "gitFlow": {
+    "integrationBranch": "develop",
+    "stableBranch": "main"
+  },
+  "openspec": {
+    "profile": "minimal"
+  },
+  "governance": {
+    "threatModel": "single-maintainer",
+    "maintainers": [
+      {
+        "name": "Juan David Castrejon B.",
+        "signer": "juandavidcastrejonbermudes@gmail.com"
+      }
+    ]
+  }
+}

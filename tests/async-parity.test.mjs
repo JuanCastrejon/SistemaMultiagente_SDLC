@@ -14,7 +14,7 @@
 //     asi que la misma entrada podia fallar en un camino y pasar en el otro.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +28,7 @@ import {
   captureQueueDepth,
   captureReservedBytes,
   decodeCapture,
+  leerIdentidadDeProceso,
   spawnCapture
 } from "../src/file-utils.js";
 import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "../src/evidence-writer.js";
@@ -81,6 +82,47 @@ const vigilanteGlobal = setTimeout(() => {
   assert.ok(!async_.stdout.includes("�"), "ningun caracter de reemplazo");
 }
 
+{
+  // MENOR de la ronda 8: añadir `.normalize("NFC")` a `decodeCapture` dejaba la
+  // suite entera verde. Nada probaba que el texto llegara LITERAL. Importa
+  // porque un principal de firma o un mensaje de commit en forma DESCOMPUESTA
+  // (NFD) se normalizaria en la via async y no en la sincrona -- y entonces la
+  // auditoria y el gate juzgarian distinto al mismo firmante.
+  //
+  // VARIOS vectores independientes, no solo la eñe. La ronda 11 mostro que con
+  // uno solo, una normalizacion PARCIAL -- por ejemplo sustituir unicamente
+  // "e" + U+0301 -- pasaba desapercibida, porque no tocaba el vector del caso.
+  //
+  // Se escriben con escapes \u y no con el caracter ya compuesto: un literal
+  // NFD en el fuente es fragil, porque cualquier editor o herramienta que
+  // normalice el archivo lo convertiria a NFC y el caso dejaria de probar lo
+  // que dice probar.
+  const vectoresNfd = [
+    "Nũñez".normalize("NFD"), // n + tilde combinante
+    "José".normalize("NFD"), // e + acento agudo
+    "Ärger".normalize("NFD"), // A + dieresis
+    "çedilla".normalize("NFD") // c + cedilla
+  ];
+  for (const v of vectoresNfd) {
+    assert.notEqual(v, v.normalize("NFC"), `el vector ${JSON.stringify(v)} tiene que estar de verdad en NFD`);
+  }
+  const nfd = vectoresNfd.join(" ");
+
+  const script = path.join(tempRoot, "nfd.mjs");
+  fs.writeFileSync(script, `process.stdout.write(${JSON.stringify(nfd)});`, "utf8");
+
+  const sync = spawnSync(process.execPath, [script], { encoding: "utf8" });
+  const async_ = await spawnCapture(process.execPath, [script]);
+
+  assert.equal(async_.stdout, sync.stdout, "async y sync tienen que entregar los MISMOS bytes");
+  assert.equal(async_.stdout, nfd, "y tienen que entregarlo LITERAL: normalizar aqui cambiaria el sujeto de una firma");
+  // Y cada vector POR SEPARADO: una normalizacion parcial sobrevive a una
+  // comparacion global si el resto de la cadena coincide.
+  for (const v of vectoresNfd) {
+    assert.ok(async_.stdout.includes(v), `${JSON.stringify(v)} tiene que llegar sin normalizar`);
+  }
+}
+
 console.log("paridad utf-8 entre chunks: PASS");
 
 // --- 2. limite de tamaño: mismo criterio en las dos vias --------------------
@@ -131,6 +173,25 @@ console.log("paridad de limite de salida: PASS");
   assert.equal(syncMal.ok, false);
   assert.equal(asyncMal.ok, false);
   assert.equal(asyncMal.code, syncMal.code);
+
+  // El DIAGNOSTICO tambien tiene que coincidir, no solo el codigo. MENOR de la
+  // ronda 8: sustituir el detalle de la via async por un texto cualquiera
+  // dejaba la suite verde, porque este caso solo miraba `ok` y `code`. Y el
+  // detalle es lo unico que le dice a quien opera POR QUE no se pudo leer la
+  // referencia: si las dos vias explican distinto el mismo fallo, `doctor` y
+  // el phase-gate dan diagnosticos que no se pueden contrastar.
+  // IGUALDAD EXACTA, no "que mencione el ref". La ronda 11 mostro que devolver
+  // simplemente `detail: ref` satisfacia un `includes(...)` y perdia el
+  // diagnostico real de git -- que es justo lo que permite operar. Si las dos
+  // vias explican distinto el mismo fallo, sus veredictos no se pueden
+  // contrastar.
+  assert.ok(asyncMal.detail, "la via async tiene que traer un detalle, no solo un codigo");
+  assert.equal(
+    asyncMal.detail,
+    syncMal.detail,
+    `el detalle tiene que ser EL MISMO por las dos vias.\n  sync : ${JSON.stringify(syncMal.detail)}\n  async: ${JSON.stringify(asyncMal.detail)}`
+  );
+  assert.notEqual(asyncMal.detail, "no-existe", "y no puede ser una repeticion del ref: eso no explica nada");
 }
 
 console.log("paridad de hash de arbol: PASS");
@@ -171,8 +232,38 @@ console.log("paridad de hash de arbol: PASS");
     "los resultados conservan el orden de entrada"
   );
 
-  assert.ok(maximoSimultaneo <= AUDIT_CONCURRENCY, `nunca mas de ${AUDIT_CONCURRENCY} a la vez: hubo ${maximoSimultaneo}`);
-  assert.ok(maximoSimultaneo > 1, "y de verdad concurre: con 1 no habria paralelismo");
+  // EXACTO, no un rango. La ronda 11 mostro que `1 < maximo <= 4` dejaba pasar
+  // `Math.min(2, concurrency, …)`: la auditoria se degradaba de cuatro a dos
+  // atestaciones en paralelo SIN ninguna señal. Con 12 items y trabajo
+  // solapado, el default tiene que alcanzar su tope declarado.
+  assert.equal(
+    maximoSimultaneo,
+    AUDIT_CONCURRENCY,
+    `por defecto tienen que correr EXACTAMENTE ${AUDIT_CONCURRENCY} a la vez, y hubo ${maximoSimultaneo}`
+  );
+
+  // MENOR de la ronda 8: sustituir `Math.min(concurrency, …)` por
+  // `Math.min(4, …)` dejaba la suite verde. `runPool` es exportada y recibe la
+  // concurrencia como PARAMETRO, asi que un consumidor que pida otro grado de
+  // paralelismo se lo estaba comiendo en silencio. Se comprueban dos valores
+  // distintos del default, porque probar solo el default no prueba nada del
+  // parametro.
+  for (const pedida of [1, 2]) {
+    let enVueloN = 0;
+    let maxN = 0;
+    await runPool(
+      Array.from({ length: 8 }, (_, i) => i),
+      async () => {
+        enVueloN += 1;
+        maxN = Math.max(maxN, enVueloN);
+        await new Promise((r) => setTimeout(r, 8));
+        enVueloN -= 1;
+        return { ok: true };
+      },
+      pedida
+    );
+    assert.equal(maxN, pedida, `con concurrencia ${pedida} tienen que correr EXACTAMENTE ${pedida} a la vez, y hubo ${maxN}`);
+  }
 }
 
 console.log("pool: excepcion aislada, tope y orden: PASS");
@@ -296,13 +387,30 @@ console.log("corte exacto, sin margen: PASS");
     "utf8"
   );
 
+  // La gracia se elige LARGA (2 s) a proposito. El umbral de abajo se mide
+  // contra ella, no contra un numero absoluto: la propiedad es "resuelve SIN
+  // esperar al hijo", y con un umbral flojo de 10 s la ronda 8 metio una
+  // resolucion retrasada 1 s y la suite siguio verde. Ahora tiene que resolver
+  // en una fraccion de la gracia, que es lo que significa "de inmediato".
+  const gracia = 2000;
   const t0 = Date.now();
-  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: 200 });
+  const resultado = await spawnCapture(process.execPath, [script], { maxBuffer: 64 * 1024, killGraceMs: gracia });
   const transcurrido = Date.now() - t0;
 
   assert.equal(resultado.ok, false);
   assert.equal(resultado.overflow, true);
-  assert.ok(transcurrido < 10_000, `tiene que resolver sin esperar al hijo: tardo ${transcurrido} ms`);
+  // DOS cotas, y la absoluta es la que muerde. La ronda 11 mostro que una
+  // relativa sola (`< gracia / 2`) dejaba pasar un retraso del 40 % de la
+  // gracia -- 800 ms de bloqueo del pool con la gracia por defecto. "De
+  // inmediato" no es "menos de la mitad de lo que tarde en matarlo".
+  assert.ok(
+    transcurrido < 400,
+    `tiene que resolver de INMEDIATO, sin esperar al hijo ni a la escalada: tardo ${transcurrido} ms`
+  );
+  assert.ok(
+    transcurrido < gracia / 2,
+    `y muy por debajo de la gracia (${gracia} ms), no proporcional a ella: tardo ${transcurrido} ms`
+  );
 }
 
 // En Windows este caso NO prueba lo que su nombre dice: alli SIGTERM no es una
@@ -344,7 +452,204 @@ console.log(
 
   // "Z" y "a" ordenan al reves por bytes que por locale ingles, y la eñe
   // desempata a la vez el caso no-ASCII.
-  const slices = ["a-slice", "Z-slice", "ñ-slice"];
+  //
+  // Y dos mas que la ronda 8 señalo como imprescindibles: con solo `Z`, `a` y
+  // `ñ`, cambiar `Buffer.compare` por comparacion normal de strings (UTF-16)
+  // dejaba la suite verde, porque esos tres ordenan IGUAL por ambos criterios.
+  // `！` (U+FF01, BMP alto) y `😀` (U+1F600, suplementario) ordenan AL REVES:
+  // en UTF-16 el emoji usa surrogates (D83D…) que son menores que FF01, y en
+  // bytes UTF-8 no. Verificado antes de escribirlo.
+  //
+  // Y varias familias mas, cada una añadida por una ronda que encontro que la
+  // anterior no la cubria. La lista de abajo (`FAMILIAS`) es la fuente de
+  // verdad; estos son los PARES del conjunto que la hacen posible:
+  //
+  //   `Z-slice` / `a-slice`      mayusculas, y locale (en ingles `a` < `Z`)
+  //   `！-slice` / `😀-slice`     UTF-16 contra bytes: el emoji usa surrogates
+  //   `prefijo-comun-a` / `-b`   se separan tarde (byte 15)
+  //   `a-a` / `a-a-a`            uno es PREFIJO del otro: cubre la longitud
+  //   `a-a` / `aa`               colapsan si se BORRAN los guiones
+  //   NFC / NFD de la eñe        colapsan si se NORMALIZA
+  //   `a-espacio` / ` a-espacio` colapsan con `trim()` o quitando espacios
+  //   `s-10` / `s-2`             colacion NUMERICA: por bytes `s-10` va antes
+  //   LARGO_A / LARGO_B          difieren SOLO en su ultimo byte, y son los mas
+  //                              largos del conjunto
+  //
+  // Ese ultimo par es el que hace demostrable la familia de los prefijos. La
+  // ronda 13 dejo el bucle en N=1..14 porque a partir de 15 el conjunto no
+  // distinguia nada, y la ronda 14 entro justo por ahi: un comparador de 15
+  // bytes ordenaba bien las doce entradas de entonces. Con un par que solo se
+  // separa en su ultimo byte, TODO N menor que la longitud maxima colapsa ese
+  // par; y para N mayor o igual, un comparador de prefijo ES la comparacion
+  // correcta sobre este conjunto, asi que no hay nada que afirmar. El tope sale
+  // de los datos (`LIM`), no de un numero escrito a mano.
+  //
+  // Todos los colapsos importan por lo mismo: `sort` es ESTABLE, asi que un
+  // comparador que empata dos entradas deja que `readdirSync` dicte su orden
+  // relativo, y el informe deja de ser determinista — que es justo lo que el
+  // orden contractual existe para impedir. El orden de entrada esta
+  // desordenado a proposito: con la entrada ya ordenada, un comparador que
+  // colapsa un par pasaria por estabilidad.
+  const ENYE_NFC = "\u00F1-slice";
+  const ENYE_NFD = "n\u0303-slice";
+  const LARGO_A = "zz-par-mas-largo-que-solo-difiere-en-su-ultimo-byte-a";
+  const LARGO_B = "zz-par-mas-largo-que-solo-difiere-en-su-ultimo-byte-b";
+
+  // ¿Distingue ESTE sistema de archivos las dos formas de la eñe? HFS+ y APFS
+  // en modo normalizador resuelven ambas al MISMO directorio: crear las dos
+  // daria una sola entrada y el caso fallaria por PLATAFORMA, no por defecto
+  // del comparador. Un test que se pone rojo donde el codigo es correcto se
+  // acaba borrando, asi que se sondea y se degrada solo lo que depende del par.
+  //
+  // La sonda vive FUERA del repo temporal: dentro contaminaria el `git add .`
+  // y el propio conteo de `auditAttestations`.
+  const sonda = fs.mkdtempSync(path.join(os.tmpdir(), "sdlc-sonda-norm-"));
+  let fsDistingueFormas = false;
+  try {
+    // Si el segundo `mkdirSync` TIRA en vez de colapsar en silencio, el
+    // sistema tampoco las distingue: el `catch` lo trata igual.
+    fs.mkdirSync(path.join(sonda, ENYE_NFC));
+    fs.mkdirSync(path.join(sonda, ENYE_NFD));
+    // Se comprueba por LECTURA, no por el numero de creaciones: hay sistemas
+    // que aceptan crear las dos y luego devuelven una sola entrada.
+    fsDistingueFormas = fs.readdirSync(sonda).length === 2;
+  } catch {
+    fsDistingueFormas = false;
+  } finally {
+    fs.rmSync(sonda, { recursive: true, force: true });
+  }
+  if (!fsDistingueFormas) {
+    console.log("orden de hallazgos: SKIP parcial (el sistema de archivos normaliza los nombres; sin par NFC/NFD)");
+  }
+
+  const slices = [
+    "a-slice",
+    "Z-slice",
+    ENYE_NFC,
+    "！-slice",
+    "\u{1F600}-slice",
+    "aa",
+    "a-z",
+    "a-a-a",
+    "prefijo-comun-b",
+    "prefijo-comun-a",
+    "a-a",
+    ENYE_NFD,
+    "a-espacio",
+    " a-espacio",
+    "s-2",
+    "s-10",
+    LARGO_B,
+    LARGO_A
+  ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD);
+  {
+    const aBytes = (texto, codificacion = "utf8") => Buffer.from(texto, codificacion);
+    const porBytesTmp = [...slices].sort((a, b) => Buffer.compare(aBytes(a), aBytes(b)));
+
+    // El conjunto afirma arriba que la entrada esta desordenada a proposito
+    // «para que un comparador que colapsa un par no pase por estabilidad». Eso
+    // no era cierto para DOS de los siete pares: `a-a`/`a-a-a` y `s-10`/`s-2`
+    // aparecian en la entrada en el mismo orden relativo que por bytes, asi que
+    // un comparador que los empatara habria pasado esta tabla. Lo mataba el
+    // caso de `readdirSync` invertido, no esta tabla — la cobertura estaba,
+    // pero no donde el comentario decia.
+    //
+    // Se afirma la propiedad en vez de confiar en ella: para cada par, el MAYOR
+    // por bytes tiene que aparecer ANTES en la entrada.
+    const PARES_QUE_DISCRIMINAN = [
+      ["a-a", "a-a-a"],
+      ["a-a", "aa"],
+      ["prefijo-comun-a", "prefijo-comun-b"],
+      ["a-espacio", " a-espacio"],
+      ["s-10", "s-2"],
+      [LARGO_A, LARGO_B],
+      ...(fsDistingueFormas ? [[ENYE_NFC, ENYE_NFD]] : [])
+    ];
+    for (const [x, y] of PARES_QUE_DISCRIMINAN) {
+      const menor = Buffer.compare(aBytes(x), aBytes(y)) < 0 ? x : y;
+      const mayor = menor === x ? y : x;
+      assert.ok(
+        slices.indexOf(mayor) < slices.indexOf(menor),
+        `el par ${JSON.stringify([x, y])} tiene que entrar en orden INVERSO al de bytes; si no, un comparador que lo empate pasa por estabilidad de sort`
+      );
+    }
+    const noReproduce = (comparador, queEs) =>
+      assert.notDeepEqual(
+        porBytesTmp,
+        [...slices].sort(comparador),
+        `el conjunto tiene que distinguir el orden por bytes de ${queEs}`
+      );
+
+    const FAMILIAS = [
+      ["el orden por UTF-16", (a, b) => (a < b ? -1 : a > b ? 1 : 0)],
+      ["`localeCompare`", (a, b) => a.localeCompare(b)],
+      ["una colacion NUMERICA", (a, b) => a.localeCompare(b, undefined, { numeric: true })],
+      ["una comparacion por LONGITUD", (a, b) => a.length - b.length],
+      ["una insensible a mayusculas", (a, b) => Buffer.compare(aBytes(a.toLowerCase()), aBytes(b.toLowerCase()))],
+      ["una que pasa a MAYUSCULAS", (a, b) => Buffer.compare(aBytes(a.toUpperCase()), aBytes(b.toUpperCase()))],
+      [
+        "una que BORRA los guiones",
+        (a, b) => Buffer.compare(aBytes(a.replaceAll("-", "")), aBytes(b.replaceAll("-", "")))
+      ],
+      ["una que hace `trim()`", (a, b) => Buffer.compare(aBytes(a.trim()), aBytes(b.trim()))],
+      [
+        "una que quita TODOS los espacios",
+        (a, b) => Buffer.compare(aBytes(a.replace(/\s/g, "")), aBytes(b.replace(/\s/g, "")))
+      ],
+      [
+        "una que quita los ACENTOS",
+        (a, b) =>
+          Buffer.compare(
+            aBytes(a.normalize("NFD").replace(/\p{M}/gu, "")),
+            aBytes(b.normalize("NFD").replace(/\p{M}/gu, ""))
+          )
+      ],
+      ["una que normaliza a NFD", (a, b) => Buffer.compare(aBytes(a.normalize("NFD")), aBytes(b.normalize("NFD")))],
+      ["una sobre bytes `latin1`", (a, b) => Buffer.compare(aBytes(a, "latin1"), aBytes(b, "latin1"))],
+      ["una sobre bytes `utf16le`", (a, b) => Buffer.compare(aBytes(a, "utf16le"), aBytes(b, "utf16le"))],
+      ["una que compara solo el SUFIJO", (a, b) => Buffer.compare(aBytes(a).subarray(-3), aBytes(b).subarray(-3))]
+    ];
+    for (const [queEs, comparador] of FAMILIAS) noReproduce(comparador, queEs);
+
+    // Normalizar a NFC solo es observable si el par esta en el conjunto: es la
+    // unica familia que se pierde al degradar. Las demas, incluida NFD, siguen
+    // afirmandose.
+    if (fsDistingueFormas) {
+      const equivalentes = slices.filter((nombre) => nombre.normalize("NFC") === ENYE_NFC);
+      assert.equal(equivalentes.length, 2, "el conjunto necesita el par NFC/NFD; sin el, normalizar es indetectable");
+      assert.notEqual(equivalentes[0], equivalentes[1], "el par tiene que diferir en bytes, no solo en apariencia");
+      noReproduce(
+        (a, b) => Buffer.compare(aBytes(a.normalize("NFC")), aBytes(b.normalize("NFC"))),
+        "una que normaliza a NFC"
+      );
+    }
+
+    // La familia de los PREFIJOS, con el tope sacado de los datos. Primero se
+    // afirma que existe el par que la hace demostrable: dos nombres de la
+    // longitud maxima que solo difieren en su ultimo byte.
+    const LIM = Math.max(...slices.map((nombre) => Buffer.byteLength(nombre, "utf8")));
+    assert.equal(Buffer.byteLength(LARGO_A, "utf8"), LIM, "LARGO_A tiene que ser uno de los nombres mas largos");
+    assert.equal(Buffer.byteLength(LARGO_B, "utf8"), LIM, "LARGO_B tiene que ser uno de los nombres mas largos");
+    assert.deepEqual(
+      aBytes(LARGO_A).subarray(0, LIM - 1),
+      aBytes(LARGO_B).subarray(0, LIM - 1),
+      "el par largo tiene que diferir SOLO en su ultimo byte: es lo que hace afirmable todo N < LIM"
+    );
+    for (let n = 1; n < LIM; n++) {
+      noReproduce(
+        (a, b) => Buffer.compare(aBytes(a).subarray(0, n), aBytes(b).subarray(0, n)),
+        `una comparacion de los primeros ${n} bytes`
+      );
+    }
+    // Y para N >= LIM no se afirma NADA, a proposito y con motivo: sobre este
+    // conjunto, comparar los primeros LIM bytes ES comparar la cadena entera.
+    // No es un hueco; es el limite de lo que un conjunto finito puede probar.
+    assert.deepEqual(
+      [...slices].sort((a, b) => Buffer.compare(aBytes(a).subarray(0, LIM), aBytes(b).subarray(0, LIM))),
+      porBytesTmp,
+      "en N = LIM el comparador de prefijo YA es el correcto sobre este conjunto; si esto fallara, LIM estaria mal"
+    );
+  }
   for (const slice of slices) {
     const dir = path.join(repo, ".github", "agent-state", "evidence", slice);
     fs.mkdirSync(dir, { recursive: true });
@@ -377,7 +682,154 @@ console.log(
   // El orden esperado se escribe LITERAL, no derivado de otra ordenacion: si se
   // compara contra `localeCompare`, el propio test pasa a depender del locale
   // que intenta descartar.
-  assert.deepEqual(orden, ["Z-slice", "a-slice", "ñ-slice"], "orden por bytes UTF-8, escrito a mano");
+  assert.deepEqual(
+    orden,
+    [
+      " a-espacio",
+      "Z-slice",
+      "a-a",
+      "a-a-a",
+      "a-espacio",
+      "a-slice",
+      "a-z",
+      "aa",
+      ENYE_NFD,
+      "prefijo-comun-a",
+      "prefijo-comun-b",
+      "s-10",
+      "s-2",
+      LARGO_A,
+      LARGO_B,
+      ENYE_NFC,
+      "！-slice",
+      "\u{1F600}-slice"
+    ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD),
+    "orden por bytes UTF-8, escrito a mano"
+  );
+
+  // Y explicitamente: NO es el orden de UTF-16. Sin esto, la asercion de arriba
+  // se puede satisfacer con el comparador equivocado el dia que alguien cambie
+  // el conjunto de nombres.
+  assert.notDeepEqual([...slices].sort(), orden, "el orden de UTF-16 es OTRO: por eso el codigo compara bytes");
+
+  // Y el COMPARADOR, aparte y contra una entrada deliberadamente desordenada.
+  // Lo anterior comprueba la SALIDA de `auditAttestations`, que en una maquina
+  // donde `readdirSync` ya devuelva el orden correcto pasaria aunque nadie
+  // ordenara nada -- la ronda 11 lo demostro quitando el comparador y viendo la
+  // suite en verde. Esto prueba el criterio, no la casualidad.
+  const { compareByUtf8Bytes } = await import("../src/harness.js");
+  const desordenado = ["\u{1F600}-z", "a", "！", "Z", "ñ", "A"];
+  const ordenado = [...desordenado].sort(compareByUtf8Bytes);
+  const esperadoPorBytes = [...desordenado].sort((x, y) =>
+    Buffer.compare(Buffer.from(x, "utf8"), Buffer.from(y, "utf8"))
+  );
+  assert.deepEqual(ordenado, esperadoPorBytes, "el comparador tiene que ordenar por bytes UTF-8");
+  assert.notDeepEqual(ordenado, [...desordenado].sort(), "y NO como el orden por defecto de JavaScript (UTF-16)");
+  assert.notDeepEqual(
+    ordenado,
+    [...desordenado].sort((x, y) => x.localeCompare(y)),
+    "ni como `localeCompare`, que depende del ICU de la maquina"
+  );
+
+  // Y que el comparador SE USE de verdad en `auditAttestations`, que es una
+  // pregunta DISTINTA de si el comparador funciona. Historia, porque explica la
+  // forma de lo que sigue:
+  //
+  //   - Ronda 11: quitar el comparador del sitio de llamada dejaba la suite en
+  //     20/20 verde. `readdirSync` ya devolvia ese orden en esa maquina, asi que
+  //     la salida verificaba una CASUALIDAD del sistema de archivos.
+  //   - Ronda 12: el primer intento de arreglo escaneaba el TEXTO de
+  //     `src/harness.js` buscando dos menciones del comparador y ningun
+  //     `.sort()` pelado. Cayo con
+  //     `.sort((a, b) => (console.log(compareByUtf8Bytes(a, b)), 0))`: conserva
+  //     las dos menciones, no tiene `.sort()` sin argumentos, y no ordena nada.
+  //     Un test que lee el codigo en vez de ejecutarlo mide la forma, no el
+  //     efecto.
+  //
+  // Lo que sigue es conductual: se fuerza a `readdirSync` a devolver el orden
+  // INVERSO y se exige la MISMA salida. Si el codigo ordena, da igual lo que
+  // entregue el sistema de archivos; si no ordena —o "ordena" con un
+  // comparador que devuelve 0—, la salida sale invertida y el caso muere.
+  //
+  // Se puede interceptar porque `src/harness.js` hace `import fs from
+  // "node:fs"` y resuelve `fs.readdirSync` EN EL MOMENTO de llamarlo, sobre el
+  // mismo objeto de modulo que este test. La afirmacion de la ronda 11 —"el
+  // orden de readdirSync no se puede forzar desde aqui"— era falsa.
+
+  // Dos fases mas por slice, para que el orden INTERNO tambien discrimine: hay
+  // dos ordenaciones en `auditAttestations` (slices y sus archivos) y una sola
+  // fase por slice solo ejercitaba la primera. Las fases son ASCII a la fuerza
+  // —`schemas/phase-evidence.schema.json` exige `^F(0|…|17)$`, y un nombre
+  // fuera de ese patron no llega a producir hallazgo—, asi que aqui no se
+  // separa bytes de UTF-16: eso ya lo cubren los slices. Lo que este nivel
+  // discrimina es ORDENAR contra NO ORDENAR. Por bytes: `F13` < `F2` < `F3_5`.
+  const fasesExtra = ["F2", "F3_5"];
+  for (const slice of slices) {
+    for (const fase of fasesExtra) {
+      fs.writeFileSync(
+        path.join(repo, ".github", "agent-state", "evidence", slice, `${fase}.yaml`),
+        YAML.stringify({
+          phase: fase,
+          slice,
+          agent_id: "t",
+          started_at: new Date(0).toISOString(),
+          outputs: [],
+          validators_run: [],
+          human_gate_signoff: { required: true, approved_by: "x", attestation_commit: "0".repeat(40) }
+        }),
+        "utf8"
+      );
+    }
+  }
+  git(["add", "."]);
+  git(["commit", "--quiet", "-m", "fases extra"]);
+
+  const esperadoParejas = [];
+  for (const slice of [
+    " a-espacio",
+    "Z-slice",
+    "a-a",
+    "a-a-a",
+    "a-espacio",
+    "a-slice",
+    "a-z",
+    "aa",
+    ENYE_NFD,
+    "prefijo-comun-a",
+    "prefijo-comun-b",
+    "s-10",
+    "s-2",
+    LARGO_A,
+    LARGO_B,
+    ENYE_NFC,
+    "！-slice",
+    "\u{1F600}-slice"
+  ].filter((nombre) => fsDistingueFormas || nombre !== ENYE_NFD)) {
+    for (const fase of ["F13", "F2", "F3_5"]) esperadoParejas.push(`${slice}/${fase}`);
+  }
+
+  const readdirReal = fs.readdirSync;
+  let resultadoInvertido;
+  try {
+    fs.readdirSync = (dir, opciones) => [...readdirReal(dir, opciones)].reverse();
+    // La inversion tiene que MORDER: si el sistema de archivos ya devolviera
+    // el orden inverso, este caso volveria a medir una casualidad — la de
+    // signo contrario.
+    assert.notDeepEqual(
+      fs.readdirSync(path.join(repo, ".github", "agent-state", "evidence")),
+      readdirReal(path.join(repo, ".github", "agent-state", "evidence")),
+      "el parche de readdirSync tiene que cambiar el orden observado"
+    );
+    resultadoInvertido = await auditAttestations(repo);
+  } finally {
+    fs.readdirSync = readdirReal;
+  }
+
+  assert.deepEqual(
+    resultadoInvertido.findings.map((f) => `${f.slice}/${f.phase}`),
+    esperadoParejas,
+    "con `readdirSync` devolviendo el orden INVERSO la salida no cambia: la ordena el codigo, no el sistema de archivos"
+  );
 }
 
 console.log("orden de hallazgos por bytes: PASS");
@@ -935,5 +1387,59 @@ console.log("fallo sincrono de spawn no fuga presupuesto: PASS");
 }
 
 console.log("override validado en import fresco: PASS");
+
+// --- 23. la identidad del grupo se comprueba antes de matarlo --------------
+// SERIO que estuvo abierto dos rondas. El pgid es el pid del lider, y un pid se
+// RECICLA: si el grupo murio limpio y el SO reasigno ese numero, un
+// `kill(-pgid, SIGKILL)` caeria sobre un grupo AJENO. `killTreeForce` compara
+// ahora el `starttime` del lider (campo 22 de /proc/<pid>/stat) con el anotado
+// al arrancarlo: un pid reciclado trae otro `starttime`, asi que se distingue.
+//
+// Aqui se prueba el PRIMITIVO de identidad. Que `killTreeForce` lo use esta
+// cubierto por los casos 13, 17 y 18, que siguen matando a sus nietos.
+if (process.platform !== "win32") {
+  const vivo = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const id = leerIdentidadDeProceso(vivo.pid);
+  assert.ok(id, "se tiene que poder leer la identidad de un proceso vivo");
+  assert.equal(id.pgid, vivo.pid, "con `detached` el lider es su propio grupo, asi que pgid === pid");
+  assert.match(id.starttime, /^\d+$/, "el starttime es el campo que identifica la ENCARNACION, no solo el pid");
+
+  // Un pid que no existe no puede reventar: devuelve null y quien llama decide.
+  assert.equal(leerIdentidadDeProceso(0x7ffffff), null, "un pid inexistente devuelve null, no lanza");
+
+  // DISCRIMINA: dos procesos distintos tienen starttime distinto. Es
+  // exactamente lo que separa "nuestro grupo" de "un pid reciclado".
+  const otro = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const id2 = leerIdentidadDeProceso(otro.pid);
+  assert.ok(id2, "y del segundo tambien");
+  assert.notEqual(id.starttime, id2.starttime, "dos encarnaciones distintas TIENEN que dar starttime distinto");
+
+  // El nombre del ejecutable va entre parentesis en /proc y puede contener
+  // parentesis y espacios. Partir por espacios desde el principio es el error
+  // clasico al leer este archivo; se corta desde el ULTIMO ')'.
+  const raro = path.join(tempRoot, "pro(ce) so.mjs");
+  fs.writeFileSync(raro, "setTimeout(() => {}, 3000);", "utf8");
+  const conParentesis = spawn(process.execPath, [raro], { detached: true });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const idRaro = leerIdentidadDeProceso(conParentesis.pid);
+  assert.ok(idRaro && Number.isFinite(idRaro.pgid), "un nombre con parentesis y espacios no puede romper el parseo");
+
+  for (const p of [vivo, otro, conParentesis]) {
+    try {
+      process.kill(-p.pid, "SIGKILL");
+    } catch {
+      /* limpieza best-effort */
+    }
+  }
+}
+
+console.log(
+  process.platform === "win32"
+    ? "identidad del grupo antes de matarlo: SKIP (Windows no tiene /proc ni grupos POSIX)"
+    : "identidad del grupo antes de matarlo: PASS"
+);
 
 clearTimeout(vigilanteGlobal);

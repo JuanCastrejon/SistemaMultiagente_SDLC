@@ -8,8 +8,14 @@ import YAML from "yaml";
 import { pathExists, readPackageScripts, readTextIfExists } from "./file-utils.js";
 import { detectEvidenceSmells, readEvidenceFile } from "./evidence-validator.js";
 import { adjudicateFromEvidence, loadQualityContract, resolveUnavailableProbes } from "./quality-adjudicate.js";
-import { computeTreeHashAtRef, computeTreeHashAtRefAsync } from "./evidence-writer.js";
-import { gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
+import {
+  computeContractSha256AtRef,
+  computePhaseContractSha256AtRef,
+  computeTreeHashAtRef,
+  computeTreeHashAtRefAsync
+} from "./evidence-writer.js";
+import { buildSubject, gitAsync, verifySignoff, verifySignoffAsync } from "./signoff.js";
+import { adjudicarAutorizacion } from "./authz-git.js";
 import { detectCiEnvironment } from "./ci-detect.js";
 import { describeTools } from "./external-tools.js";
 
@@ -147,11 +153,14 @@ export function detectPackageManager(target) {
 
 function contractCandidates(target) {
   const moduleRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  return [
-    path.join(target, "phase-contract.yaml"),
-    path.join(target, ".github", "agent-state", "phase-contract.yaml"),
-    path.join(moduleRoot, "phase-contract.yaml")
-  ];
+  // `.github/agent-state/phase-contract.yaml` YA NO es candidato (ADR 0008, G4
+  // punto 4). Era una ruta que ninguna lista del guard de frontera protegia
+  // —`DEFAULT_LOCKED` ancla `phase-contract.yaml` a la raiz, y alli solo estan
+  // `quality-baseline.yaml` y `lessons.yaml`—, asi que crear el contrato de
+  // fases ahi permitia poner `human_gate: false` sin que nadie lo viera.
+  // `human_gate` es el AND exterior de todo el modelo de autorizacion: una ruta
+  // alternativa para escribirlo era una puerta trasera al interruptor maestro.
+  return [path.join(target, "phase-contract.yaml"), path.join(moduleRoot, "phase-contract.yaml")];
 }
 
 // Version de contrato que este engine entiende. v2 anade `quality_gates` por
@@ -242,6 +251,32 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
   if (contractVersion < CONTRACT_VERSION_EXPECTED) {
     evidenceWarnings.push(`contract-version-outdated:v${contractVersion}`);
   }
+  // La adjudicacion del ADR 0008 corre SIEMPRE: sin puerta, sin evidencia, con
+  // evidencia invalida. Al izarla fuera de `if (phase.human_gate)` (ronda 17)
+  // se quedo dentro de `if (evidence.exists)` y del `else` de `if (!read.ok)`
+  // — la ronda 18 lo encontro: en una fase sin `evidence_required`, un archivo
+  // de evidencia ausente o corrupto dejaba el gate en verde sin UNA sola
+  // comprobacion de autorizacion. Tercera instancia del mismo defecto: la
+  // adjudicacion no puede vivir detras de ninguna condicion que un downgrade
+  // pueda apagar, y borrar la evidencia es gratis.
+  const contratoCalidad = loadQualityContract(target);
+  const autorizacion = adjudicarAutorizacion({
+    target,
+    phaseId: phase.id,
+    contratoHead: contratoCalidad.ok ? contratoCalidad.contract : null,
+    faseHead: phase,
+    fasesHead: contract
+  });
+  evidence.authorization = {
+    exige: autorizacion.exige,
+    base: autorizacion.base,
+    avisos: autorizacion.avisos.map((a) => a.code)
+  };
+  for (const bloqueo of autorizacion.bloqueos) {
+    evidenceBlockers.push(bloqueo.code);
+    evidence.authorizationDetail = [...(evidence.authorizationDetail ?? []), bloqueo];
+  }
+
   if (evidence.exists) {
     const read = readEvidenceFile(evidenceAbsolute);
     evidence.valid = read.ok;
@@ -304,11 +339,26 @@ export function evaluatePhaseReadiness(target, phaseId, slice) {
         }
       }
       // El gate humano deja de ser un campo de texto que el propio agente puede
-      // escribir: exige la referencia a un review verificable.
+      // escribir: exige la referencia a un review verificable. La adjudicacion
+      // ya corrio fuera de este bloque: lo unico que hay aqui necesita leer la
+      // evidencia, y por eso si vive detras de `read.ok`.
       if (phase.human_gate) {
         const signoff = read.evidence.human_gate_signoff;
         if (!signoff || signoff.approved_by === null || signoff.approved_by === undefined) {
           evidenceBlockers.push("human-gate-signoff-missing");
+        } else if (autorizacion.exige === "attestation" && !signoff.attestation_commit) {
+          // El riesgo declarado obliga a una atestacion, y lo que hay es una
+          // declaracion. La diferencia no es de forma: una atestacion se puede
+          // volver a verificar y una declaracion es texto que el propio agente
+          // escribe.
+          evidenceBlockers.push("authz-attestation-missing");
+          evidence.authorizationDetail = [
+            ...(evidence.authorizationDetail ?? []),
+            {
+              code: "authz-attestation-missing",
+              detail: `${phase.id} exige atestacion firmada: ${autorizacion.avisos.find((a) => a.code === "authz-attestation-required")?.detail ?? "el contrato obliga"}. Emitirla con \`sdlc signoff --slice <id> --phase ${phase.id} --create --record\``
+            }
+          ];
         } else {
           // Hay DOS clases de firma y valen cosas distintas: una atestacion es
           // un commit firmado que se puede volver a verificar, y una
@@ -945,14 +995,64 @@ function verifyEvidenceAttestation(target, { slice, phase, commitSha }, cache = 
   const approved = treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
   const current = treeAt(headRef);
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
+  const deriva = detectarDerivaDePolitica(target, armado.subject, headRef, memo);
+  if (deriva) return deriva;
+
   return verifySignoff({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: memo.maintainers,
     headRef,
     currentTreeHash: current.ok ? current.hash : null
   });
+}
+
+/**
+ * La deriva de politica (ADR 0008, D3).
+ *
+ * El sujeto ancla la politica DEL REF ATESTADO. Recomputarlo alli da siempre el
+ * mismo numero, asi que una mutacion posterior seria invisible POR
+ * CONSTRUCCION: la propiedad que el ADR promete —"una firma deja de valer si
+ * alguien muta la politica bajo la que se emitio"— no se sigue de esa
+ * definicion sola. Hay que comparar contra HEAD.
+ *
+ * Y NO es frescura. Confundirlas ya costo un error en este mismo mecanismo: que
+ * el `tree_hash` se haya movido es un AVISO, porque el codigo cambia todo el
+ * tiempo y eso no invalida una aprobacion. La politica no cambia todo el
+ * tiempo, y cuando cambia, lo aprobado bajo la anterior deja de estar aprobado.
+ */
+function detectarDerivaDePolitica(target, subject, headRef, memo) {
+  if (memo.politicaHead === undefined) {
+    memo.politicaHead = {
+      contrato: computeContractSha256AtRef(target, headRef),
+      fases: computePhaseContractSha256AtRef(target, headRef)
+    };
+  }
+  const { contrato, fases } = memo.politicaHead;
+  // Si no se puede leer la politica de HEAD no se concluye deriva: no poder
+  // comprobar no es "no vale", y aqui el veredicto correcto lo da el resto de
+  // la verificacion.
+  if (contrato.ok && contrato.hash !== subject.contract_sha256) {
+    return {
+      ok: false,
+      code: "authz-contract-drift",
+      detail:
+        "quality-contract.yaml cambio despues de firmar: la atestacion aprobo una politica que ya no es la vigente. Volver a firmar con `sdlc signoff --slice <id> --phase <F> --create --record`"
+    };
+  }
+  if (fases.ok && fases.hash !== subject.phase_contract_sha256) {
+    return {
+      ok: false,
+      code: "authz-phase-contract-drift",
+      detail:
+        "phase-contract.yaml cambio despues de firmar: `human_gate` es el interruptor de todo el modelo de autorizacion, asi que una atestacion emitida bajo otro contrato de fases no vale. Volver a firmar con `sdlc signoff --slice <id> --phase <F> --create --record`"
+    };
+  }
+  return null;
 }
 
 // Tres veredictos, no dos. "No se pudo comprobar" no es "la firma es mala",
@@ -1030,10 +1130,21 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
   const approved = await treeAt(commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
   const current = await treeAt(headRef);
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
+  // LA MISMA comprobacion que la via sincrona, y no es opcional: si las dos
+  // vias divergen, la auditoria y el gate juzgan distinto la misma firma. Eso ya
+  // esta declarado como fallo de seguridad silencioso en la cabecera de
+  // `gitAsync`, y la deriva de politica es exactamente el tipo de veredicto que
+  // no puede depender de por que camino se llego.
+  const deriva = detectarDerivaDePolitica(target, armado.subject, headRef, memo);
+  if (deriva) return deriva;
+
   return verifySignoffAsync({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: memo.maintainers,
     headRef,
     currentTreeHash: current.ok ? current.hash : null
@@ -1045,6 +1156,25 @@ async function verifyEvidenceAttestationAsync(target, { slice, phase, commitSha 
 // cincuenta firmas abriria cientos de procesos y pelearia por el agente de
 // GPG/SSH. Medido, cuatro basta para bajar el orden de magnitud.
 export const AUDIT_CONCURRENCY = 4;
+
+/**
+ * Comparador de orden contractual: BYTES UTF-8, nunca `localeCompare`.
+ *
+ * Sin locale explicito, `localeCompare` depende del ICU de la maquina y
+ * `["z", "a-con-dieresis"]` sale en un orden en ingles y en otro en sueco. Un
+ * informe de auditoria que cambia de orden segun quien lo corra no se puede
+ * comparar entre corridas.
+ *
+ * Vive EXPORTADO y no en linea a proposito. La ronda 11 de revision adversarial
+ * mostro que, con el comparador incrustado, quitarlo del todo dejaba la suite
+ * verde: `readdirSync` habia devuelto ese orden por casualidad en esa maquina,
+ * asi que el caso comprobaba una salida ACCIDENTAL del sistema de archivos y no
+ * que el criterio se aplicara. Aislado, se puede probar contra una entrada
+ * deliberadamente desordenada.
+ */
+export function compareByUtf8Bytes(a, b) {
+  return Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8"));
+}
 
 export async function runPool(items, worker, concurrency = AUDIT_CONCURRENCY) {
   const results = new Array(items.length);
@@ -1113,10 +1243,10 @@ export async function auditAttestations(target) {
   const sliceEntries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .sort((a, b) => Buffer.compare(Buffer.from(a.name, "utf8"), Buffer.from(b.name, "utf8")));
+    .sort((a, b) => compareByUtf8Bytes(a.name, b.name));
   for (const sliceEntry of sliceEntries) {
     const sliceDir = path.join(root, sliceEntry.name);
-    for (const file of fs.readdirSync(sliceDir).sort((a, b) => Buffer.compare(Buffer.from(a, "utf8"), Buffer.from(b, "utf8")))) {
+    for (const file of fs.readdirSync(sliceDir).sort(compareByUtf8Bytes)) {
       if (!file.endsWith(".yaml")) continue;
       const phase = file.replace(/\.yaml$/, "");
       const read = readEvidenceFile(path.join(sliceDir, file));

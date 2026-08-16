@@ -46,7 +46,8 @@ import { baselineDoctorFindings } from "./quality-baseline.js";
 import { loadQualityContract, probeAnchorDoctorFindings } from "./quality-adjudicate.js";
 import { commandCoverageDiff } from "./coverage-diff.js";
 import { computeTreeHashAtRef, evidencePath as evidencePathFor, recordAttestation } from "./evidence-writer.js";
-import { createAttestationCommit, verifySignoff } from "./signoff.js";
+import { buildSubject, createAttestationCommit, verifySignoff, worktreeDirtyForSurfaces } from "./signoff.js";
+import { auditarAutorizacion } from "./authz-git.js";
 import { verifyAcceptanceDir } from "./acceptance.js";
 import { commandRedProofVerify } from "./red-proof.js";
 import { verifyChangeClosure } from "./change-closure.js";
@@ -538,7 +539,11 @@ function checkCommand(command, args = ["--version"]) {
 }
 
 function checkPowerShell() {
-  for (const command of process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"]) {
+  // En WSL, `pwsh` a secas no resuelve: libuv busca el nombre literal en el
+  // PATH y no prueba la extension `.exe` que el interop de WSL si ejecuta. Sin
+  // el segundo intento, `doctor` reportaba `runtime-pwsh` en error en el
+  // entorno POSIX declarado del proyecto, con PowerShell 7 instalado.
+  for (const command of process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh", "pwsh.exe"]) {
     const result = spawnSync(command, ["-NoProfile", "-Command", "$PSVersionTable.PSVersion.ToString()"], {
       encoding: "utf8",
       shell: false
@@ -725,6 +730,15 @@ async function commandDoctor(options) {
   // formato del sujeto, o por un cambio posterior del contrato— se descubria
   // semanas despues, con el trabajo ya hecho.
   findings.push(...(await auditAttestations(target)).findings);
+  // El eje de autorizacion (ADR 0008, G7). `doctor` REPORTA; quien adjudica es
+  // `phase-gate` (D5). La severidad no es la misma en los dos: aqui una base
+  // irresoluble es AVISO —un clon nuevo sin la rama remota es normal en la
+  // maquina de quien desarrolla, y `doctor` no esta concediendo nada— y en el
+  // gate bloquea.
+  {
+    const contratoCalidad = loadQualityContract(target);
+    if (contratoCalidad.ok) findings.push(...auditarAutorizacion(target, contratoCalidad.contract));
+  }
   findings.push(...baselineDoctorFindings(target));
   findings.push(...probeAnchorDoctorFindings(target));
   findings.push(...checkRetentionPolicy(target));
@@ -823,10 +837,13 @@ function recordVerifiedAttestation(target, { slice, phase, surfacePaths, commitS
   const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
   if (!approved.ok) return { ok: false, code: approved.code, detail: approved.detail };
 
+  const armado = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+  if (!armado.ok) return { ok: false, code: armado.code, detail: armado.detail };
+
   const verification = verifySignoff({
     target,
     commitSha,
-    subject: { slice, phase, tree_hash: approved.hash },
+    subject: armado.subject,
     maintainers: config.governance?.maintainers ?? []
   });
   if (!verification.ok) {
@@ -887,7 +904,22 @@ function commandSignoff(options) {
     if (!tree.ok) {
       return { exitCode: EXIT_ERROR, payload: { status: "error", code: tree.code, message: tree.detail } };
     }
-    const subject = { slice, phase, tree_hash: tree.hash };
+    // El arbol sucio se comprueba ANTES de armar el sujeto: con cambios sin
+    // commitear, el contrato tampoco esta en HEAD y `buildSubject` fallaria con
+    // `contract-missing-at-ref`, escondiendo la causa real detras de un
+    // sintoma. Quien tiene que commitear necesita enterarse de eso, no de dos
+    // cosas a la vez.
+    if (!Boolean(options["allow-dirty"] ?? options.allowDirty)) {
+      const sucio = worktreeDirtyForSurfaces(target, surfacePaths);
+      if (sucio.dirty) {
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", ok: false, code: sucio.code, detail: sucio.detail } };
+      }
+    }
+    const armado = buildSubject({ target, ref: "HEAD", slice, phase, treeHash: tree.hash });
+    if (!armado.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armado.code, message: armado.detail } };
+    }
+    const subject = armado.subject;
     const created = createAttestationCommit({
       target,
       slice,
@@ -917,14 +949,17 @@ function commandSignoff(options) {
       // Se verifica por la MISMA ruta que usara el gate, y ANTES de escribir:
       // enlazar una firma que no verifica seria afirmar una garantia inexistente.
       const approved = computeTreeHashAtRef(target, surfacePaths, created.commitSha);
-      const verification = approved.ok
+      const rearmado = approved.ok
+        ? buildSubject({ target, ref: created.commitSha, slice, phase, treeHash: approved.hash })
+        : { ok: false, code: approved.code, detail: approved.detail };
+      const verification = rearmado.ok
         ? verifySignoff({
             target,
             commitSha: created.commitSha,
-            subject: { slice, phase, tree_hash: approved.hash },
+            subject: rearmado.subject,
             maintainers: recordConfig.governance?.maintainers ?? []
           })
-        : { ok: false, code: approved.code, detail: approved.detail };
+        : { ok: false, code: rearmado.code, detail: rearmado.detail };
       if (!verification.ok) {
         return {
           exitCode: EXIT_ACTION_REQUIRED,
@@ -991,7 +1026,11 @@ function commandSignoff(options) {
       return { exitCode: EXIT_ERROR, payload: { status: "error", code: approved.code, message: approved.detail } };
     }
     const current = computeTreeHashAtRef(target, surfacePaths, headRef);
-    const subject = { slice, phase, tree_hash: approved.hash };
+    const armadoVerify = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
+    if (!armadoVerify.ok) {
+      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armadoVerify.code, message: armadoVerify.detail } };
+    }
+    const subject = armadoVerify.subject;
     const result = verifySignoff({
       target,
       commitSha,
@@ -1025,7 +1064,9 @@ function commandSignoff(options) {
     payload: {
       status: "error",
       message:
-        "Uso: sdlc signoff --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>"
+        "Uso: sdlc signoff --slice <id> --phase <F> <--create [--record] [--signing-key <id>] [--allow-dirty] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>\n" +
+        "  --record enlaza la firma con la evidencia de la fase. Sin el, el commit firmado existe pero\n" +
+        "  la evidencia sigue apuntando a la anterior y el gate sigue bloqueando."
     }
   };
 }
@@ -1272,7 +1313,15 @@ async function commandUpgrade(options) {
   const pendientes = attestations.findings.filter((finding) => finding.verdict !== undefined);
   const invalidas = pendientes.filter((finding) => finding.verdict === "invalid").length;
   const noVerificables = pendientes.filter((finding) => finding.verdict === "unverifiable").length;
-  const bloqueado = pendientes.length > 0;
+  // El eje de autorizacion (G7): en `upgrade` los errores son ACCION REQUERIDA,
+  // no aviso. Actualizar y quedarse con superficies sin clasificar deja al
+  // consumidor con un bloqueo esperandolo en su siguiente gate humano, y
+  // enterarse ahi —con el trabajo hecho— es exactamente lo que la auditoria de
+  // atestaciones de 2.0.0 vino a evitar para las firmas.
+  const contratoTrasUpgrade = loadQualityContract(target);
+  const autorizacion = contratoTrasUpgrade.ok ? auditarAutorizacion(target, contratoTrasUpgrade.contract) : [];
+  const autorizacionBloqueante = autorizacion.filter((finding) => finding.level === "error");
+  const bloqueado = pendientes.length > 0 || autorizacionBloqueante.length > 0;
   return {
     exitCode: bloqueado ? EXIT_ACTION_REQUIRED : EXIT_OK,
     payload: {
@@ -1281,6 +1330,7 @@ async function commandUpgrade(options) {
       frameworkVersion: nextManifest.frameworkVersion,
       accepted: overrideEntries.map((entry) => entry.path),
       ...(attestations.checked > 0 ? { attestations } : {}),
+      ...(autorizacion.length > 0 ? { authorization: autorizacion } : {}),
       ...(bloqueado
         ? {
             // Se dice lo que de verdad paso: la migracion se aplico y lo que

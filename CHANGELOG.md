@@ -6,7 +6,9 @@
 
 Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
 
-> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **tres** rupturas están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa.
+> **Major, y el número lo dice por una vez.** Se numeró 1.8.3 durante casi todo el trabajo, hasta que un contraste adversarial lo tumbó con un argumento simple: una atestación válida deja de verificar y `sdlc install` cambia su estado operativo, así que la compatibilidad se rompe en un paquete ya `1.x`. Tener un solo consumidor y prisa no es excepción SemVer. Las **trece rupturas** están al final de estas notas y repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado. Quien actualice tiene que **volver a firmar** cualquier atestación previa (`sdlc signoff … --create --record`; sin `--record` el gate sigue bloqueando).
+>
+> El [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) **ya está implementado** y sus cinco rupturas están declaradas abajo. Se declararon al implementarlas, no antes.
 
 ### Fixed — firma humana (P5, ADR 0007)
 
@@ -71,6 +73,36 @@ Los defectos de esta versión salieron de **operar** el framework en el consumid
 - El `tree_hash` del sujeto de firma cambia de formato (object id de git por blob, en lugar de sha256 del contenido en disco). Las atestaciones emitidas con versiones anteriores no verifican; hay que volver a firmar. `computeTreeHash` (frescura de evidencia de calidad, P7) **no** cambia.
 - `install` deja de escribir superficies y stack de ejemplo. Un repo recién instalado sale en **error** en `doctor` hasta que se declaren las superficies reales. Los consumidores existentes no cambian: su configuración ya está en disco.
 - `.github/agents/surface-traceability.json` se genera desde `config.surfaces` y cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; un consumidor que lo consuma a mano debe revisarlo.
+
+- **El hash de árbol pasa a tener un tope de 64 MiB por llamada, y antes eran 256 MiB.** Un repositorio cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol con la media medida (~94 bytes por entrada), así que no alcanza a ningún repo normal — pero es un cambio de comportamiento real y silencioso para un monorepo grande, y por eso se declara.
+
+  El tope existe porque la vía asíncrona corre en un pool: el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*, y las dos vías tienen que declarar **el mismo número** o la auditoría y el gate pueden juzgar distinto el mismo sujeto. Quien necesite más lo sube con `SDLC_TREE_HASH_MAX_BUFFER_BYTES`, que se lee una sola vez y comparten ambas vías; subirlo **reduce la concurrencia, no el techo de memoria**.
+
+- **Toda excepción de `spec-boundary-allowlist.yaml` deja de autorizar hasta completarse.** El guard leía únicamente `path`; `approved_by`, `attestation_commit` y `expires_at` eran decorativos, mientras el propio archivo enunciaba las tres reglas como si se cumplieran. Una regla que nadie comprueba es peor que ninguna: se cree cumplida. Ahora `approved_by` tiene que ser el `signer` de alguien en `governance.maintainers`, `attestation_commit` tiene que existir, verificar con `git verify-commit` y estar firmado por un mantenedor, y `expires_at` tiene que ser una fecha ISO futura. Las cuatro se leen de la rama base. Y si el guard **no puede** comprobar la atestación —clon superficial, commit ausente— la entrada tampoco autoriza: no poder medir no es aprobar.
+
+- **El guard exige una rama base REMOTA calificada** (`refs/remotes/origin/<rama>`). Con el nombre corto, las reglas DWIM de git prueban `refs/tags/` y `refs/heads/` **antes** que `refs/remotes/`: un tag llamado literalmente `origin/main` apuntando al HEAD del PR hacía que el guard comparase HEAD contra HEAD —diff vacío, veredicto `ok`— y que el `git show "$BASE:…"` del workflow trajera la copia «confiable» del árbol del atacante. Las dos mitades del control caían a la vez. Un CI que pasa `--base origin/<rama>` sigue funcionando; un tag o rama local con ese nombre ya no.
+
+- **El step de frontera del workflow ya no cae a la copia del checkout.** Si la rama de integración no trae el guard, falla con `spec-boundary-guard-ausente-en-base` en vez de ejecutar el script que el evaluado controla. Era un segundo camino que la cabecera del workflow no mencionaba.
+
+- **El alcance del guard crece, y puede bloquear lo que antes pasaba.** (a) `vitest.config`, `stryker.conf`, `.dependency-cruiser` y `eslint.config` se protegen por **nombre a cualquier profundidad**: en un workspace, bajar `thresholds` en `packages/app/vitest.config.ts` es reescribir el criterio igual que hacerlo en la raíz. (b) `**` en `.sdlc/locked-paths.txt` cruza barras de verdad; antes no casaba nada, en silencio, justo en el mecanismo documentado para *extender* la protección. (c) El guard, su config y su allowlist se protegen por **sufijo** de ruta: el prefijo `templates/` sacaba del alcance la fuente del guard de todos los consumidores. (d) Las rutas se leen NUL-delimitadas: `core.quotePath=false` sólo tapaba el no-ASCII, y git entrecomilla **siempre** las rutas con `"`, `\` o caracteres de control, que en POSIX son nombres legales. (e) Un patrón con más de 8 comodines se rechaza y se reporta: `*a*a…*b` contra una ruta larga no terminaba en 90 segundos.
+
+### El modelo de riesgos de autorización (ADR 0008)
+
+- **Toda superficie sin clasificar exige atestación firmada.** `tier` deja de gobernar la autorización y queda **solo** para umbrales de calidad; la obligación de firma sale de cuatro riesgos declarados por superficie: `money_path`, `regulated_data`, `security_critical` y `state_machine_critical`. La obligación desaparece **solo** si los cuatro son booleanos válidos y los cuatro son `false`. Ausente, `null`, una cadena o un nombre mal escrito obligan — *no clasificado* no es *no aplica*, y un error de tecleo se paga con una firma de más, nunca con una de menos.
+
+  El motivo de separar los ejes está medido: con la regla anterior, **esquivar una firma bastaba con bajar el tier** — y eso compraba además diez puntos menos de cobertura. La gobernanza incentivaba degradar la calidad. Aplica a las fases con gate humano que tienen árbol que atestar (F4, F13, F14); en F2/F3 no hay código que firmar, y exigirlo produciría un bloqueo del que no se sale sin tocar la política que el control existe para proteger.
+
+- **El sujeto de la atestación cambia otra vez, a v2:** `{slice, phase, tree_hash, contract_sha256, phase_contract_sha256}`. Una firma anterior no verifica, y el error lo dice con todas las letras (`signoff-subject-v1`) en lugar de un *mismatch* genérico: la acción a tomar es re-firmar, no investigar. El segundo hash entra porque `phase.human_gate` es el AND exterior de todo el modelo y vivía en un archivo que el sujeto no cubría.
+
+  Y la firma **deja de valer si la política cambia después de firmar** (`authz-contract-drift`). Anclar el contrato solo al ref atestado hacía invisible la mutación posterior *por construcción*, así que se comparan dos valores: el del sujeto y el de HEAD. No es frescura — que el código se mueva sigue siendo un aviso; que la política se mueva, no.
+
+- **`phase-gate` exige una rama de integración remota resoluble**, leída de `gitFlow.integrationBranch` y calificada a `refs/remotes/origin/<rama>`. Sin ella bloquea: sin comparación no se puede saber qué se perdió, y lo que no se puede saber no se concede. Pedir otra base es `authz-base-mismatch` — **elegir la base es elegir qué downgrades son detectables**, y empujar una rama con la política ya bajada para abrir el PR contra ella no dejaría ninguna transición que detectar. En CI hace falta `fetch-depth: 0`.
+
+- **`upgrade` termina en `action-required` con el eje pendiente, y `doctor` lo reporta.** Las severidades no son iguales en los dos: BASE irresoluble es **aviso** en `doctor` —un clon nuevo sin la rama remota es normal donde se desarrolla, y `doctor` no está concediendo nada— y **bloqueo** en el gate, donde no poder comparar es no poder conceder.
+
+- **El workflow gestionado gana un paso de autorización** (`sdlc phase-gate --exit-code`). Sin él, el eje quedaba adjudicado únicamente en la máquina del agente —la misma que ese workflow declara *advisory*— y no había evasión que inventar: bastaba no correr el comando. Además, `.github/agent-state/phase-contract.yaml` deja de ser una ruta válida para el contrato de fases: ninguna lista del guard la protegía, así que era una puerta trasera a `human_gate`.
+
+
 
 ## [1.8.2] — 2026-08-09
 

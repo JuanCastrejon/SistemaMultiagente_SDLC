@@ -25,9 +25,101 @@
  *
  * Para continuar con OTRA cuenta ver `docs/guides/codex-revision-reanudable.md`.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+
+// ---------------------------------------------------------------------------
+// PREFLIGHT: cuatro modos, no dos.
+//
+// El runner trataba "funciona" y "no funciona" como los dos unicos estados, y
+// por eso una cuota agotada parecia un fallo del runner. Peor: se construia el
+// prompt entero y se lanzaba el proceso para descubrir en la salida algo que se
+// sabia ANTES de gastar nada.
+//
+// La idea es de gstack (https://github.com/garrytan/gstack), cuyo
+// `codexPreflight` distingue disabled / not_installed / not_authed / ready y
+// obliga a declarar la politica de caida para cada uno. Aqui se añade un quinto
+// —`quota`— porque es el que mas veces ha pasado en este repo, y se recuerda en
+// disco: si la cuota se agoto hace diez minutos y se libera dentro de un mes,
+// volver a lanzar solo sirve para perder otro minuto.
+//
+// La propiedad que importa: la revision cruzada es INFORMATIVA, nunca un gate.
+// Que Codex no este disponible no bloquea nada — cambia quien hace de segunda
+// voz, y eso se declara.
+// ---------------------------------------------------------------------------
+const MODOS = {
+  DESHABILITADO: "disabled",
+  NO_INSTALADO: "not_installed",
+  SIN_AUTENTICAR: "not_authed",
+  SIN_CUOTA: "quota",
+  LISTO: "ready"
+};
+
+function rutaCooldown() {
+  return path.join(".codex-out", "cooldown.json");
+}
+
+function leerCooldown() {
+  try {
+    const datos = JSON.parse(fs.readFileSync(rutaCooldown(), "utf8"));
+    const hasta = Date.parse(datos.hasta);
+    if (!Number.isFinite(hasta) || hasta <= Date.now()) return null;
+    return { hasta: datos.hasta, cuenta: datos.cuenta ?? "(desconocida)" };
+  } catch {
+    return null;
+  }
+}
+
+function escribirCooldown(hasta) {
+  try {
+    fs.mkdirSync(".codex-out", { recursive: true });
+    fs.writeFileSync(
+      rutaCooldown(),
+      JSON.stringify({ hasta, cuenta: process.env.CODEX_HOME ?? "~/.codex", anotado: new Date().toISOString() }, null, 2),
+      "utf8"
+    );
+  } catch {
+    /* anotar el cooldown es una comodidad, nunca un motivo para fallar */
+  }
+}
+
+function preflight() {
+  if (process.env.SDLC_CODEX_REVIEWS === "disabled") return { modo: MODOS.DESHABILITADO };
+
+  const enfriando = leerCooldown();
+  if (enfriando) return { modo: MODOS.SIN_CUOTA, detalle: `hasta ${enfriando.hasta} (cuenta ${enfriando.cuenta})` };
+
+  // `shell: true` solo por el shim `.cmd` de Windows; no viaja ningun dato del
+  // prompt por aqui.
+  const opciones = { encoding: "utf8", shell: process.platform === "win32", timeout: 30_000 };
+  const version = spawnSync("codex", ["--version"], opciones);
+  if (version.error || version.status !== 0) return { modo: MODOS.NO_INSTALADO };
+
+  const login = spawnSync("codex", ["login", "status"], opciones);
+  if (login.error || login.status !== 0) return { modo: MODOS.SIN_AUTENTICAR };
+
+  return { modo: MODOS.LISTO, detalle: (version.stdout ?? "").trim() };
+}
+
+function explicarModo({ modo, detalle }) {
+  const caida =
+    "Cae al `adversario` local (.claude/agents/adversario.md). Es segunda voz, pero\n" +
+    "  del MISMO modelo que la primera: sus puntos ciegos estan correlados. Declaralo\n" +
+    "  en el informe.";
+  switch (modo) {
+    case MODOS.DESHABILITADO:
+      return "Revisiones cruzadas apagadas (SDLC_CODEX_REVIEWS=disabled).\n  Apagado significa apagado: no se cae a un subagente local.";
+    case MODOS.NO_INSTALADO:
+      return `Codex CLI no esta en el PATH.\n  Instalar: npm install -g @openai/codex\n  ${caida}`;
+    case MODOS.SIN_AUTENTICAR:
+      return `Codex instalado pero sin credenciales.\n  Autenticar: codex login   (o CODEX_HOME=~/.codex-b codex login para otra cuenta)\n  ${caida}`;
+    case MODOS.SIN_CUOTA:
+      return `Cuota agotada ${detalle}.\n  Cambiar de cuenta: CODEX_HOME=~/.codex-b codex login\n  Borrar el recordatorio si crees que ya se libero: rm ${rutaCooldown()}\n  ${caida}`;
+    default:
+      return `Codex listo${detalle ? ` (${detalle})` : ""}.`;
+  }
+}
 
 const args = process.argv.slice(2);
 const esResume = args[0] === "--resume";
@@ -50,6 +142,22 @@ const rutaFinal = path.join(dirSalida, "respuesta-final.md");
 const rutaEventos = path.join(dirSalida, "eventos.jsonl");
 const rutaSesion = path.join(dirSalida, "sesion.txt");
 const rutaReanudar = path.join(dirSalida, "REANUDAR.md");
+
+// Se comprueba ANTES de construir el prompt y de escribir nada: lanzar para
+// descubrir en la salida algo que se sabia de antemano cuesta un minuto y, si
+// el prompt ya se escribio, deja el directorio de la ronda a medias.
+if (process.env.SDLC_CODEX_SKIP_PREFLIGHT !== "1") {
+  const estado = preflight();
+  console.log(`CODEX_MODE: ${estado.modo}`);
+  if (estado.modo !== MODOS.LISTO) {
+    console.error(`\n${explicarModo(estado)}\n`);
+    // 3 = "no se pudo correr la revision cruzada, y no es un fallo del trabajo".
+    // Distinto del 2 de cuota-agotada-a-media-revision, donde SI hay hallazgos
+    // en disco y una sesion que reanudar.
+    process.exit(3);
+  }
+  console.log(explicarModo(estado));
+}
 
 // El contrato de escritura incremental. Se antepone al prompt del usuario
 // porque es lo que hace que una muerte por cuota no cueste el trabajo entero.
@@ -177,6 +285,12 @@ const mirar = (texto) => {
   ultimaSalida = Date.now();
   if (!cuotaAgotada && PATRON_CUOTA.test(texto)) {
     cuotaAgotada = true;
+    // El propio mensaje trae la fecha de liberacion ("try again at Sep 12th,
+    // 2026 3:58 PM"). Se anota para que el preflight de la proxima corrida no
+    // gaste otro lanzamiento en descubrir lo mismo.
+    const m = texto.match(/try again at ([^.\n]+)/i);
+    const cuando = m ? Date.parse(m[1].replace(/(\d+)(st|nd|rd|th)/, "$1")) : NaN;
+    escribirCooldown(Number.isFinite(cuando) ? new Date(cuando).toISOString() : new Date(Date.now() + 3600_000).toISOString());
   }
   if (sessionId) return;
   buffer += texto;

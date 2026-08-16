@@ -28,6 +28,8 @@ Ningún agente escribe `quality_metrics` a mano. Nuevo `src/evidence-writer.js`:
 
 La firma humana deja de ser un string: se deriva de un review `APPROVED` verificado por `gh api` sobre el `head_sha` exacto, con allowlist de logins y `dismiss-stale-reviews` activo.
 
+> **SUPERSEDIDO** — ver el [addendum de 2026-08-14](#addendum-firma-supersedida). Ni el mecanismo (`gh api` sobre un review) ni el disparador (`tier`) son ya los de este ADR.
+
 ### D3. No-vacuidad antes que umbral
 
 Todo gate declara `min_denominator`. `survived == 0` sobre cero mutantes, `failed == 0` sobre cero tests E2E y `violations == 0` sobre una superficie cuyo path no existe son PASS hoy y son el modo de fallo más peligroso del sistema. El engine emite `gate-vacuous` **antes** de aplicar el operador.
@@ -62,6 +64,8 @@ Cero adapters de Vitest, Stryker o Playwright dentro del framework. El consumido
 
 **No se añade un quinto gate humano.** Cambia el *contenido* del gate existente de F4, que pasa a firmar la especificación (Gherkin en prosa + procedimientos de QA + tier). F13 **sigue bloqueante para tier core y money_path**; su degradación para tier standard y shell queda como decisión de gobierno, no como default silencioso.
 
+> **SUPERSEDIDO en su parte de autorización** — la frase «bloqueante para tier core y money_path» es exactamente el anclaje que el ADR 0008 D1 elimina. Ver el [addendum](#addendum-firma-supersedida). Lo que F13 *mide* no cambia; lo que cambia es qué obliga a firmarlo.
+
 Se propone además colapsar F2 y F3 en una sola firma, lo que baja de cuatro a tres los round-trips humanos por slice y paga el contenido añadido a F4. Es decisión de proceso y requiere aprobación.
 
 ## Matriz F0-F17
@@ -73,7 +77,7 @@ Se propone además colapsar F2 y F3 en una sola firma, lo que baja de cuatro a t
 | F2 | gate-humano | Existente. El borrador enumera escenarios candidatos `SC-###` | review del Issue |
 | F3 | gate-humano | Existente. Herencia de `SC-###` hacia el Issue | `F3.yaml` |
 | F3.5 | bloquea | `spec-boundary-baseline`: merge-base remoto + sha256 de cada archivo protegido | `F3_5.yaml` bloque `spec_boundary` |
-| F4 | gate-humano | **Contenido nuevo**: firma de la especificación y de los procedimientos de QA | `F4.yaml` con `review_id`, `reviewer_login`, `head_sha` |
+| F4 | gate-humano | **Contenido nuevo**: firma de la especificación y de los procedimientos de QA | ~~`F4.yaml` con `review_id`, `reviewer_login`, `head_sha`~~ **SUPERSEDIDO**: la evidencia de firma es la atestación por commit firmado; ver [addendum](#addendum-firma-supersedida) |
 | F5 | bloquea | `failing-first` verificado por `workflow_run_id` en CI | `F5.yaml` bloque `scenario_traceability` |
 | F6 | observa | `probe-availability`: todo probe del tier existe como script real | `F6.yaml` bloque `probe_budget` |
 | F7 | n/a | Sin control. No produce artefactos verificables propios | — |
@@ -94,7 +98,7 @@ Se propone además colapsar F2 y F3 en una sola firma, lo que baja de cuatro a t
 |---|---|---|
 | **1.8.0** — entregabilidad | `sdlc upgrade --accept-managed`, `.sdlc/overrides.yaml` con `expires_at`, `sdlc reconcile`, migraciones que leen disco, precheck de scripts en `verdict`, arreglo de `validate-local-gate.ps1`, pin de `@fission-ai/openspec`. **Cero gates de calidad.** | `upgrade` completa sin abortar en los 3 consumidores (hoy 0 de 3) |
 | **1.9.0** — observación y árbitro | `src/quality-gates.js` (función pura con no-vacuidad), `evidence-validator`, `evidence-writer`, `phase-contract` v2, `quality-contract.yaml`, workflow `quality-verify.yml` | Un slice recorre F0-F17 con evidencia anexada por el harness; un intento de editar `quality_metrics` a mano es detectado |
-| **1.10.0** — especificación primero | F4 firma la especificación vía review verificado; F5 gana el gate mecánico de rojo; artefacto OpenSpec `acceptance` | Ningún slice llega a F8 sin escenarios firmados y demostrados en rojo en un run que no contiene la implementación |
+| **1.10.0** — especificación primero | F4 firma la especificación ~~vía review verificado~~ (**SUPERSEDIDO**: vía commit firmado, ver [addendum](#addendum-firma-supersedida)); F5 gana el gate mecánico de rojo; artefacto OpenSpec `acceptance` | Ningún slice llega a F8 sin escenarios firmados y demostrados en rojo en un run que no contiene la implementación |
 | **1.11.0** — ratchet | Baseline versionado, guard anti-regresión y anti-degradación, `NOT_CONFIGURED` pasa a BLOCKING | Dos meses sin que un PR legítimo sea bloqueado por deuda preexistente |
 | **1.12.0** — mutación y absolutos acotados | Stryker fuera del camino de PR, adjudicado por `tree_hash`; absolutos solo para tier core con dos releases en ratchet verde | Camino de PR sigue < 5 min |
 
@@ -148,7 +152,12 @@ El plan sintetizado se sometió a un crítico de completitud, cuyo veredicto fue
 ## Decisiones que requieren juicio humano
 
 1. Aceptar o no "nadie lee el código" en rutas de dinero. Recomendación: preservar revisión humana del diff para `money_path` mientras el gauntlet no tenga historial propio.
-2. Degradar F13 para tier standard y shell en un dominio de pagos.
+2. ~~Degradar F13 para tier standard y shell en un dominio de pagos.~~
+   **SUPERSEDIDO** — la pregunta ya no se plantea así: el ADR 0008 D1 saca la
+   obligación de firma de `tier` y la deriva de riesgos declarados por
+   superficie. Degradar el tier de una superficie de pagos ya no puede quitar
+   la firma; solo baja el umbral de cobertura, que es una decisión distinta.
+   Ver [addendum](#addendum-firma-supersedida).
 3. Colapsar F2 y F3 en una sola firma.
 4. Quiénes están en `maintainers-list`: de esa lista depende todo el modelo de amenaza.
 5. Cupo de escenarios por slice que un humano se compromete a leer. **Es el único punto de fallo del sistema entero**: sin cupo, el agente firmará 40 escenarios que nadie leyó.
@@ -222,3 +231,70 @@ Dos defectos del framework aparecieron al construir esto, ambos preexistentes:
 Un solo cambio, con test de regresión, sin tocar ningún archivo gestionado del consumidor: añadir en `commandVerdict` (`src/harness.js`) un precheck de existencia contra `packageJson.scripts` antes de invocar el package manager, y clasificar el paso ausente como `NOT_CONFIGURED` en vez de `pass`.
 
 Verificación binaria e inmediata: `sdlc verdict --target <piloto> --json` debe dejar de reportar `adr-integrity` y `active-slices` como `pass`, revelando que el `READY` actual es falso.
+
+<a id="addendum-firma-supersedida"></a>
+
+## Addendum 2026-08-14 — la firma humana de este ADR está supersedida
+
+<!-- El ancla de arriba es explicita y ASCII a proposito. El ancla que
+     GitHub genera a partir de esta cabecera CONSERVA la tilde de «está»,
+     y los cinco enlaces internos se escribieron sin ella: apuntaban a un
+     fragmento inexistente. Un ancla propia no depende de como se
+     translitere el titulo, ni se rompe si el titulo cambia. -->
+
+Este addendum no reescribe nada de arriba: lo marca. El historial se conserva
+porque explica por qué el mecanismo llegó a ser el que era.
+
+**Qué queda supersedido, y por qué.** La decisión P5 describe la firma humana
+como un review `APPROVED` verificado con `gh api` sobre el `head_sha`, y la
+sección de reubicación ancla la obligación de F13 a `tier core`/`money_path`.
+Ninguna de las dos cosas es hoy cierta:
+
+1. **El mecanismo cambió al implementarlo.** Con un solo maintainer GitHub
+   prohíbe auto-aprobar el PR propio, así que `platform-review` es
+   insatisfacible y `src/signoff.js` verifica un **commit vacío firmado**
+   (`git verify-commit`) cuyo sujeto se recomputa siempre. El razonamiento está
+   en la cabecera de ese módulo y en `governance.threatModel:
+   single-maintainer`. Este ADR nunca se actualizó, y la contradicción vivió
+   abierta hasta hoy.
+
+2. **El disparador cambia con el [ADR 0008](0008-modelo-de-riesgos-de-autorizacion.md).**
+   Su D1 separa los dos ejes: `tier` queda **solo** para umbrales de calidad, y
+   la obligación de firma se deriva de riesgos de autorización declarados por
+   superficie (`money_path`, `regulated_data`, `security_critical`,
+   `state_machine_critical`), fail-closed. La razón es medida y está en aquel
+   ADR: con la regla de este, esquivar una firma bastaba con bajar el tier — y
+   eso **también** compraba diez puntos menos de cobertura. La gobernanza
+   incentivaba degradar la calidad.
+
+   D5 añade que el downgrade lo adjudica **únicamente** `phase-gate`, y D7 que
+   la política (`attestation` / `declarative` / `none`) vive en
+   `quality-contract.yaml`, nunca en `.sdlc/config.json`.
+
+**Por qué este addendum existe ahora y no antes.** Mientras el ADR 0008 era
+trabajo posterior, la contradicción era deuda documental anotada en el roadmap.
+Desde que **el ADR 0008 entra en 2.0.0**, deja de serlo: quien implemente D1-D7
+tiene delante dos fuentes incompatibles sobre quién debe firmar, y la de arriba
+es la que invita a reintroducir el disparador por `tier` que D1 existe para
+eliminar.
+
+**Dónde están las marcas, y por qué se enumeran.** La primera versión de este
+addendum marcó dos párrafos y afirmó que eran «la única parte supersedida». Era
+falso, y peor que falso: daba señal de que no quedaba otra fuente normativa
+viva. Quedaban tres —la fila de F4 en la matriz, el roadmap de 1.10.0 y la
+decisión pendiente sobre degradar F13— y las tres reintroducían justo lo que
+este addendum retira. Marcadas todas, y aquí queda la lista para que se pueda
+comprobar en vez de creer:
+
+| Dónde | Qué decía | Qué lo sustituye |
+|---|---|---|
+| D2, párrafo de firma humana | review `APPROVED` por `gh api` | commit firmado (`src/signoff.js`) |
+| Reubicación del gate humano | F13 bloqueante por `tier core`/`money_path` | ADR 0008 D1: riesgos declarados por superficie |
+| Matriz F0-F17, fila F4 | `review_id`, `reviewer_login`, `head_sha` | atestación por commit firmado |
+| Roadmap 1.10.0 | «firma la especificación vía review verificado» | vía commit firmado |
+| Decisiones pendientes, punto 2 | «degradar F13 para tier standard y shell» | la pregunta desaparece al separar los ejes |
+
+**Lo que este addendum NO toca.** Todo lo demás del ADR 0007 sigue vigente: la
+escalera de gates, la no-vacuidad, la evidencia append-only, el ratchet y su
+baseline. Lo supersedido es **qué obliga a firmar y cómo se verifica esa
+firma** — nada de lo que el gauntlet *mide*.
