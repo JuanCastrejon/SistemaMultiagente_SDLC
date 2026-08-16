@@ -504,7 +504,7 @@ function montarRepo(nombre, { subdir = "", contrato = CONTRATO_LIMPIO, fases = F
 // --- 21. clasificada con riesgos NO es sin clasificar (fix 2.0.1) ---------
 // La auditoria de doctor/upgrade confundia las dos: un repo plenamente
 // clasificado con riesgos reales tenia error permanente con un remedio ya
-// hecho. Encontrado al adoptar 2.0.0 en FacturacionDian.
+// hecho. Encontrado al adoptar 2.0.0 en un consumidor real.
 {
   const criticaClasificada = CONTRATO_LIMPIO.replace('security_critical: false', 'security_critical: true');
   const { target } = montarRepo('audit-clasificada', { contrato: criticaClasificada });
