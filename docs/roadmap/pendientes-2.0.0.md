@@ -354,12 +354,7 @@ Lo que sí se decidió adoptar, por orden de valor/esfuerzo:
       edita `.sdlc/config.json` pasa por su propia excepción, sin `--admin`.
 
 
-- [ ] **Publicar 2.0.0.** Estado a 2026-08-16: el ADR 0008 está **implementado
-      y auditado** (rondas 11–19), #41 fusionado a `develop` con CI verde
-      completo — incluida `frontera de especificacion`, con la allowlist ya en
-      la base. Falta: el PR de la ronda 19 a `develop`, deshelar y mergear #40
-      a `main`, y decidir npm. El bloqueo de alcance de la sección de abajo
-      está resuelto.
+- [x] ~~**Publicar 2.0.0.**~~ **PUBLICADA el 2026-08-16** (05:44 UTC): `sistema-multiagente-sdlc@2.0.0` en npm, `latest` apuntando, con `--provenance` y la verificación post-publish del workflow en verde. Camino: #42 (rondas 18+19) → #40 a `main` → README (#43/#44) → `gh workflow run publish.yml --ref main`.
 - [x] ~~**Montar un job de CI que corra la suite en Linux.**~~ Cubierto de
       hecho: el job `validate` del `ci.yml` corre `pnpm test` completo en un
       runner Linux, y está **verde** sobre `develop` desde el merge de #41
