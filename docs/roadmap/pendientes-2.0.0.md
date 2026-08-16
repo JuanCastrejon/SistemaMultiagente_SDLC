@@ -160,25 +160,74 @@ mutante que Codex dejó vivo**: los cinco mueren ahora.
       gracia** (debe resolver en menos de la mitad), no contra un 10 s flojo que
       dejaba pasar un retraso de 1 s.
 
+## Ronda 18 — la tercera instancia, cerrada (2026-08-15)
+
+Sobre `a602f5c`, que nadie había revisado. Tres lentes despachadas (rastreador,
+mutador, refutador) más síntesis en sesión principal; ninguna se cayó. Codex
+sin cuota hasta el 12–13 de septiembre: la segunda voz fue local, declarado.
+Registro completo en `.codex-out/ronda-18/hallazgos.md`.
+
+- [x] ~~SERIO — «la adjudicación corre SIEMPRE» era falso: la tercera instancia
+      del patrón.~~ Al izarla fuera de `if (phase.human_gate)`, la llamada quedó
+      dentro de `if (evidence.exists)` y del `else` de `if (!read.ok)`
+      (harness.js). En una fase sin `evidence_required`, borrar o corromper la
+      evidencia dejaba el gate **en verde sin una sola comprobación de
+      autorización**. La adjudicación corre ahora antes de mirar la evidencia.
+- [x] ~~SERIO — el detector de puerta quitada tenía su propia puerta.~~
+      `fasesBase.presente && fasesBase.ok` tragaba el YAML roto de BASE: puerta
+      quitada + contrato de fases ilegible en BASE devolvía `ok:true`
+      (reproducido). Ahora bloquea con `authz-base-contract-invalid`, como la
+      mitad quality-contract ya hacía.
+- [x] ~~SERIO — la regresión central de la 17 sobrevivía la suite COMPLETA
+      (M1, tres corridas).~~ El cableado del harness no lo ejercitaba ningún
+      test. Caso nuevo: fase sin puerta y sin evidencia, puerta quitada en
+      BASE → `blocked`. M1', M3', M6', H2' y H5' mueren, cada uno por su caso.
+- [x] ~~MEDIO — borrar la fase con puerta del contrato HEAD.~~ Nadie re-gatea
+      una fase borrada; solo se miraba la fase actual. `adjudicarAutorizacion`
+      recibe ahora `fasesHead` y enumera todas las fases con puerta de BASE.
+- [x] ~~MEDIO — debilitar el override de OTRA fase pasaba limpio (M3).~~
+      `compararPolitica` solo comparaba `[null, faseActual]`; ahora compara
+      todos los ids con override en cualquiera de los dos contratos.
+- [x] ~~MENOR — la severidad de `base-unresolvable` (bloqueo con puerta, aviso
+      sin puerta) no tenía test (M6).~~ Caso 13.
+- [ ] **MENOR abierto — `exige` divergente para F2/F3 con puerta** según exista
+      la ref remota (early-return pasa `enHead.exige`, el final fuerza
+      `"ninguna"`). Ningún consumidor se rompe hoy. Junto con el doble
+      vocabulario `"ninguna"`/`"none"`.
+- [ ] **MENOR abierto — la mitad de auditoría** (`auditarAutorizacion`, doctor,
+      upgrade) se salta en silencio con contratos ilegibles. Comandos de
+      reporte, no de enforcement.
+
+Deuda declarada nueva, dicha de frente: la primera ejecución real del workflow
+en Actions (tras empujar `0382d05`) dejó `validate` **en verde en un runner
+Linux** y `frontera de especificacion` roja con **exactamente las 3 violaciones
+diseñadas** — la incógnita de `fetch-depth: 0` y `refs/remotes/origin/<base>`
+quedó contestada: el ref base resuelve en el runner. Y para POSIX hubo que
+instalar PowerShell nativo en el home de WSL (tarball 7.6.3, sin sudo): libuv
+no resuelve `pwsh.exe` por interop, y `run-regression` necesita un pwsh de
+verdad. `checkPowerShell` ahora también prueba `pwsh.exe` en Linux.
+
 ## Para retomar en la próxima sesión — estado a 2026-08-15
 
-Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `8b8bdd9`; 9 commits
-locales por encima.** [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
+Rama `fix/rupturas-declaradas-y-pgid`. **Empujada hasta `0382d05` más el commit
+de la ronda 18** (`25d1fa6`, por empujar al cierre de esta sesión). [PR #41](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC/pull/41)
 abierto contra `develop` y `MERGEABLE`; el #40 (`develop` → `main`) sigue
 esperando a que #41 entre.
 
-Suite completa en Windows y POSIX (exit 0), `npm run validate` en verde,
-204 archivos de documentación con sus anclas.
+Suite completa en Windows y POSIX (exit 0, con pwsh nativo en WSL),
+`npm run validate` en verde, 204 archivos de documentación con sus anclas.
 
 ### Lo primero, en este orden
 
-- [ ] **Empujar los 9 commits locales.** El PR #41 todavía no los incluye.
-- [ ] **Ronda 18 sobre `a602f5c`**, que es el último y nadie ha revisado. La
-      ronda 17 murió por límite de subagentes antes de refutar sus 18 hallazgos
-      y **antes de la síntesis**, así que *nadie contestó* la pregunta que
-      cierra: «¿se puede publicar 2.0.0 con esto?». El patrón de esta rama es
-      que los arreglos de la ronda N fallan en la N+1, y la 17 lo confirmó tres
-      veces seguidas dentro del mismo commit.
+- [x] ~~**Empujar los 9 commits locales.**~~ Hecho; primera corrida real de
+      Actions: `validate` verde en Linux, `frontera de especificacion` roja con
+      exactamente las 3 violaciones diseñadas (el escenario bootstrap que
+      justifica el `--admin`).
+- [x] ~~**Ronda 18 sobre `a602f5c`**.~~ Ejecutada y cerrada: tres SERIO y dos
+      MEDIO arreglados, dos MENOR declarados arriba. La pregunta «¿se puede
+      publicar 2.0.0 con esto?» tiene respuesta: **sí, con los dos MENOR
+      declarados** — nada de lo encontrado era explotable sin controlar ya
+      BASE.
 - [ ] **Mergear #41 con `--admin`.** Es la única vez: el PR introduce a la vez
       el job `spec-boundary` y la allowlist que lo desbloquea, y una excepción
       solo cuenta cuando ya está en la base. Del siguiente en adelante el
@@ -193,15 +242,17 @@ Suite completa en Windows y POSIX (exit 0), `npm run validate` en verde,
 
 - [ ] Los hallazgos **razonados** (no ejecutados) sobre códigos `authz-*` sin
       caso propio. `tests/authz-git.test.mjs` cubre la mayoría de forma
-      estructural, pero no hay un caso por código.
+      estructural, y la ronda 18 añadió casos por código (10–14), pero no hay
+      todavía un caso por cada código del modelo.
 - [ ] `authz-base-unreachable` (clon superficial) no tiene caso: montar un DAG
       desconectado cuesta y se dejó fuera.
-- [ ] Ninguna ejecución real en **GitHub Actions**. Todo se probó con refs
-      simuladas (`git update-ref`). Sin verificar: el evento `pull_request` y su
-      ref `refs/pull/N/merge`, PRs desde fork, y si `actions/checkout` con
-      `fetch-depth: 0` deja `refs/remotes/origin/<base>` presente con la forma
-      que `calificarRemota` espera. **Si eso falla, el paso nuevo del workflow
-      pone rojo un caso legítimo.**
+- [x] ~~Ninguna ejecución real en **GitHub Actions**.~~ Contestado el
+      2026-08-15 al empujar `0382d05`: `validate` verde en un runner Linux, y
+      `refs/remotes/origin/<base>` **sí** existe con `fetch-depth: 0` — el paso
+      nuevo del workflow no pone rojo ningún caso legítimo. El job
+      `frontera de especificacion` bloquea con exactamente las 3 violaciones
+      diseñadas (escenario bootstrap). Falta por ver: PRs desde fork y la ref
+      `refs/pull/N/merge` en ese evento.
 
 ### Deuda declarada que sigue abierta
 
