@@ -16,7 +16,8 @@ import {
   compararPolitica,
   contractObliga,
   evaluarObligacionDeFase,
-  resolveHumanGatePolicy
+  resolveHumanGatePolicy,
+  superficiesSinClasificar
 } from "./authz.js";
 
 function git(args, target) {
@@ -340,15 +341,28 @@ export function auditarAutorizacion(target, contratoHead) {
     findings.push({ level: "error", code: obligacion.code, detail: obligacion.detail });
   } else if (obligacion.code === "authz-contract-surfaces-invalid") {
     findings.push({ level: "error", code: obligacion.code, detail: obligacion.detail });
-  } else if (obligacion.obliga) {
-    findings.push({
-      level: "error",
-      code: "authz-surfaces-unclassified",
-      detail:
-        obligacion.porQue.length > 0
-          ? `superficies que obligan a firmar: ${obligacion.porQue.join(", ")}. Clasificar los cuatro riesgos en config.surfaces y regenerar con \`sdlc upgrade\``
-          : `${obligacion.detail ?? "el contrato obliga a firmar"}. Clasificar los cuatro riesgos en config.surfaces y regenerar con \`sdlc upgrade\``
-    });
+  } else {
+    // Clasificada con riesgos NO es «sin clasificar»: una superficie con
+    // money_path u otro riesgo en `true` es el estado disenado de un repo
+    // riesgoso, y lo que exige es la atestacion en el gate humano de su fase,
+    // no un hallazgo de doctor. Solo las superficies con un riesgo que no es
+    // booleano —nadie clasifico— son accion requerida aqui.
+    const sinClasificar = superficiesSinClasificar(contratoHead?.surfaces);
+    if (sinClasificar.length > 0) {
+      findings.push({
+        level: "error",
+        code: "authz-surfaces-unclassified",
+        detail: `superficies sin clasificar: ${sinClasificar.join(", ")}. Clasificar los cuatro riesgos en config.surfaces y regenerar con \`sdlc upgrade\``
+      });
+    } else if (obligacion.obliga) {
+      // Visible pero sin alarmar: dice QUE fases van a exigir firma, no que
+      // algo este mal.
+      findings.push({
+        level: "info",
+        code: "authz-attestation-demanded",
+        detail: `superficies que obligan a firmar en su gate humano: ${obligacion.porQue.join(", ")}`
+      });
+    }
   }
 
   const politica = resolveHumanGatePolicy(contratoHead, null);

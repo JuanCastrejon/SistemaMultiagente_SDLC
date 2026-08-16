@@ -13,7 +13,7 @@
 // secuencia exacta.
 // ---------------------------------------------------------------------------
 import assert from "node:assert/strict";
-import {
+import { superficiesSinClasificar,
   RIESGOS_AUTORIZACION,
   auditSurfaceIdentity,
   POLITICAS_HUMAN_GATE,
@@ -233,6 +233,31 @@ assert.equal(auditSurfaceIdentity("no soy una lista").code, "authz-contract-surf
   const porFase = compararPolitica(con("attestation"), con("attestation", { F13: "declarative" }), ["F13"]);
   assert.equal(porFase.length, 1);
   assert.equal(porFase[0].phaseId, "F13");
+}
+
+
+// --- sin clasificar no es clasificada con riesgos (fix 2.0.1) -------------
+// Encontrado adoptando 2.0.0 en un consumidor real: un contrato plenamente
+// clasificado con riesgos true producia el mismo hallazgo que uno sin tocar,
+// y el remedio que el hallazgo dictaba ya estaba hecho.
+{
+  const clasificada = [
+    { id: 'a', money_path: true, regulated_data: false, security_critical: false, state_machine_critical: false },
+    { id: 'b', money_path: false, regulated_data: false, security_critical: true, state_machine_critical: false }
+  ];
+  assert.deepEqual(superficiesSinClasificar(clasificada), [], 'clasificadas con riesgos no son sin clasificar');
+
+  const incompleta = [
+    { id: 'a', money_path: true, regulated_data: false }, // faltan dos riesgos
+    { id: 'b', money_path: false, regulated_data: false, security_critical: false, state_machine_critical: false }
+  ];
+  assert.deepEqual(superficiesSinClasificar(incompleta), ['a'], 'solo la que tiene riesgos no booleanos');
+
+  const conCadena = [{ id: 'x', money_path: 'si', regulated_data: false, security_critical: false, state_machine_critical: false }];
+  assert.deepEqual(superficiesSinClasificar(conCadena), ['x'], 'una cadena no es una clasificacion');
+
+  assert.deepEqual(superficiesSinClasificar(undefined), []);
+  assert.deepEqual(superficiesSinClasificar([null, 'hola']), ['(sin id)', '(sin id)']);
 }
 
 console.log("authz: PASS");

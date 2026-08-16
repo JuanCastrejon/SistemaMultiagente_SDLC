@@ -40,6 +40,32 @@ export function requiredForSurface(surface) {
 }
 
 /**
+ * Las superficies REALMENTE sin clasificar, dichas por su id (G1).
+ *
+ * `requiredForSurface` devuelve `true` por DOS motivos distintos que la
+ * auditoria de doctor/upgrade no puede permitirse confundir: nadie clasifico
+ * un riesgo, o alguien lo clasifico y dio `true`. La segunda es el estado
+ * DISEÑADO de un repo con riesgos reales — «el coste aparece exactamente donde
+ * el riesgo lo justifica» (ADR 0008) — y no es un hallazgo de doctor: es lo
+ * que el gate humano de cada fase va a exigir. Confundirlas dejaba a todo repo
+ * plenamente clasificado con un error permanente `authz-surfaces-unclassified`
+ * cuyo remedio («clasifica los cuatro riesgos») ya estaba hecho. Encontrado al
+ * adoptar 2.0.0 en el consumidor real (FacturacionDian, 2026-08-16).
+ */
+export function superficiesSinClasificar(surfaces) {
+  if (!Array.isArray(surfaces)) return [];
+  return surfaces
+    .filter(
+      (surface) =>
+        !surface ||
+        typeof surface !== "object" ||
+        Array.isArray(surface) ||
+        RIESGOS_AUTORIZACION.some((riesgo) => typeof surface[riesgo] !== "boolean")
+    )
+    .map((surface) => surface?.id ?? "(sin id)");
+}
+
+/**
  * La identidad de las superficies, que es precondicion de todo lo demas (G1/G2).
  *
  * Un `id` duplicado no se resuelve conservadoramente "por superficie": haria

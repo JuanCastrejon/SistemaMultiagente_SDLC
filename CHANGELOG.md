@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.0.1] — 2026-08-16
+
+### Fixed — modelo de riesgos de autorizacion (ADR 0008)
+
+- **`doctor`/`upgrade` confundian «superficie clasificada con riesgos» con «superficie sin clasificar».** Un contrato plenamente clasificado —los cuatro riesgos como booleanos, alguno en `true`— producia el error `authz-surfaces-unclassified` con el remedio ya hecho: un repo con riesgos reales no alcanzaba un `doctor` limpio nunca. Encontrado al adoptar 2.0.0 en un consumidor real (FacturacionDian, 2026-08-16). Ahora solo las superficies con un riesgo que no es un booleano son accion requerida; las clasificadas con riesgos se reportan como `authz-attestation-demanded` (info).
+
+
 ## [2.0.0] — 2026-08-13
 
 Los defectos de esta versión salieron de **operar** el framework en el consumidor `manga-translator-mvp` durante el slice `alineacion-del-arbitro-de-calidad`, y están todos respaldados por la evidencia escrita de ese repo, no por lectura de código.
