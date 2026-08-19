@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.0.6] — 2026-08-19
+
+### Fixed — `doctor` era ciego a un override ya pisado, que es justo el estado que dejaba el bug de 2.0.2
+
+El defecto salió de auditar el consumidor `FacturacionDian` el 2026-08-19, tres días después de que el daño ocurriera. No se encontró leyendo código: se encontró porque una spec canónica del proyecto había desaparecido y nadie lo sabía.
+
+- **`collectDrift` consultaba `.sdlc/overrides.yaml` únicamente dentro de la rama "el archivo difiere de la plantilla".** Un archivo gestionado cuyo override fue clobbereado **coincide** con la plantilla del framework, así que caía fuera de esa rama y no producía hallazgo de ningún tipo: ni `managed-file-drift`, ni `managed-file-override`, ni `managed-file-override-stale`. El registro de `overrides.yaml` no se reportaba obsoleto — se evaporaba en silencio, y `doctor` daba el repo por limpio.
+
+  Es el complemento exacto del fix de 2.0.3. Aquella versión impidió que `upgrade` volviera a pisar overrides aceptados, pero no dio forma de **detectar** los que ya habían sido pisados: la reparación manual de los archivos clobbereados en 2.0.2 se hizo a ojo, y en `FacturacionDian` se saltó dos —`openspec/specs/project-phases/spec.md` (273 líneas con la ruta de fases F0–F7 del proyecto, sustituida por la plantilla genérica de 62) y `openspec/specs/business-production-readiness/spec.md`—. Ambas conservaban su entrada en `overrides.yaml` apuntando a un sha256 que ya no existía en ninguna parte, y `doctor` no dijo nada durante 3 días. Un repo con 287 archivos gestionados no se audita a mano: si el detector no lo ve, nadie lo ve.
+
+  Ahora el override se consulta **antes** de comparar contra la plantilla, para todo archivo gestionado. Un override cuyo disco ya no coincide con lo aceptado se reporta como `managed-file-override-stale` (aviso) tanto si el contenido actual es la plantilla del framework como si es cualquier otra cosa. Un override vigente sigue siendo `managed-file-override` (info) y un archivo sin override que difiere sigue siendo `managed-file-drift` (aviso): sin cambios para quien no tenga overrides pisados.
+
+- **Relacionado, misma raíz: una eliminación aceptada se reportaba como `managed-file-missing` en nivel error, para siempre.** `upgrade` escribe `deleted: true` en `overrides.yaml` desde 2.0.3 al confirmar el borrado deliberado de un archivo gestionado, pero `doctor` no conocía ese campo y trataba la ausencia como archivo faltante. El consumidor quedaba con un error permanente por haber usado el mecanismo que el propio framework le ofrece. Ahora una eliminación aceptada se reporta como `managed-file-override` con `deleted: true`; una ausencia **sin** override aceptado sigue siendo `managed-file-missing` en error, igual que antes.
+
+  Regresión cubierta en `tests/doctor-override-clobber.test.mjs`: (a) override pisado con la plantilla → `managed-file-override-stale` con `acceptedSha256` ≠ `actualSha256`, partiendo de un override vigente correctamente reportado; (b) eliminación aceptada → no genera `managed-file-missing`; (c) no-regresión: gestionado ausente sin override sigue en error. El caso (a) se verificó en rojo contra `src/cli.js` en HEAD: sin el fix, `doctor` emite **cero** hallazgos para ese path.
+
 ## [2.0.5] — 2026-08-19
 
 ### Added — `phase-gate` deja de bloquear el 100% de los PRs de un repo, y `<slice>` deja de exigir un path que ningún change usó jamás
