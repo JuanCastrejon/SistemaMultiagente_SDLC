@@ -23,7 +23,7 @@ slices:
 
 canonical_specs:
   - "openspec/specs/business-production-readiness/"
-  - "openspec/specs/project-phases/"
+  - "openspec/specs/sdlc-phases/"
 
 phase_owners:
   definition: "analista-requisitos"

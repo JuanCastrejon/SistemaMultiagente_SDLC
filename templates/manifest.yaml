@@ -355,8 +355,14 @@ templates:
     target: openspec/specs/business-production-readiness/README.md
   - source: openspec/specs/business-production-readiness/spec.md
     target: openspec/specs/business-production-readiness/spec.md
-  - source: openspec/specs/project-phases/spec.md
-    target: openspec/specs/project-phases/spec.md
+  # `sdlc-phases`, no `project-phases`: lo que esta spec canoniza son las fases
+  # del PROCESO (F0-F17), iguales en todo repo que instale el framework. El
+  # nombre anterior invitaba a leerla como "las fases de mi proyecto" y a
+  # escribir ahi una hoja de ruta de producto — que el framework entonces
+  # sobreescribia en el siguiente upgrade. `openspec/specs/project-phases/`
+  # queda fuera del set gestionado a proposito.
+  - source: openspec/specs/sdlc-phases/spec.md
+    target: openspec/specs/sdlc-phases/spec.md
   - source: openspec/profiles/minimal.yaml
     target: openspec/profiles/minimal.yaml
   - source: openspec/profiles/expanded.yaml
