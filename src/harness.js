@@ -182,13 +182,112 @@ function findPhase(contract, phaseId) {
   return contract.phases.find((phase) => String(phase.id).toUpperCase() === String(phaseId).toUpperCase()) ?? null;
 }
 
+// Lee `.github/agent-state/active-slices.yaml`. Es la unica fuente que ya
+// mapea un slice ID al nombre real de su carpeta en `openspec/changes/`
+// (`openspec_change`) y a la superficie de archivos que declara tocar
+// (`touches_locked`/`touches_proposed`) -- ambos datos ya existian para F5
+// (deteccion de overlap entre slices en vuelo) y no se reusaban aqui.
+function loadActiveSlicesFile(target) {
+  const raw = readTextIfExists(path.join(target, ".github", "agent-state", "active-slices.yaml"));
+  if (!raw) return null;
+  try {
+    return YAML.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function findSliceEntry(doc, sliceId) {
+  if (!doc) return null;
+  for (const pool of [doc.active, doc.archive]) {
+    if (!Array.isArray(pool)) continue;
+    const found = pool.find((entry) => entry && entry.slice === sliceId);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Traduccion minima de glob a regex: `**` (cualquier cosa, cruza `/`), `*`
+// (cualquier cosa dentro de un segmento) y ruta literal. Mismo alcance que
+// `gitignorePatternToRegex` en retention.js -- suficiente para lo que
+// `active-slices.yaml` ya documenta como su propio syntax ("standard globs
+// (`**`, `*`), relative to repo root"), no un motor de glob completo.
+function globToRegex(pattern) {
+  const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const withDoubleStar = escaped.replace(/\*\*/g, "\u0000DOUBLESTAR\u0000");
+  const withStar = withDoubleStar.replace(/\*/g, "[^/]*");
+  const source = withStar.replace(/\u0000DOUBLESTAR\u0000/g, ".*");
+  return new RegExp(`^${source}$`);
+}
+
+const OPENSPEC_SLICE_PREFIX = "openspec/changes/<slice>";
+
 function resolveArtifact(target, slice, artifact) {
-  const replaced = String(artifact)
+  const template = String(artifact);
+  // La convencion `openspec/changes/<slice>/...` nunca fue satisfacible: los
+  // changes de un consumidor real se nombran de forma descriptiva
+  // (`f1-tercero-updatedby-jwt`, no el slice ID), mapeados via
+  // `active-slices.yaml.openspec_change`. Sustituir `<slice>` literal aqui
+  // producia un path que ningun change real ocupo jamas -- confirmado
+  // bloqueando `SLICE-HYB-001` (~3 meses sin detectarse) y `SLICE-DOC-001`
+  // (en vivo, al archivar). Sin entrada en `active-slices.yaml` (consumidor
+  // que no la declara todavia) se conserva el comportamiento literal previo.
+  if (template === OPENSPEC_SLICE_PREFIX || template.startsWith(`${OPENSPEC_SLICE_PREFIX}/`)) {
+    const entry = findSliceEntry(loadActiveSlicesFile(target), slice);
+    if (entry?.openspec_change) {
+      const rest = template.slice(OPENSPEC_SLICE_PREFIX.length);
+      return path.resolve(target, `${entry.openspec_change}${rest}`);
+    }
+  }
+  const replaced = template
     .replaceAll("<slice>", slice)
     .replaceAll("{slice}", slice)
     .replaceAll("<slice-id>", slice)
     .replaceAll("{slice_id}", slice);
   return path.resolve(target, replaced);
+}
+
+// `--touched-paths` llega como string (CSV o multilinea, segun como el
+// invocador lo arme -- `git diff --name-only` produce una linea por archivo).
+// Sin el flag, `null`: preserva el comportamiento anterior byte a byte.
+function parseTouchedPaths(raw) {
+  if (typeof raw !== "string") return null;
+  return raw
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+// Decide si el diff de un PR toca la superficie que el slice activo declaro
+// (`touches_locked`/`touches_proposed` en `active-slices.yaml`). Default
+// SEGURO: sin datos positivos de scoping (sin entrada, o entrada sin
+// patrones declarados) el resultado es `inScope: true` -- un slice que no
+// declaro su superficie no puede volverse invisible al gate por omision, eso
+// seria el bypass que el propio Issue #49 pide no abrir.
+function computeTouchedScoping(target, slice, touchedPaths) {
+  const entry = findSliceEntry(loadActiveSlicesFile(target), slice);
+  const patterns = [...(entry?.touches_locked ?? []), ...(entry?.touches_proposed ?? [])];
+  if (patterns.length === 0) {
+    return {
+      evaluated: false,
+      inScope: true,
+      reason: entry ? "slice-declares-no-touched-paths" : "slice-not-declared-in-active-slices",
+      matchedPatterns: []
+    };
+  }
+  const regexes = patterns.map((pattern) => ({ pattern, regex: globToRegex(pattern) }));
+  const matchedPatterns = [];
+  for (const touched of touchedPaths) {
+    const normalized = String(touched).replace(/\\/g, "/").replace(/^\.\//, "");
+    const hit = regexes.find(({ regex }) => regex.test(normalized));
+    if (hit) matchedPatterns.push({ path: normalized, pattern: hit.pattern });
+  }
+  return {
+    evaluated: true,
+    inScope: matchedPatterns.length > 0,
+    reason: matchedPatterns.length > 0 ? "touches-slice-surface" : "no-touched-path-matches-slice-surface",
+    matchedPatterns
+  };
 }
 
 function checkArtifacts(target, slice, artifacts = []) {
@@ -491,14 +590,34 @@ export function commandPhaseGate(options) {
     };
   }
   const result = evaluatePhaseReadiness(target, phase, slice);
+
+  // `--touched-paths` (Issue #49, decision del lead 2026-08-18): sin scoping,
+  // `phase-gate` bloqueaba el 100% de los PRs del repo sin importar que
+  // tocaran, porque evalua el slice/fase GLOBAL del repo (phase-status.yaml),
+  // no lo que el PR realmente cambia. Con el flag, un `status: "blocked"`
+  // sobre un slice cuya superficie declarada (`touches_locked`/
+  // `touches_proposed`) el PR NO toca se reporta como `scoped-out` en vez de
+  // bloquear. `status: "error"` (contrato roto, fase no declarada) nunca se
+  // downgradea: es un defecto de configuracion, no algo que el scoping deba
+  // silenciar. Sin el flag, o con datos insuficientes para decidir el scope,
+  // el resultado es identico al de antes de esta version.
+  const touchedPaths = parseTouchedPaths(options["touched-paths"]);
+  const scoping = touchedPaths ? computeTouchedScoping(target, slice, touchedPaths) : null;
+  const scopedOut = Boolean(scoping?.evaluated && !scoping.inScope);
+
   // Without --exit-code: informative (exit 0 even when blocked, for P0 wiring).
   // With --exit-code: hard-block when blocked (P2 wiring). ADR-0006.
   const exitCode = result.status === "error"
     ? EXIT_ERROR
-    : exitCodeMode && result.status === "blocked"
-      ? EXIT_ACTION_REQUIRED
-      : EXIT_OK;
-  return { exitCode, payload: result };
+    : scopedOut
+      ? EXIT_OK
+      : exitCodeMode && result.status === "blocked"
+        ? EXIT_ACTION_REQUIRED
+        : EXIT_OK;
+  const payload = scoping
+    ? { ...result, status: scopedOut && result.status === "blocked" ? "scoped-out" : result.status, scoping }
+    : result;
+  return { exitCode, payload };
 }
 
 // ---------------------------------------------------------------------------

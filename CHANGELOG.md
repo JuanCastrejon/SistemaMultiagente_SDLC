@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [2.0.5] — 2026-08-19
+
+### Added — `phase-gate` deja de bloquear el 100% de los PRs de un repo, y `<slice>` deja de exigir un path que ningún change usó jamás
+
+Los dos defectos salieron de operar el framework en `FacturacionDian`, slice `SLICE-DOC-001` (2026-08-18), y quedaron diagnosticados y decididos por el lead del consumidor en un comentario del Issue #49 antes de tocar este repo.
+
+- **`phase-gate` evaluaba el slice/fase GLOBAL del repo (`phase-status.yaml: current_slice/current_phase`), nunca lo que el PR realmente tocaba.** Confirmado bloqueando `develop` desde el commit `fb3ae56` (2026-08-16), en TODO PR del repo, independientemente de qué archivos tocara: `openspec/changes/SLICE-HYB-001/research.md` no existía, y el gate se evaluaba igual para un PR que solo tocaba `docs/`. El propio diseño de `governance-harness-enforcement` (tarea 4.0, en `FacturacionDian`) ya había advertido este riesgo antes de implementar el flag `--exit-code` — la tarea se marcó `[x]` sin entregar el scoping del que dijo depender. El mecanismo para scopear ya existía a medias: `active-slices.yaml` declara `touches_locked`/`touches_proposed` por slice para que F5 detecte overlaps entre slices en vuelo, pero `phase-gate` no lo consultaba.
+
+  Ahora `sdlc phase-gate` acepta `--touched-paths <rutas separadas por coma o salto de linea>` (pensado para recibir `git diff --name-only` directo desde CI). Con el flag, un `status: "blocked"` sobre un slice cuya superficie declarada (`touches_locked` + `touches_proposed`) el PR **no** toca se reporta como `status: "scoped-out"` con `exitCode: 0` en vez de bloquear — el motivo queda explícito en el payload (`scoping.reason`, `scoping.matchedPatterns`), no es un silencio. `status: "error"` (contrato roto, fase no declarada) nunca se downgradea: es un defecto de configuración, no algo que el scoping deba silenciar. Y el caso que de verdad importa —un PR que SÍ toca la superficie declarada del slice, o un slice que no declaró ninguna superficie en `active-slices.yaml`— sigue bloqueando exactamente igual que antes de esta versión: sin datos positivos de scoping, el default es `inScope: true`, nunca un bypass silencioso. Sin el flag, comportamiento idéntico al de 2.0.4.
+
+- **`phase-contract.yaml` exigía `openspec/changes/<slice>/...` sustituyendo el slice ID literal como nombre de carpeta de change — una convención que ningún consumidor real satisfizo jamás.** Los changes se nombran de forma descriptiva por unidad de trabajo (`f1-tercero-updatedby-jwt`, `agent-memory-continuity`), nunca con el slice ID como nombre de carpeta; el mapeo slice → change real ya vive en `active-slices.yaml.openspec_change` desde antes de esta versión, sin que `resolveArtifact` lo consultara. Confirmado bloqueando en producción dos veces de forma independiente: `SLICE-HYB-001` (bloqueando ~3 meses sin detectarse) y `SLICE-DOC-001` (en vivo, al archivar el change, 2026-08-18) — ambas veces resuelto a mano con un stub retrospectivo en el path literal, workaround que queda documentado como red de seguridad pero que este fix vuelve innecesario en cierres futuros.
+
+  Ahora, para las plantillas `openspec/changes/<slice>/...` específicamente, `resolveArtifact` resuelve el prefijo vía `findSliceEntry(...).openspec_change` (busca la entrada del slice tanto en `active:` como en `archive:` de `active-slices.yaml`) antes de caer al reemplazo literal de `<slice>`. Un consumidor sin `active-slices.yaml`, o con una entrada sin el campo `openspec_change`, conserva el comportamiento literal de siempre — no rompe a nadie que no lo declare. El resto de plantillas del contrato (`.github/agent-state/evidence/<slice>/...`, `.github/pr-bodies/<slice>.md`, etc.) no cambia: esas sí siguen la convención literal por slice ID, que es la que el repo usa de verdad para esos artefactos.
+
+  Regresión cubierta en `tests/phase-gate-scoping.test.mjs`: resolución vía `active:` y vía `archive:`, fallback sin `active-slices.yaml`, `scoped-out` cuando el PR no toca la superficie, y el caso crítico de no-bypass — un PR que sí toca `touches_locked` sigue bloqueando con el flag presente, igual que sin él.
+
+  **Pendiente en el consumidor** (fuera de este repo): `FacturacionDian` debe actualizar `.github/workflows/quality-verify.yml` para calcular y pasar `--touched-paths` en su step de "Autorización" — sin ese wiring del lado del host, el flag existe pero no se usa y el comportamiento observado no cambia.
+
 ## [2.0.3] — 2026-08-16
 
 ### Fixed — `upgrade` pisaba en silencio overrides ya aceptados
