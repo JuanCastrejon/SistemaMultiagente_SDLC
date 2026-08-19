@@ -2,6 +2,50 @@
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-08-19
+
+### Changed — la spec de fases del framework se llama `sdlc-phases`, y `openspec/specs/project-phases/` deja de ser del framework
+
+El defecto no es de código: es de nombres y de propiedad, y salió de auditar por qué un consumidor real había perdido su hoja de ruta.
+
+- **El framework escribía su propia taxonomía de fases en `openspec/specs/project-phases/spec.md`.** Esa spec canoniza las fases del **proceso** (F0–F17), idénticas en todo repo que instale el framework — su propio texto empieza diciendo *"Define the canonical F0-F17 SDLC phases"*. El nombre invitaba a la lectura contraria: *las fases de mi proyecto*. Un consumidor la leyó así y escribió ahí 273 líneas de hoja de ruta de producto (F0 Gobierno → F7 Cierre-Operación, con criterios de entrada y salida por fase). Como la ruta era gestionada, el upgrade defectuoso de 2.0.2 la sustituyó por la plantilla de 62 líneas.
+
+  **Alcance exacto de este cambio:** esa pérdida silenciosa ya no era posible desde 2.0.3 — hoy el mismo upgrade *bloquea* con `status: conflict` en vez de pisar el archivo. Lo que 2.1.0 corrige no es la pérdida sino su causa. Mientras el framework sea dueño de una ruta cuyo nombre promete lo contrario, el consumidor arrastra conflicto y override permanentes por un archivo que nunca fue del framework — y, lo que más cuesta, `F1` sigue significando dos cosas distintas dentro del mismo repositorio: la fase 1 del proceso y la fase 1 de la migración.
+
+  Ahora la spec del framework vive en `openspec/specs/sdlc-phases/spec.md`, y su `## Purpose` dice explícitamente que son las fases del proceso y que la hoja de ruta del producto va en otra spec. **`openspec/specs/project-phases/` sale del set gestionado**: el framework no lo escribe en `install`, no lo compara en `upgrade`, no lo exige en `doctor` y no puede generar conflicto. Es del consumidor y de nadie más.
+
+- **`doctor` deja de exigir `openspec/specs/project-phases/spec.md` y pasa a exigir `openspec/specs/sdlc-phases/spec.md`** (`openspec-canonical-missing`). El framework solo puede exigir las specs que él mismo escribe; la hoja de ruta de producto del consumidor no es asunto suyo.
+
+### Added — `managed-file-override-orphan`
+
+- **Un override declarado sobre un path que el framework ya no gestiona se reportaba… no se reportaba.** `collectDrift` solo recorre archivos gestionados, así que en cuanto una ruta sale del manifiesto su entrada en `.sdlc/overrides.yaml` deja de mirarse por completo. Es el mismo silencio que 2.0.6 acaba de cerrar para el override pisado, reapareciendo por otra puerta — y esta versión abre justamente esa puerta al des-gestionar `project-phases`. Ahora se reporta como aviso `managed-file-override-orphan`, con `existsOnDisk` para distinguir el registro huérfano del archivo que sigue ahí. Una eliminación aceptada (`deleted: true`) no cuenta: que el framework además deje de gestionar el path no la convierte en problema.
+
+### Migración
+
+`migrations/2.1.0/up.mjs` **no borra nada** — el contrato de `up` solo permite devolver archivos a escribir, nunca a eliminar, y aquí eso es una garantía, no una limitación. Lo que el consumidor tenga en `openspec/specs/project-phases/spec.md` se queda intacto; el framework simplemente deja de escribir ahí. La migración lee el disco y escribe en `.sdlc/migrations/2.1.0-applied.txt` un diagnóstico distinto según lo que encuentre: ruta ausente, copia de la plantilla del framework (borrable, con el comando de `git log`/`git show` para comprobar antes si hubo contenido propio sobreescrito), o contenido propio del consumidor (se conserva; el repo pasa a ser su único dueño).
+
+Regresión en `tests/sdlc-phases-rename.test.mjs`: (a) `install` escribe la ruta nueva y **no** la vieja, y el manifiesto no la incluye; (b) `doctor` exige la nueva y no la vieja; (c) contenido propio del consumidor en la ruta vieja sobrevive a upgrades sucesivos **y deja de producir conflicto** — verificado en rojo contra el código pre-renombrado, donde el mismo upgrade sale con `exitCode: 2`, `status: conflict`; (d) override sobre path no gestionado se reporta huérfano.
+
+### Compatibilidad
+
+No hay breaking change para quien no tuviera nada en `openspec/specs/project-phases/`: recibe la spec en su ruta nueva y la vieja no existe. Quien sí tuviera algo ahí lo conserva byte a byte y deja de ver el conflicto. Es `minor` y no `patch` porque cambia el conjunto de rutas gestionadas y el set de specs canónicas que `doctor` exige.
+
+## [2.0.6] — 2026-08-19
+
+### Fixed — `doctor` era ciego a un override ya pisado, que es justo el estado que dejaba el bug de 2.0.2
+
+El defecto salió de auditar el consumidor `FacturacionDian` el 2026-08-19, tres días después de que el daño ocurriera. No se encontró leyendo código: se encontró porque una spec canónica del proyecto había desaparecido y nadie lo sabía.
+
+- **`collectDrift` consultaba `.sdlc/overrides.yaml` únicamente dentro de la rama "el archivo difiere de la plantilla".** Un archivo gestionado cuyo override fue clobbereado **coincide** con la plantilla del framework, así que caía fuera de esa rama y no producía hallazgo de ningún tipo: ni `managed-file-drift`, ni `managed-file-override`, ni `managed-file-override-stale`. El registro de `overrides.yaml` no se reportaba obsoleto — se evaporaba en silencio, y `doctor` daba el repo por limpio.
+
+  Es el complemento exacto del fix de 2.0.3. Aquella versión impidió que `upgrade` volviera a pisar overrides aceptados, pero no dio forma de **detectar** los que ya habían sido pisados: la reparación manual de los archivos clobbereados en 2.0.2 se hizo a ojo, y en `FacturacionDian` se saltó dos —`openspec/specs/project-phases/spec.md` (273 líneas con la ruta de fases F0–F7 del proyecto, sustituida por la plantilla genérica de 62) y `openspec/specs/business-production-readiness/spec.md`—. Ambas conservaban su entrada en `overrides.yaml` apuntando a un sha256 que ya no existía en ninguna parte, y `doctor` no dijo nada durante 3 días. Un repo con 287 archivos gestionados no se audita a mano: si el detector no lo ve, nadie lo ve.
+
+  Ahora el override se consulta **antes** de comparar contra la plantilla, para todo archivo gestionado. Un override cuyo disco ya no coincide con lo aceptado se reporta como `managed-file-override-stale` (aviso) tanto si el contenido actual es la plantilla del framework como si es cualquier otra cosa. Un override vigente sigue siendo `managed-file-override` (info) y un archivo sin override que difiere sigue siendo `managed-file-drift` (aviso): sin cambios para quien no tenga overrides pisados.
+
+- **Relacionado, misma raíz: una eliminación aceptada se reportaba como `managed-file-missing` en nivel error, para siempre.** `upgrade` escribe `deleted: true` en `overrides.yaml` desde 2.0.3 al confirmar el borrado deliberado de un archivo gestionado, pero `doctor` no conocía ese campo y trataba la ausencia como archivo faltante. El consumidor quedaba con un error permanente por haber usado el mecanismo que el propio framework le ofrece. Ahora una eliminación aceptada se reporta como `managed-file-override` con `deleted: true`; una ausencia **sin** override aceptado sigue siendo `managed-file-missing` en error, igual que antes.
+
+  Regresión cubierta en `tests/doctor-override-clobber.test.mjs`: (a) override pisado con la plantilla → `managed-file-override-stale` con `acceptedSha256` ≠ `actualSha256`, partiendo de un override vigente correctamente reportado; (b) eliminación aceptada → no genera `managed-file-missing`; (c) no-regresión: gestionado ausente sin override sigue en error. El caso (a) se verificó en rojo contra `src/cli.js` en HEAD: sin el fix, `doctor` emite **cero** hallazgos para ese path.
+
 ## [2.0.5] — 2026-08-19
 
 ### Added — `phase-gate` deja de bloquear el 100% de los PRs de un repo, y `<slice>` deja de exigir un path que ningún change usó jamás

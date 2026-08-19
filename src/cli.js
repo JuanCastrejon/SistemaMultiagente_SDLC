@@ -541,27 +541,51 @@ function collectDrift(target, config, manifest) {
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     const existing = readTextIfExists(absolute);
+    const override = overrides.get(relativePath);
     if (existing === null) {
-      missing.push(relativePath);
+      // Una eliminacion aceptada (`overrides.yaml` con `deleted: true`, que
+      // 2.0.3 introdujo del lado de `upgrade`) no es un archivo que falte:
+      // es una divergencia declarada. Reportarla como `managed-file-missing`
+      // dejaba al consumidor con un error permanente por haber usado el
+      // mecanismo que el propio framework le ofrece para borrarlo.
+      if (override?.deleted) {
+        overridden.push({
+          path: relativePath,
+          actualSha256: null,
+          acceptedSha256: null,
+          reason: override.reason,
+          deleted: true
+        });
+      } else {
+        missing.push(relativePath);
+      }
+      continue;
+    }
+    // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
+    // en Windows el CRLF del working tree daria dos hashes distintos para el
+    // mismo archivo segun quien lo mire.
+    const actualSha256 = sha256Text(normalizeLF(existing));
+    // El override se consulta ANTES de comparar contra la plantilla. Mientras
+    // la comparacion iba primero, un archivo gestionado cuyo override habia
+    // sido PISADO con la plantilla del framework coincidia con ella y no
+    // producia ningun hallazgo: ni drift, ni override, ni stale. El registro
+    // de `overrides.yaml` se evaporaba en silencio en vez de reportarse
+    // obsoleto — que es exactamente lo que dejo el clobber de 2.0.2 invisible
+    // para `doctor` en un consumidor real: dos specs canonicas de `openspec/`
+    // pisadas el 2026-08-16 y no detectadas hasta el 2026-08-19, aun con su
+    // entrada intacta en `overrides.yaml` apuntando a un sha ya inexistente.
+    if (override) {
+      // La divergencia esta declarada. Solo sigue siendo la misma divergencia
+      // si el archivo no cambio desde que se acepto.
+      const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
+      if (override.sha256 === actualSha256) {
+        overridden.push(entry);
+      } else {
+        staleOverrides.push(entry);
+      }
       continue;
     }
     if (normalizeLF(existing) !== content) {
-      // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
-      // en Windows el CRLF del working tree daria dos hashes distintos para el
-      // mismo archivo segun quien lo mire.
-      const actualSha256 = sha256Text(normalizeLF(existing));
-      const override = overrides.get(relativePath);
-      if (override) {
-        // La divergencia esta declarada. Solo sigue siendo la misma divergencia
-        // si el archivo no cambio desde que se acepto.
-        const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
-        if (override.sha256 === actualSha256) {
-          overridden.push(entry);
-        } else {
-          staleOverrides.push(entry);
-        }
-        continue;
-      }
       drift.push({
         path: relativePath,
         actualSha256,
@@ -571,7 +595,26 @@ function collectDrift(target, config, manifest) {
   }
   const managedPathSet = getManagedPathSet(manifest);
   const unmanaged = Object.keys(files).filter((filePath) => !managedPathSet.has(filePath));
-  return { files, drift, missing, unmanaged, overridden, staleOverrides };
+  // Un override cuyo path ya no esta en el set gestionado de esta version.
+  // Ocurre cuando el framework deja de gestionar una ruta (2.1.0 lo hace con
+  // `openspec/specs/project-phases/`). Sin este hallazgo, la divergencia
+  // aceptada dejaria de reportarse por completo en cuanto la ruta sale del
+  // manifiesto — el mismo silencio que 2.0.6 acaba de cerrar para el override
+  // pisado, reaparecido por otra puerta. `deleted: true` no cuenta: es una
+  // eliminacion aceptada, y que el framework ademas deje de gestionar el path
+  // no la vuelve un problema.
+  const orphanOverrides = [];
+  for (const [relativePath, override] of overrides) {
+    if (Object.prototype.hasOwnProperty.call(files, relativePath)) continue;
+    if (override?.deleted) continue;
+    orphanOverrides.push({
+      path: relativePath,
+      acceptedSha256: override?.sha256 ?? null,
+      reason: override?.reason,
+      existsOnDisk: pathExists(path.join(target, relativePath))
+    });
+  }
+  return { files, drift, missing, unmanaged, overridden, staleOverrides, orphanOverrides };
 }
 
 function checkCommand(command, args = ["--version"]) {
@@ -707,9 +750,12 @@ function collectDoctorEnhancements(target, config) {
     findings.push({ level: "info", code: "scale-present", message: `scale=${config.scale}` });
   }
 
+  // `sdlc-phases`, no `project-phases` (2.1.0). El framework solo exige las
+  // specs que EL mismo escribe; la hoja de ruta de producto del consumidor,
+  // si existe, no es asunto suyo y no puede ser un requisito duro.
   const canonicalSpecs = [
     "openspec/specs/business-production-readiness/spec.md",
-    "openspec/specs/project-phases/spec.md"
+    "openspec/specs/sdlc-phases/spec.md"
   ];
   for (const relativePath of canonicalSpecs) {
     if (!pathExists(path.join(target, relativePath))) {
@@ -802,6 +848,9 @@ async function commandDoctor(options) {
     }
     for (const entry of drift.staleOverrides) {
       findings.push({ level: "warning", code: "managed-file-override-stale", ...entry });
+    }
+    for (const entry of drift.orphanOverrides ?? []) {
+      findings.push({ level: "warning", code: "managed-file-override-orphan", ...entry });
     }
   }
   findings.push(...collectDoctorEnhancements(target, config));
