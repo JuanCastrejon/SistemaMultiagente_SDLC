@@ -595,7 +595,26 @@ function collectDrift(target, config, manifest) {
   }
   const managedPathSet = getManagedPathSet(manifest);
   const unmanaged = Object.keys(files).filter((filePath) => !managedPathSet.has(filePath));
-  return { files, drift, missing, unmanaged, overridden, staleOverrides };
+  // Un override cuyo path ya no esta en el set gestionado de esta version.
+  // Ocurre cuando el framework deja de gestionar una ruta (2.1.0 lo hace con
+  // `openspec/specs/project-phases/`). Sin este hallazgo, la divergencia
+  // aceptada dejaria de reportarse por completo en cuanto la ruta sale del
+  // manifiesto — el mismo silencio que 2.0.6 acaba de cerrar para el override
+  // pisado, reaparecido por otra puerta. `deleted: true` no cuenta: es una
+  // eliminacion aceptada, y que el framework ademas deje de gestionar el path
+  // no la vuelve un problema.
+  const orphanOverrides = [];
+  for (const [relativePath, override] of overrides) {
+    if (Object.prototype.hasOwnProperty.call(files, relativePath)) continue;
+    if (override?.deleted) continue;
+    orphanOverrides.push({
+      path: relativePath,
+      acceptedSha256: override?.sha256 ?? null,
+      reason: override?.reason,
+      existsOnDisk: pathExists(path.join(target, relativePath))
+    });
+  }
+  return { files, drift, missing, unmanaged, overridden, staleOverrides, orphanOverrides };
 }
 
 function checkCommand(command, args = ["--version"]) {
@@ -731,9 +750,12 @@ function collectDoctorEnhancements(target, config) {
     findings.push({ level: "info", code: "scale-present", message: `scale=${config.scale}` });
   }
 
+  // `sdlc-phases`, no `project-phases` (2.1.0). El framework solo exige las
+  // specs que EL mismo escribe; la hoja de ruta de producto del consumidor,
+  // si existe, no es asunto suyo y no puede ser un requisito duro.
   const canonicalSpecs = [
     "openspec/specs/business-production-readiness/spec.md",
-    "openspec/specs/project-phases/spec.md"
+    "openspec/specs/sdlc-phases/spec.md"
   ];
   for (const relativePath of canonicalSpecs) {
     if (!pathExists(path.join(target, relativePath))) {
@@ -826,6 +848,9 @@ async function commandDoctor(options) {
     }
     for (const entry of drift.staleOverrides) {
       findings.push({ level: "warning", code: "managed-file-override-stale", ...entry });
+    }
+    for (const entry of drift.orphanOverrides ?? []) {
+      findings.push({ level: "warning", code: "managed-file-override-orphan", ...entry });
     }
   }
   findings.push(...collectDoctorEnhancements(target, config));

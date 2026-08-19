@@ -1,8 +1,22 @@
-# Project Phases Specification
+# SDLC Phases Specification
 
 ## Purpose
 
-Define the canonical F0-F17 SDLC phases used by `{{project.name}}`.
+Define the canonical F0-F17 **SDLC** phases that govern how work moves through the
+multiagent harness in `{{project.name}}`.
+
+These are the phases of the **process**, not of the product. They describe how a
+unit of work is drafted, reviewed, planned, implemented, verified and merged —
+the same F0-F17 sequence for every repository that installs this framework.
+
+If `{{project.name}}` has its own **project** phases — a delivery roadmap,
+migration waves, release milestones — those belong in a spec this framework does
+not own, such as `openspec/specs/project-phases/`. That path is deliberately
+outside the managed set: the framework never writes to it, so a roadmap living
+there cannot be overwritten by an install or an upgrade.
+
+Keeping the two axes in separate specs is what stops `F1` from meaning two
+different things in the same repository.
 
 ## Requirements
 
