@@ -541,27 +541,51 @@ function collectDrift(target, config, manifest) {
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     const existing = readTextIfExists(absolute);
+    const override = overrides.get(relativePath);
     if (existing === null) {
-      missing.push(relativePath);
+      // Una eliminacion aceptada (`overrides.yaml` con `deleted: true`, que
+      // 2.0.3 introdujo del lado de `upgrade`) no es un archivo que falte:
+      // es una divergencia declarada. Reportarla como `managed-file-missing`
+      // dejaba al consumidor con un error permanente por haber usado el
+      // mecanismo que el propio framework le ofrece para borrarlo.
+      if (override?.deleted) {
+        overridden.push({
+          path: relativePath,
+          actualSha256: null,
+          acceptedSha256: null,
+          reason: override.reason,
+          deleted: true
+        });
+      } else {
+        missing.push(relativePath);
+      }
+      continue;
+    }
+    // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
+    // en Windows el CRLF del working tree daria dos hashes distintos para el
+    // mismo archivo segun quien lo mire.
+    const actualSha256 = sha256Text(normalizeLF(existing));
+    // El override se consulta ANTES de comparar contra la plantilla. Mientras
+    // la comparacion iba primero, un archivo gestionado cuyo override habia
+    // sido PISADO con la plantilla del framework coincidia con ella y no
+    // producia ningun hallazgo: ni drift, ni override, ni stale. El registro
+    // de `overrides.yaml` se evaporaba en silencio en vez de reportarse
+    // obsoleto — que es exactamente lo que dejo el clobber de 2.0.2 invisible
+    // para `doctor` en un consumidor real: dos specs canonicas de `openspec/`
+    // pisadas el 2026-08-16 y no detectadas hasta el 2026-08-19, aun con su
+    // entrada intacta en `overrides.yaml` apuntando a un sha ya inexistente.
+    if (override) {
+      // La divergencia esta declarada. Solo sigue siendo la misma divergencia
+      // si el archivo no cambio desde que se acepto.
+      const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
+      if (override.sha256 === actualSha256) {
+        overridden.push(entry);
+      } else {
+        staleOverrides.push(entry);
+      }
       continue;
     }
     if (normalizeLF(existing) !== content) {
-      // Hash sobre el contenido normalizado: detectConflicts hace lo mismo, y
-      // en Windows el CRLF del working tree daria dos hashes distintos para el
-      // mismo archivo segun quien lo mire.
-      const actualSha256 = sha256Text(normalizeLF(existing));
-      const override = overrides.get(relativePath);
-      if (override) {
-        // La divergencia esta declarada. Solo sigue siendo la misma divergencia
-        // si el archivo no cambio desde que se acepto.
-        const entry = { path: relativePath, actualSha256, acceptedSha256: override.sha256, reason: override.reason };
-        if (override.sha256 === actualSha256) {
-          overridden.push(entry);
-        } else {
-          staleOverrides.push(entry);
-        }
-        continue;
-      }
       drift.push({
         path: relativePath,
         actualSha256,
