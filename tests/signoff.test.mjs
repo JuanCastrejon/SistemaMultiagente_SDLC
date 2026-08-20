@@ -247,6 +247,30 @@ const createOut = JSON.parse(
 assert.equal(createOut.status, "ok", JSON.stringify(createOut));
 assert.ok(createOut.commitSha);
 assert.ok(createOut.files > 0, "el sujeto tiene que anclar archivos reales");
+// `created` es lo unico que deja al renderizador humano AFIRMAR que el commit
+// existe. Sin el, la salida sin `--json` tendria que adivinarlo por la
+// presencia de otros campos, y adivinar aqui es como se llega a decirle a
+// alguien que no firmo cuando si firmo.
+assert.equal(createOut.created, true, "el payload tiene que declarar que el commit se creo");
+
+// La MISMA firma, sin `--json`: es la invocacion que hace un humano en una
+// terminal, y la que salia completamente muda. Tiene que decir que creo el
+// commit, con que sha, y que aun falta enlazarlo.
+const createHumano = runCli([
+  "signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--create"
+]);
+assert.equal(createHumano.status, 0, createHumano.stderr);
+assert.notEqual(`${createHumano.stdout}`.trim(), "", "firmar en una terminal no puede ser mudo");
+assert.match(createHumano.stdout, /CREADO/, "tiene que decir que el commit se creo");
+assert.match(createHumano.stdout, /[0-9a-f]{40}/, "tiene que dar el sha completo del commit");
+assert.match(createHumano.stdout, /--record/, "y avisar de que la firma no quedo enlazada");
+assert.doesNotMatch(
+  createHumano.stdout,
+  /SDLC-Signoff-Subject-SHA256/,
+  "el cuerpo del commit de atestacion no es la salida humana"
+);
+// Esa segunda firma deja el arbol donde estaba para el resto del test: el
+// commit de atestacion es vacio y no toca ninguna superficie.
 
 const verifyOut = JSON.parse(
   runCli(["signoff", "--target", target, "--slice", "slice-cli", "--phase", "F13", "--verify", "--commit", createOut.commitSha, "--json"])
