@@ -431,8 +431,9 @@ sdlc signoff --slice <id> --phase <F> --record --commit <sha>
 sdlc signoff --slice <id> --phase <F> --verify --commit <sha> --require-fresh
 ```
 
-Cuatro propiedades que conviene entender antes de usarlo:
+Cinco propiedades que conviene entender antes de usarlo:
 
+- **Dice siempre qué pasó, con `--json` o sin él.** Hasta 2.1.0 la salida sin `--json` era **muda** — ni firma, ni bloqueo, ni motivo — y un gate silencioso se lee como ejecutado cuando no lo fue. Desde 2.1.1 la salida humana nombra si el commit de atestación se creó y con qué sha, si la evidencia quedó enlazada, y cuando bloquea, el `code` y el `detail`. Los fallos van por **stderr**; `--json` sigue saliendo por stdout, intacto.
 - **El sujeto se ancla al commit firmado, no al working tree.** Antes caducaba con el commit siguiente, así que no servía como registro de que una fase se aprobó. Que el árbol se haya movido después es otra pregunta: se responde con `fresh: false` y `--require-fresh`.
 - **`--record` verifica antes de escribir.** Si la firma no verifica, no escribe nada. `approved_by` se deriva del firmante que reporta git, nunca de una opción, y la referencia previa se conserva en `history`.
 - **Firmar el vacío es error duro.** Si ninguna superficie resuelve a archivos, `signoff-empty-subject`.
