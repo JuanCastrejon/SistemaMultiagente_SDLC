@@ -90,19 +90,175 @@ function parseArgs(argv) {
   return result;
 }
 
-function print(payload, json) {
+// `print` solo sabia renderizar `message` e `items`. Los payloads que devuelven
+// datos estructurados -- la mayoria: status, diff, verdict, signoff... -- no
+// traen ninguno de los dos, asi que sin `--json` el comando salia MUDO: exit
+// code correcto e invisible. `sdlc signoff --create --record` no decia ni que
+// firmo, ni que bloqueo, ni por que; un gate humano mudo se lee como ejecutado
+// cuando no lo fue (el lead lo corrio dos veces y reporto la fase firmada sin
+// que existiera commit de atestacion en ninguna ref). Ahora ningun comando
+// puede callarse: lo que el renderizador no reconoce se vuelca campo a campo
+// antes que no decir nada.
+const HUMAN_MAX_DEPTH = 4;
+
+// Campos con los que un elemento de lista se resume en una linea. El orden es
+// el de lectura, no el del objeto: primero que fue, despues por que.
+const HUMAN_SUMMARY_KEYS = ["level", "status", "step", "id", "name", "slice", "phase", "code", "path", "message", "detail"];
+
+function humanSummarizeEntry(entry) {
+  const parts = [];
+  for (const key of HUMAN_SUMMARY_KEYS) {
+    const value = entry[key];
+    if (value === undefined || value === null || typeof value === "object") continue;
+    parts.push(`${key}=${value}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : JSON.stringify(entry);
+}
+
+function humanRenderValue(key, value, indent, lines, depth) {
+  if (value === undefined) return;
+  const pad = "  ".repeat(indent);
+  if (value === null || typeof value !== "object") {
+    lines.push(`${pad}${key}: ${value}`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      lines.push(`${pad}${key}: (vacio)`);
+      return;
+    }
+    lines.push(`${pad}${key}:`);
+    for (const entry of value) {
+      if (entry === null || typeof entry !== "object") {
+        lines.push(`${pad}  - ${entry}`);
+        continue;
+      }
+      lines.push(`${pad}  - ${humanSummarizeEntry(entry)}`);
+    }
+    return;
+  }
+  // Mas profundo que esto se vuelca como JSON de una linea: seguir indentando
+  // deja de ayudar a leer, y perder el dato no es una opcion.
+  if (depth >= HUMAN_MAX_DEPTH) {
+    lines.push(`${pad}${key}: ${JSON.stringify(value)}`);
+    return;
+  }
+  const keys = Object.keys(value);
+  if (keys.length === 0) {
+    lines.push(`${pad}${key}: (vacio)`);
+    return;
+  }
+  lines.push(`${pad}${key}:`);
+  for (const nested of keys) {
+    humanRenderValue(nested, value[nested], indent + 1, lines, depth + 1);
+  }
+}
+
+function humanRenderFields(payload) {
+  const lines = [];
+  const status = payload.status ?? (payload.ok === true ? "ok" : payload.ok === false ? "blocked" : null);
+  const cabecera = [status ? `status: ${status}` : null, payload.code ? `code: ${payload.code}` : null]
+    .filter(Boolean)
+    .join("  ");
+  if (cabecera) lines.push(cabecera);
+  if (payload.detail) lines.push(String(payload.detail));
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === "status" || key === "code" || key === "detail") continue;
+    humanRenderValue(key, value, 0, lines, 0);
+  }
+  // Un payload literalmente vacio sigue teniendo que decir algo.
+  if (lines.length === 0) lines.push(JSON.stringify(payload));
+  return lines.join("\n");
+}
+
+// `signoff` tiene renderizador propio por dos razones: es el comando que
+// sostiene el gate humano de toda ruta bloqueada, y su payload de exito trae un
+// `message` que NO es un mensaje para humanos -- es el cuerpo del commit de
+// atestacion --, asi que la rama generica imprimiria ruido justo donde hace
+// falta un si/no. La distincion que nadie puede perderse es si el commit
+// existe: hay un caso real en que se creo y aun asi el comando bloquea.
+function humanRenderSignoff(payload) {
+  const lines = [];
+  const sha = typeof payload.commitSha === "string" && payload.commitSha ? payload.commitSha : null;
+  const corto = sha ? sha.slice(0, 12) : null;
+  const slice = payload.subject?.slice ?? null;
+  const phase = payload.subject?.phase ?? null;
+  const donde = slice && phase ? ` (slice ${slice}, fase ${phase})` : "";
+  const codigo = payload.code ? ` [${payload.code}]` : "";
+  const detalle = payload.detail ?? payload.message ?? null;
+
+  if (payload.status === "ok") {
+    if (payload.created === true && sha) {
+      lines.push(`signoff OK: commit de atestacion CREADO ${sha}${donde}`);
+    } else if (payload.recorded === true && sha) {
+      lines.push(`signoff OK: firma ${corto} enlazada con la evidencia${donde}`);
+    } else {
+      lines.push(`signoff OK: firma${sha ? ` ${corto}` : ""} verificada${donde}`);
+    }
+    if (payload.signer) lines.push(`  firmante: ${payload.signer}`);
+    if (payload.subject?.tree_hash) lines.push(`  arbol aprobado: ${String(payload.subject.tree_hash).slice(0, 12)}`);
+    if (payload.recorded === true && payload.evidence) lines.push(`  evidencia enlazada: ${payload.evidence}`);
+    if (payload.created === true && payload.recorded === undefined) {
+      lines.push("  AVISO: la firma no se enlazo con ninguna evidencia (falta --record): el gate de la fase seguira bloqueando.");
+    }
+    if (payload.fresh === false) {
+      lines.push("  AVISO: la firma es valida pero aprobo un arbol anterior al de HEAD.");
+    }
+    return lines.join("\n");
+  }
+
+  const etiqueta = payload.status === "error"
+    ? "ERROR"
+    : payload.status === "not-configured"
+      ? "SIN CONFIGURAR"
+      : "BLOQUEADO";
+  // El estado del commit se afirma solo cuando se conoce. `created` viene de
+  // `commandSignoff` en todas sus salidas; que falte significa que revento una
+  // excepcion en un punto indeterminado, y ahi decir "no se creo nada" seria
+  // afirmar lo que no se sabe -- justo el error que este arreglo persigue.
+  if (payload.created === true && sha) {
+    lines.push(`signoff ${etiqueta}${codigo}: el commit de atestacion ${sha} SI se creo, pero el comando no termino.`);
+  } else if (payload.created === false) {
+    lines.push(`signoff ${etiqueta}${codigo}: no hay firma valida; no se creo ni se enlazo nada.`);
+  } else {
+    lines.push(`signoff ${etiqueta}${codigo}: el comando fallo sin poder confirmar si el commit de atestacion llego a crearse.`);
+    lines.push("Comprobarlo con `git log -3 --format=\"%H %s\"` antes de reintentar.");
+  }
+  if (detalle) lines.push(String(detalle));
+  if (payload.recorded === false) {
+    lines.push("La evidencia de la fase NO quedo enlazada con ninguna firma.");
+  }
+  if (payload.path) lines.push(`ruta: ${payload.path}`);
+  return lines.join("\n");
+}
+
+// Exportado para poder probar el renderizado de cada forma de payload sin
+// montar un repo firmado con GPG por cada caso: lo que hay que fijar es que
+// NINGUN payload se renderice vacio, y eso es una propiedad de esta funcion.
+export function renderHuman(payload, command) {
+  if (payload === null || typeof payload !== "object") return String(payload ?? "");
+  if (command === "signoff") return humanRenderSignoff(payload);
+  const lines = [];
+  if (payload.message) lines.push(String(payload.message));
+  if (Array.isArray(payload.items)) {
+    for (const item of payload.items) lines.push(`- ${item}`);
+  }
+  if (lines.length > 0) return lines.join("\n");
+  return humanRenderFields(payload);
+}
+
+function print(payload, json, command = null, exitCode = EXIT_OK) {
   if (json) {
     process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
     return;
   }
-  if (payload.message) {
-    console.log(payload.message);
-  }
-  if (payload.items) {
-    for (const item of payload.items) {
-      console.log(`- ${item}`);
-    }
-  }
+  const text = renderHuman(payload, command);
+  // Lo que sale en no-cero es un diagnostico, no el resultado del comando: va a
+  // stderr para que `cmd > archivo` no se lleve el motivo del fallo y deje al
+  // usuario con un archivo vacio y ninguna pista. La salida `--json` no cambia
+  // de stream: todos los consumidores automaticos la leen por stdout.
+  const stream = exitCode === EXIT_OK ? process.stdout : process.stderr;
+  stream.write(`${text}\n`);
 }
 
 function requireTarget(options) {
@@ -999,12 +1155,12 @@ function commandSignoff(options) {
   const target = requireTarget(options);
   const loaded = loadQualityContract(target);
   if (!loaded.ok) {
-    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", code: loaded.code, path: loaded.path } };
+    return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "not-configured", created: false, code: loaded.code, path: loaded.path } };
   }
   const slice = options.slice ?? null;
   const phase = options.phase ?? null;
   if (!slice || !phase) {
-    return { exitCode: EXIT_ERROR, payload: { status: "error", message: "signoff exige --slice y --phase." } };
+    return { exitCode: EXIT_ERROR, payload: { status: "error", created: false, message: "signoff exige --slice y --phase." } };
   }
   const surfacePaths = (loaded.contract.surfaces ?? []).map((surface) => surface.path);
   const headRef = options["head-ref"] ?? options.headRef ?? "HEAD";
@@ -1024,8 +1180,8 @@ function commandSignoff(options) {
     return {
       exitCode: linked.ok ? EXIT_OK : EXIT_ACTION_REQUIRED,
       payload: linked.ok
-        ? { status: "ok", recorded: true, commitSha: options.commit, evidence: linked.path, signer: linked.signer }
-        : { status: "blocked", recorded: false, code: linked.code, detail: linked.detail }
+        ? { status: "ok", created: false, recorded: true, commitSha: options.commit, evidence: linked.path, signer: linked.signer }
+        : { status: "blocked", created: false, recorded: false, code: linked.code, detail: linked.detail }
     };
   }
 
@@ -1037,13 +1193,13 @@ function commandSignoff(options) {
     if (options.record) {
       const ready = recordPreconditions(target, { slice, phase });
       if (!ready.ok) {
-        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", recorded: false, ...ready } };
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", created: false, recorded: false, ...ready } };
       }
     }
 
     const tree = computeTreeHashAtRef(target, surfacePaths, "HEAD");
     if (!tree.ok) {
-      return { exitCode: EXIT_ERROR, payload: { status: "error", code: tree.code, message: tree.detail } };
+      return { exitCode: EXIT_ERROR, payload: { status: "error", created: false, code: tree.code, message: tree.detail } };
     }
     // El arbol sucio se comprueba ANTES de armar el sujeto: con cambios sin
     // commitear, el contrato tampoco esta en HEAD y `buildSubject` fallaria con
@@ -1053,12 +1209,12 @@ function commandSignoff(options) {
     if (!Boolean(options["allow-dirty"] ?? options.allowDirty)) {
       const sucio = worktreeDirtyForSurfaces(target, surfacePaths);
       if (sucio.dirty) {
-        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", ok: false, code: sucio.code, detail: sucio.detail } };
+        return { exitCode: EXIT_ACTION_REQUIRED, payload: { status: "blocked", created: false, ok: false, code: sucio.code, detail: sucio.detail } };
       }
     }
     const armado = buildSubject({ target, ref: "HEAD", slice, phase, treeHash: tree.hash });
     if (!armado.ok) {
-      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armado.code, message: armado.detail } };
+      return { exitCode: EXIT_ERROR, payload: { status: "error", created: false, code: armado.code, message: armado.detail } };
     }
     const subject = armado.subject;
     const created = createAttestationCommit({
@@ -1072,7 +1228,7 @@ function commandSignoff(options) {
     });
     if (!created.ok) {
       const exitCode = created.code === "signoff-commit-failed" ? EXIT_ERROR : EXIT_ACTION_REQUIRED;
-      return { exitCode, payload: { status: created.code === "signoff-commit-failed" ? "error" : "blocked", ...created, subject } };
+      return { exitCode, payload: { status: created.code === "signoff-commit-failed" ? "error" : "blocked", created: false, ...created, subject } };
     }
 
     // `--record` enlaza la firma recien creada con la evidencia de su fase.
@@ -1085,7 +1241,7 @@ function commandSignoff(options) {
       try {
         recordConfig = loadConfig(target);
       } catch (error) {
-        return { exitCode: error.exitCode ?? EXIT_ERROR, payload: { status: "error", message: error.message, ...created } };
+        return { exitCode: error.exitCode ?? EXIT_ERROR, payload: { status: "error", created: true, message: error.message, ...created } };
       }
       // Se verifica por la MISMA ruta que usara el gate, y ANTES de escribir:
       // enlazar una firma que no verifica seria afirmar una garantia inexistente.
@@ -1106,6 +1262,7 @@ function commandSignoff(options) {
           exitCode: EXIT_ACTION_REQUIRED,
           payload: {
             status: "blocked",
+            created: true,
             ...created,
             subject,
             recorded: false,
@@ -1125,16 +1282,16 @@ function commandSignoff(options) {
       if (!recorded.ok) {
         return {
           exitCode: EXIT_ACTION_REQUIRED,
-          payload: { status: "blocked", ...created, subject, recorded: false, code: recorded.code, detail: recorded.detail }
+          payload: { status: "blocked", created: true, ...created, subject, recorded: false, code: recorded.code, detail: recorded.detail }
         };
       }
       return {
         exitCode: EXIT_OK,
-        payload: { status: "ok", ...created, subject, files: tree.files, recorded: true, evidence: recorded.path, signer: verification.signer }
+        payload: { status: "ok", created: true, ...created, subject, files: tree.files, recorded: true, evidence: recorded.path, signer: verification.signer }
       };
     }
 
-    return { exitCode: EXIT_OK, payload: { status: "ok", ...created, subject, files: tree.files } };
+    return { exitCode: EXIT_OK, payload: { status: "ok", created: true, ...created, subject, files: tree.files } };
   }
 
   if (options.verify) {
@@ -1150,6 +1307,7 @@ function commandSignoff(options) {
         exitCode: EXIT_ACTION_REQUIRED,
         payload: {
           status: "not-configured",
+          created: false,
           code: "governance-maintainers-missing",
           message: "config.governance.maintainers esta vacio: ninguna firma puede resultar valida."
         }
@@ -1159,17 +1317,17 @@ function commandSignoff(options) {
     if (!commitSha) {
       return {
         exitCode: EXIT_ACTION_REQUIRED,
-        payload: { status: "blocked", ok: false, code: "signoff-commit-missing", detail: "no se declaro que commit firma la aprobacion" }
+        payload: { status: "blocked", created: false, ok: false, code: "signoff-commit-missing", detail: "no se declaro que commit firma la aprobacion" }
       };
     }
     const approved = computeTreeHashAtRef(target, surfacePaths, commitSha);
     if (!approved.ok) {
-      return { exitCode: EXIT_ERROR, payload: { status: "error", code: approved.code, message: approved.detail } };
+      return { exitCode: EXIT_ERROR, payload: { status: "error", created: false, code: approved.code, message: approved.detail } };
     }
     const current = computeTreeHashAtRef(target, surfacePaths, headRef);
     const armadoVerify = buildSubject({ target, ref: commitSha, slice, phase, treeHash: approved.hash });
     if (!armadoVerify.ok) {
-      return { exitCode: EXIT_ERROR, payload: { status: "error", code: armadoVerify.code, message: armadoVerify.detail } };
+      return { exitCode: EXIT_ERROR, payload: { status: "error", created: false, code: armadoVerify.code, message: armadoVerify.detail } };
     }
     const subject = armadoVerify.subject;
     const result = verifySignoff({
@@ -1189,6 +1347,7 @@ function commandSignoff(options) {
         exitCode: EXIT_ACTION_REQUIRED,
         payload: {
           status: "blocked",
+          created: false,
           ...result,
           ok: false,
           code: "signoff-stale",
@@ -1197,7 +1356,7 @@ function commandSignoff(options) {
         }
       };
     }
-    return { exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED, payload: { status: result.ok ? "ok" : "blocked", ...result, subject } };
+    return { exitCode: result.ok ? EXIT_OK : EXIT_ACTION_REQUIRED, payload: { status: result.ok ? "ok" : "blocked", created: false, ...result, subject } };
   }
 
   return {
@@ -1833,7 +1992,7 @@ export async function main(argv) {
     // dinamico); el resto de comandos sigue siendo sincrono y `await` sobre un
     // valor plano no cambia su comportamiento.
     const result = await run(argv);
-    print(result.payload, parsed.json);
+    print(result.payload, parsed.json, parsed.command, result.exitCode);
     process.exitCode = result.exitCode;
   } catch (error) {
     const payload = {
@@ -1841,7 +2000,8 @@ export async function main(argv) {
       message: error.message,
       stack: process.env.SDLC_DEBUG ? error.stack : undefined
     };
-    print(payload, parsed.json);
-    process.exitCode = error.exitCode ?? EXIT_ERROR;
+    const exitCode = error.exitCode ?? EXIT_ERROR;
+    print(payload, parsed.json, parsed.command, exitCode);
+    process.exitCode = exitCode;
   }
 }

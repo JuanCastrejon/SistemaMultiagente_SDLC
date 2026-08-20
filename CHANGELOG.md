@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [2.1.1] — 2026-08-20
+
+### Fixed — el CLI ya no puede terminar sin decir qué pasó
+
+`print()` sólo sabía renderizar dos campos: `message` e `items`. Los payloads que devuelven datos estructurados —la mayoría— no traen ninguno de los dos, así que **sin `--json` esos comandos salían mudos**: exit code correcto, y ninguna línea en pantalla. Auditados uno a uno contra 2.1.0, salían mudos 19 invocaciones: `diff`, `status`, `governance-check`, `tools-doctor`, `verdict`, `session-start`, `resume`, `continua`, `memory-sync`, `validate-runtime`, `coverage-diff`, `quality-docs`, `skill-lesson`, `migrate-config`, `prune-backups`, `upgrade` y las cuatro formas de `signoff`.
+
+El caso caro fue `sdlc signoff --slice <id> --phase <F> --create --record`. Es el comando que sostiene el gate humano de toda ruta bloqueada, y no decía ni que firmaba, ni que bloqueaba, ni por qué. En un repo consumidor real el lead lo ejecutó dos veces, no vio salida y reportó la fase como firmada; no existía commit de atestación en ninguna ref, tag, worktree ni working tree. **Un gate cuyo comando es mudo se lee como ejecutado cuando no lo fue.**
+
+- **Ningún subcomando puede quedarse callado.** Lo que el renderizador no reconoce se vuelca campo a campo —status, code, detail, listas anidadas incluidas— antes que no decir nada. Una lista vacía se dice (`(vacio)`), no se omite.
+- **`signoff` tiene renderizado propio**, por dos razones. Es el gate humano, y su payload de éxito trae un `message` que **no** es un mensaje para humanos: es el cuerpo del commit de atestación, que la rama genérica habría impreso como si lo fuera. Ahora dice si el commit se creó y con qué sha, si la evidencia quedó enlazada, quién firma, y —cuando bloquea— el `code` y el `detail`.
+- **La distinción que nadie puede perderse: si el commit existe.** Hay un caso real en que la firma **sí** se crea y aun así el comando bloquea (el enlace con la evidencia falla después). Decir ahí "no se creó nada" manda a firmar otra vez y deja dos commits de aprobación para la misma cosa. Los payloads de `signoff` declaran ahora `created: true|false` —campo aditivo, no rompe ningún consumidor de `--json`— y el renderizador **sólo afirma lo que ese campo dice**: si una excepción revienta en un punto indeterminado y `created` no llega, la salida dice que no se puede confirmar y da el comando para comprobarlo, en vez de afirmar de más en el sentido contrario.
+- **Los códigos de bloqueo salen por su nombre**: `signoff-worktree-dirty` (árbol sucio en las superficies declaradas; `--allow-dirty` lo salta), `signoff-empty-subject` (una superficie declarada resuelve a cero archivos) y `signoff-commit-missing` (`--record` sin `--create` exige `--commit <sha>`).
+- **Los fallos van a stderr** cuando no se pide `--json`. Un diagnóstico no es el resultado del comando: con `sdlc ... > salida.txt`, el motivo del fallo ya no se lo lleva el archivo dejando al usuario sin pista. **`--json` no cambia de stream ni de forma** — toda la automatización del framework la lee por stdout, intacta.
+
+Sin migración de estado: `migrations/2.1.1/` está vacía, existe sólo para que `upgrade` acepte la versión como destino.
+
 ## [2.1.0] — 2026-08-19
 
 ### Changed — la spec de fases del framework se llama `sdlc-phases`, y `openspec/specs/project-phases/` deja de ser del framework
