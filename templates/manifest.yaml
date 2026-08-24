@@ -203,8 +203,14 @@ templates:
     target: scripts/compute-calibration.ps1
 
   # C1 — governance
+  # `CLAUDE.md` es SEMILLA por la misma razon que `AGENTS.md`: es donde el
+  # consumidor acumula sus propias reglas, y en un repo con Claude Code es de
+  # los ficheros que mas se edita. Gestionarlo lo dejaba stale de forma
+  # permanente —salio en la medicion del 2026-08-24— y, peor, ponia al motor a
+  # un `upgrade` de distancia de pisar las reglas de gobierno del host.
   - source: CLAUDE.md
     target: CLAUDE.md
+    seed_only: true
 
   # C2 — agent-personas
   - source: .github/agents/planificador-opus.md

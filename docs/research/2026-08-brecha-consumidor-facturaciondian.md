@@ -241,3 +241,71 @@ Bastaba agrupar los 81 paths por prefijo — tres comandos, menos de un minuto �
 respuesta habría salido el primer día.
 
 Cifra medida sobre una base, atribuida a otra.
+
+---
+
+## 7. Estado de las cuatro propuestas al cerrar el 2026-08-24
+
+| # | Propuesta | Estado |
+|---|---|---|
+| 1 | `seed-only` | **Implementada.** 12 entradas marcadas. Y la §6 corrige su diagnóstico: el grueso eran mirrors |
+| 2 | Contrato de etiquetas | **Implementada.** Notación única publicada + `validate:label-notation` |
+| 3 | `enrich-us` cableada | **Implementada** en la plantilla de F1 |
+| 4 | Regla de nombres | **Implementada acotada** + auditoría de las 280 rutas |
+
+### 2 — La notación es `eje:valor`, y ahora hay quien lo comprueba
+
+`templates/docs/agents/triage-labels.md` publica la taxonomía de eje como contrato
+—`sdlc:F3`, `readiness:L2`, `surface:backend`, `rework:F9:regression`— y separa
+explícitamente las etiquetas de **flujo humano** (`needs-triage`, `ready-for-agent`…)
+como extensión del consumidor, que el motor no publica ni va a pisar. Las dos
+responden preguntas distintas: en qué fase está el trabajo, y quién tiene la pelota.
+
+Lo que faltaba no era la regla: estaba implícita y la desviación apareció igual.
+`validate:label-notation` rechaza `readiness-L1`, `sdlc-F3` y compañía en cualquier
+documento del framework. Probado con su negativo antes de darlo por bueno.
+
+**Un contrato que nada comprueba se lee como cumplido.**
+
+### 3 — F1 nombra la skill que produce sus salidas
+
+`templates/phases/F1-requirements-analysis/README.md` cita `/enrich-us` en el
+checklist y explica qué produce y dónde escribe. Se conserva la evidencia del coste:
+en el consumidor se usó en 24 de 54 sesiones, y los dos borradores escritos sin ella
+salieron sin prior art ni matriz NFR — lo que el gate de F2 tiene que aprobar.
+
+### 4 — La regla acotada, y qué salió de auditar las 280
+
+La primera versión del validador cubría `docs/`, `scripts/` y `openspec/schemas/`, y
+**marcó ~50 ficheros legítimos del motor**. Se descartó: es el mismo fallo que la §1
+denuncia. Cubrir más no es proteger más.
+
+`validate:managed-path-names` cubre los dos espacios donde una colisión **destruye**
+contenido: `openspec/specs/` —donde ocurrió el clobber— y la raíz del repo. Para
+`docs/` y `scripts/` la protección correcta no es estática: la colisión solo existe
+contra un consumidor concreto y quien la ve es `detectConflicts` con
+`UNMANAGED_EXISTING`, que bloquea antes de escribir.
+
+De la auditoría salieron dos cosas que no estaban en la propuesta:
+
+- **`CLAUDE.md` seguía gestionado.** Es donde un repo con Claude Code acumula sus
+  reglas de gobierno, y salió en la medición como stale. Pasa a semilla: el motor
+  estaba a un `upgrade` de distancia de pisarlo.
+- **`openspec/specs/business-production-readiness/` es la misma forma que
+  `project-phases`.** Un consumidor con su propia capacidad de readiness de negocio
+  colisionaría. Renombrarla exige migrar a los consumidores instalados, así que queda
+  como **riesgo aceptado y escrito** en las exenciones del validador — no como
+  descuido. Es la única deuda que la auditoría deja abierta.
+
+### Sobre las 7 fases del consumidor y las 17 del motor
+
+No es una comparación: **son ejes distintos, y el motor ya lo dice**. El `Purpose` de
+`sdlc-phases/spec.md` lo deja escrito desde 2.1.0 — F0–F17 son las fases del
+**proceso** (cómo una unidad de trabajo se redacta, revisa, planifica, implementa,
+verifica y mergea), y el roadmap de producto de un consumidor —olas de migración,
+hitos— es otro eje que vive en una spec que el framework **no gestiona**.
+
+Verificado hoy en el consumidor: `project-phases` tiene **0 entradas** en los 280
+`managedFiles`, y `sdlc-phases` sí está. La separación funciona. La pregunta de cuál
+es mejor no tiene respuesta porque ninguna sustituye a la otra: es exactamente la
+confusión que produjo el clobber, y por eso el arreglo fue renombrar, no elegir.

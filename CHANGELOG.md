@@ -12,6 +12,28 @@ El coste no es el ruido: **un control cuyas alertas nadie puede cerrar enseña a
 
 La fuente de verdad es el manifiesto de plantillas que viaja con el motor, **no** el `install-manifest.json` del consumidor: así un repo ya instalado hereda la categoría en cuanto actualiza, sin migración y sin reinstalar.
 
+### Added — el contrato de etiquetas tiene una sola notación, y un validador que la sostiene
+
+Medido en un consumidor: convivían **tres** notaciones. El motor publica `readiness:L1` con dos puntos; el consumidor tenía su propio conjunto de flujo humano (`needs-triage`, `ready-for-agent`…), sin solapamiento; y su flujo declaraba como salida **obligatoria** de F3 unas etiquetas `readiness-Lx` **con guion, que no existían en ninguno de los dos**. Cualquier automatización contra esa línea falla o inventa una tercera taxonomía, porque `gh label create` acepta el nombre sin rechistar.
+
+`templates/docs/agents/triage-labels.md` publica ahora la taxonomía de eje como contrato explícito —`sdlc:Fx`, `readiness:Lx`, `surface:*`, `rework:*`— y separa las etiquetas de flujo humano como **extensión del consumidor**, que el motor no publica ni pisa: responden preguntas distintas (en qué fase está el trabajo, frente a quién tiene la pelota).
+
+`validate:label-notation` rechaza la variante con guion en cualquier documento del framework. La regla ya estaba implícita y la desviación apareció igual: **un contrato que nada comprueba se lee como cumplido**.
+
+### Added — la plantilla de F1 nombra `/enrich-us`
+
+`enrich-us` produce exactamente las salidas declaradas de F1 —borrador enriquecido, readiness, KPI, matriz NFR, prior art— y escribe donde F1 las espera, pero el flujo describía qué producir y quién, nunca **con qué**. En un consumidor real se usó en 24 de 54 sesiones de un mes, y los dos borradores escritos sin ella salieron sin prior art ni matriz NFR — que es precisamente lo que el gate de F2 tiene que aprobar.
+
+### Added — `validate:managed-path-names`: la regla que sobrevive al caso concreto
+
+La causa raíz del clobber de `00b92ce` no fue un fallo de copia: fue que el motor ocupaba `openspec/specs/project-phases/` para su taxonomía F0–F17 mientras el consumidor tenía ahí su propio modelo de fases. 2.1.0 lo renombró a `sdlc-phases/`; sin una regla, ese arreglo protege un nombre y deja la puerta abierta al siguiente.
+
+El validador cubre **dos** espacios: `openspec/specs/` —donde ocurrió— y la raíz del repo. Deliberadamente estrecho: la primera versión cubría también `docs/`, `scripts/` y `openspec/schemas/`, marcó ~50 ficheros legítimos, y se descartó por ser el mismo defecto que este release corrige en `doctor`. Para esos espacios la protección correcta no es estática — la colisión solo existe contra un consumidor concreto, y `detectConflicts` ya la bloquea con `UNMANAGED_EXISTING` antes de escribir.
+
+Un `target` en esos dos espacios necesita una de tres: nombre namespaced (`sdlc-*`, `.sdlc/`), `seed_only: true`, o una exención **con la razón escrita**.
+
+De auditar las 280 rutas salieron dos cosas: **`CLAUDE.md` seguía gestionado** —donde un repo con Claude Code acumula sus reglas de gobierno— y pasa a semilla; y `openspec/specs/business-production-readiness/` **es la misma forma que `project-phases`**, así que queda como riesgo aceptado y escrito en las exenciones, porque renombrarla exige migrar a los consumidores instalados.
+
 ### Fixed — un mirror de skill se compara con su canónica local, no con la plantilla del motor
 
 Tras `seed_only` quedaban 71 stale, y **66 eran mirrors**: 22 skills × 3 entornos (`.claude/`, `.agents/`, `.windsurf/`). Un mirror es función **pura** de su canónica local, pero `doctor` lo comparaba contra la plantilla del motor — que mide otra cosa: si la canónica del consumidor sigue siendo la que el motor entregó. Para un consumidor que gobierna sus propias skills, eso es stale permanente que su bootstrap renueva en cada corrida.
