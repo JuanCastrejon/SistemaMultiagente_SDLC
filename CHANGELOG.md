@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed — `save`, `resume` y `continua` dejan de ser stubs de 18 líneas
+
+Las tres se entregaban con el comando y tres reglas genéricas. Todo lo que un consumidor aprende a golpes —los esqueletos que el hook deja en cada merge, cuál de los cinco ficheros del vault es el bueno, qué hace retomable un checkpoint— vivía en sus checkpoints, que es justo lo que nadie carga solo. Cada repo nuevo volvía a tropezar con lo mismo.
+
+Ahora traen lo medido: que el CLI escribe un **esqueleto** y la narrativa la escribe el agente; que el marcador que decide es el **cuerpo** —cero `_(pendiente de redactar)_`— y no una etiqueta de frontmatter, con la razón escrita; qué mirar en la salida de `resume` (`usableCheckpoint`, `skeletonsSinceUsable`); que `continua` **hereda** de `resume` la selección de checkpoint y por tanto su trampa; y que el disparador del loop de skills vivas es `sdlc skill-lesson --record`, con la nota de que registrar es local y commitear el ledger es otra decisión, porque su ruta está en las superficies bloqueadas del guard de frontera a propósito.
+
+Con lo que más ahorra de todo: **lo más valioso de un checkpoint son los callejones sin salida** — «se intentó X, no funciona porque Y, no volver a proponerlo».
+
+Los mirrors estáticos de las tres se regeneraron desde su canónica.
+
 ### Added — `seed_only`: los ficheros que el motor escribe una vez y después son del host
 
 Medido en un consumidor con un mes de operación: `sdlc doctor` devolvía **161 hallazgos, 81 de ellos `managed-file-override-stale`**. Y `upgrade --dry-run` bloqueaba sobre nueve ficheros que el host **tiene que editar para operar** — `current-slice.md`, `open-risks.md`, `active-slices.yaml`, `phase-status.yaml`, `AGENTS.md`, `indice-operativo.md`, `docs/agents/domain.md`, `.graphifyignore`, `spec-boundary-allowlist.yaml`.
