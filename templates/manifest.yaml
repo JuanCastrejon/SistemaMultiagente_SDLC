@@ -4,9 +4,33 @@
 # Walk ciego de templates/ esta prohibido por validator no-inline-managed-content.
 #
 # Campos por entry:
-#   source : path relativo dentro de templates/
-#   target : path destino en el repo consumidor
-#   modes  : opcional, lista de modes permitidos. Ausente = todos.
+#   source    : path relativo dentro de templates/
+#   target    : path destino en el repo consumidor
+#   modes     : opcional, lista de modes permitidos. Ausente = todos.
+#   seed_only : opcional. `true` = SEMILLA, no plantilla.
+#
+# La diferencia entre `managed` y `seed_only` no es de grado: es de PROPIEDAD.
+#
+#   managed   -> el fichero es del motor. `upgrade` lo actualiza (o bloquea si
+#                hay override), `doctor` reporta drift contra su sha.
+#   seed_only -> el motor lo escribe UNA VEZ, al instalar, si no existe.
+#                Despues es del host: `upgrade` no lo toca nunca y `doctor` no
+#                compara su sha. Solo avisa, a nivel info, si desaparecio.
+#
+# Por que existe la categoria. Medido en un consumidor con un mes de operacion:
+# `doctor` devolvia 157 hallazgos y **72 eran `managed-file-override-stale`**
+# sobre ficheros de ESTADO VIVO del host —`current-slice.md`, `open-risks.md`,
+# `active-slices.yaml`, `phase-status.yaml`, `AGENTS.md`—. Cambian cada sesion
+# POR DISEÑO, asi que cada edicion legitima los volvia stale: 72 avisos
+# permanentes que nadie podia cerrar.
+#
+# El coste no es el ruido. Es que un control cuyas alertas no se pueden atender
+# enseña a ignorar `doctor` entero. En ese mismo consumidor habia UN
+# `managed-file-drift` real sobre `quality-contract.yaml` —el unico fichero con
+# riesgo de clobber— enterrado bajo los 72 inertes.
+#
+# Y `upgrade --dry-run` bloqueaba sobre nueve ficheros: exactamente esos. El
+# motor bloqueaba el upgrade sobre lo que el host tiene que editar para operar.
 version: 1
 templates:
   # `.gitignore` ANIDADO dentro de .sdlc/, en vez de tocar el del consumidor:
@@ -16,8 +40,10 @@ templates:
     target: .sdlc/.gitignore
   - source: AGENTS.md
     target: AGENTS.md
+    seed_only: true
   - source: indice-operativo.md
     target: indice-operativo.md
+    seed_only: true
   - source: quality-contract.yaml
     target: quality-contract.yaml
   - source: .sdlc/README.md
@@ -34,16 +60,22 @@ templates:
     target: .github/agent-state/phase-graph.yaml
   - source: .github/agent-state/phase-status.yaml
     target: .github/agent-state/phase-status.yaml
+    seed_only: true
   - source: .github/agent-state/active-slices.yaml
     target: .github/agent-state/active-slices.yaml
+    seed_only: true
   - source: .github/agent-state/current-slice.md
     target: .github/agent-state/current-slice.md
+    seed_only: true
   - source: .github/agent-state/open-decisions.md
     target: .github/agent-state/open-decisions.md
+    seed_only: true
   - source: .github/agent-state/open-risks.md
     target: .github/agent-state/open-risks.md
+    seed_only: true
   - source: .github/agent-state/platform-context.json
     target: .github/agent-state/platform-context.json
+    seed_only: true
   - source: .github/agent-state/handoffs/TEMPLATE.md
     target: .github/agent-state/handoffs/TEMPLATE.md
   - source: .github/agent-state/handoffs/.gitkeep
@@ -88,6 +120,7 @@ templates:
     target: docs/agents/issue-tracker.md
   - source: docs/agents/domain.md
     target: docs/agents/domain.md
+    seed_only: true
   - source: openspec/config-greenfield.yaml
     target: openspec/config.yaml
     modes: [greenfield]
@@ -96,6 +129,7 @@ templates:
     modes: [legacy]
   - source: graphifyignore
     target: .graphifyignore
+    seed_only: true
   - source: scripts/continua.ps1
     target: scripts/continua.ps1
   - source: scripts/continua.mjs
@@ -138,6 +172,7 @@ templates:
     target: .github/workflows/quality-verify.yml
   - source: .github/agent-state/spec-boundary-allowlist.yaml
     target: .github/agent-state/spec-boundary-allowlist.yaml
+    seed_only: true
   # .github/agent-state/quality-baseline.yaml NO se gestiona: `promoteBaseline`
   # lo reescribe en cada promocion, igual que .sdlc/session.json con
   # session-start. Gestionarlo producia el mismo problema: managed-file-drift
@@ -168,8 +203,14 @@ templates:
     target: scripts/compute-calibration.ps1
 
   # C1 — governance
+  # `CLAUDE.md` es SEMILLA por la misma razon que `AGENTS.md`: es donde el
+  # consumidor acumula sus propias reglas, y en un repo con Claude Code es de
+  # los ficheros que mas se edita. Gestionarlo lo dejaba stale de forma
+  # permanente —salio en la medicion del 2026-08-24— y, peor, ponia al motor a
+  # un `upgrade` de distancia de pisar las reglas de gobierno del host.
   - source: CLAUDE.md
     target: CLAUDE.md
+    seed_only: true
 
   # C2 — agent-personas
   - source: .github/agents/planificador-opus.md

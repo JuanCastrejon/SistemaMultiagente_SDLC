@@ -2,6 +2,72 @@
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-08-24
+
+**`sdlc doctor` pasa de 161 hallazgos a 81 en un consumidor real**, y de 81 `managed-file-override-stale` a 4, sin perder ninguno de los reales. Los que quedan son accionables uno por uno.
+
+Minor y no patch: hay un campo nuevo de manifiesto (`seed_only`), dos códigos de hallazgo nuevos (`seed-file-missing`, `skill-mirror-stale`), campos nuevos en el payload de `resume` (`usableCheckpoint`, `skeletonsSinceUsable`) y un cambio de comportamiento en `save --event post-merge`, que deja de apilar. Todo compatible hacia atrás: ningún consumidor tiene que hacer nada, y la migración `2.2.0` está vacía a propósito.
+
+### Changed — `save`, `resume` y `continua` dejan de ser stubs de 18 líneas
+
+Las tres se entregaban con el comando y tres reglas genéricas. Todo lo que un consumidor aprende a golpes —los esqueletos que el hook deja en cada merge, cuál de los cinco ficheros del vault es el bueno, qué hace retomable un checkpoint— vivía en sus checkpoints, que es justo lo que nadie carga solo. Cada repo nuevo volvía a tropezar con lo mismo.
+
+Ahora traen lo medido: que el CLI escribe un **esqueleto** y la narrativa la escribe el agente; que el marcador que decide es el **cuerpo** —cero `_(pendiente de redactar)_`— y no una etiqueta de frontmatter, con la razón escrita; qué mirar en la salida de `resume` (`usableCheckpoint`, `skeletonsSinceUsable`); que `continua` **hereda** de `resume` la selección de checkpoint y por tanto su trampa; y que el disparador del loop de skills vivas es `sdlc skill-lesson --record`, con la nota de que registrar es local y commitear el ledger es otra decisión, porque su ruta está en las superficies bloqueadas del guard de frontera a propósito.
+
+Con lo que más ahorra de todo: **lo más valioso de un checkpoint son los callejones sin salida** — «se intentó X, no funciona porque Y, no volver a proponerlo».
+
+Los mirrors estáticos de las tres se regeneraron desde su canónica.
+
+### Added — `seed_only`: los ficheros que el motor escribe una vez y después son del host
+
+Medido en un consumidor con un mes de operación: `sdlc doctor` devolvía **161 hallazgos, 81 de ellos `managed-file-override-stale`**. Y `upgrade --dry-run` bloqueaba sobre nueve ficheros que el host **tiene que editar para operar** — `current-slice.md`, `open-risks.md`, `active-slices.yaml`, `phase-status.yaml`, `AGENTS.md`, `indice-operativo.md`, `docs/agents/domain.md`, `.graphifyignore`, `spec-boundary-allowlist.yaml`.
+
+El coste no es el ruido: **un control cuyas alertas nadie puede cerrar enseña a ignorar `doctor` entero**. En ese mismo consumidor había un `managed-file-drift` real sobre `quality-contract.yaml` —el único fichero con riesgo de clobber— enterrado bajo los inertes.
+
+`templates/manifest.yaml` acepta ahora `seed_only: true` por entrada. Una semilla se escribe **al instalar si no existe**; después `upgrade` no la toca nunca y `doctor` no compara su sha. Su ausencia sí se dice, a nivel **info** (`seed-file-missing`): borrarla puede ser legítimo, pero sin `phase-status.yaml` no hay `resume`, y callarlo sería peor que el ruido que se acaba de quitar. Un `deleted: true` en `overrides.yaml` la hace definitiva — y ahora eso vale también en `install`, que antes recreaba lo que `upgrade` sí respetaba.
+
+La fuente de verdad es el manifiesto de plantillas que viaja con el motor, **no** el `install-manifest.json` del consumidor: así un repo ya instalado hereda la categoría en cuanto actualiza, sin migración y sin reinstalar.
+
+### Added — el contrato de etiquetas tiene una sola notación, y un validador que la sostiene
+
+Medido en un consumidor: convivían **tres** notaciones. El motor publica `readiness:L1` con dos puntos; el consumidor tenía su propio conjunto de flujo humano (`needs-triage`, `ready-for-agent`…), sin solapamiento; y su flujo declaraba como salida **obligatoria** de F3 unas etiquetas `readiness-Lx` **con guion, que no existían en ninguno de los dos**. Cualquier automatización contra esa línea falla o inventa una tercera taxonomía, porque `gh label create` acepta el nombre sin rechistar.
+
+`templates/docs/agents/triage-labels.md` publica ahora la taxonomía de eje como contrato explícito —`sdlc:Fx`, `readiness:Lx`, `surface:*`, `rework:*`— y separa las etiquetas de flujo humano como **extensión del consumidor**, que el motor no publica ni pisa: responden preguntas distintas (en qué fase está el trabajo, frente a quién tiene la pelota).
+
+`validate:label-notation` rechaza la variante con guion en cualquier documento del framework. La regla ya estaba implícita y la desviación apareció igual: **un contrato que nada comprueba se lee como cumplido**.
+
+### Added — la plantilla de F1 nombra `/enrich-us`
+
+`enrich-us` produce exactamente las salidas declaradas de F1 —borrador enriquecido, readiness, KPI, matriz NFR, prior art— y escribe donde F1 las espera, pero el flujo describía qué producir y quién, nunca **con qué**. En un consumidor real se usó en 24 de 54 sesiones de un mes, y los dos borradores escritos sin ella salieron sin prior art ni matriz NFR — que es precisamente lo que el gate de F2 tiene que aprobar.
+
+### Added — `validate:managed-path-names`: la regla que sobrevive al caso concreto
+
+La causa raíz del clobber de `00b92ce` no fue un fallo de copia: fue que el motor ocupaba `openspec/specs/project-phases/` para su taxonomía F0–F17 mientras el consumidor tenía ahí su propio modelo de fases. 2.1.0 lo renombró a `sdlc-phases/`; sin una regla, ese arreglo protege un nombre y deja la puerta abierta al siguiente.
+
+El validador cubre **dos** espacios: `openspec/specs/` —donde ocurrió— y la raíz del repo. Deliberadamente estrecho: la primera versión cubría también `docs/`, `scripts/` y `openspec/schemas/`, marcó ~50 ficheros legítimos, y se descartó por ser el mismo defecto que este release corrige en `doctor`. Para esos espacios la protección correcta no es estática — la colisión solo existe contra un consumidor concreto, y `detectConflicts` ya la bloquea con `UNMANAGED_EXISTING` antes de escribir.
+
+Un `target` en esos dos espacios necesita una de tres: nombre namespaced (`sdlc-*`, `.sdlc/`), `seed_only: true`, o una exención **con la razón escrita**.
+
+De auditar las 280 rutas salieron dos cosas: **`CLAUDE.md` seguía gestionado** —donde un repo con Claude Code acumula sus reglas de gobierno— y pasa a semilla; y `openspec/specs/business-production-readiness/` **es la misma forma que `project-phases`**, así que queda como riesgo aceptado y escrito en las exenciones, porque renombrarla exige migrar a los consumidores instalados.
+
+### Fixed — un mirror de skill tampoco bloquea el `upgrade`: es un derivado, no una plantilla que fusionar
+
+Tercera puerta del mismo defecto. `doctor` ya trataba el mirror como derivado, pero `detectConflicts` —quien decide si `upgrade` bloquea— seguía comparándolo contra la versión del motor. Medido en el mismo consumidor: **12 de 23 conflictos eran mirrors, todos falsos**. No hay nada que fusionar en un fichero que se recalcula.
+
+Los mirrors se regeneran **al final** del pase de escritura, desde la canónica que quedó en disco: la del motor si el consumidor aceptó la plantilla nueva, la suya si mantuvo su override. Derivar antes obligaría a adivinar cuál de las dos gana. El manifiesto guarda ese mismo contenido — un sha que no corresponde a ningún fichero es peor que no tenerlo.
+
+**`upgrade --dry-run` sobre el consumidor: 23 conflictos → 8**, y los 8 son ficheros que de verdad personalizó.
+
+### Fixed — un mirror de skill se compara con su canónica local, no con la plantilla del motor
+
+Tras `seed_only` quedaban 71 stale, y **66 eran mirrors**: 22 skills × 3 entornos (`.claude/`, `.agents/`, `.windsurf/`). Un mirror es función **pura** de su canónica local, pero `doctor` lo comparaba contra la plantilla del motor — que mide otra cosa: si la canónica del consumidor sigue siendo la que el motor entregó. Para un consumidor que gobierna sus propias skills, eso es stale permanente que su bootstrap renueva en cada corrida.
+
+La comparación correcta añade además una señal que no existía: **Claude Code carga `.claude/skills/`, no la canónica**. Editar `.github/skills/x/SKILL.md` sin regenerar los mirrors deja al agente ejecutando la versión anterior de la skill que el repo cree tener. Eso es `skill-mirror-stale`, con el nombre de la skill y la ruta contra la que se comparó.
+
+Se compara el **cuerpo**, nunca el pie de procedencia: el motor hashea sobre LF normalizado y el bootstrap de un consumidor real hasheaba con CRLF, lo que marcaba stale a tres mirrors byte a byte correctos. Y aun coincidiendo, comparar el pie mediría lo que el mirror **declara de sí mismo** en lugar de lo que contiene.
+
+**Efecto agregado sobre el consumidor medido: 161 → 81 hallazgos**, con `managed-file-override-stale` de 81 a 5, sin perder ningún hallazgo real (los 4 `managed-file-drift` siguen ahí). Regresión en `tests/seed-only.test.mjs` — 8 casos, incluido el que comprueba que un fichero `managed` **sigue** reportando drift: cambiar un control inútil por uno ciego habría sido peor.
+
 ### Fixed — `resume` entregaba el checkpoint que el hook acababa de vaciar
 
 El hook `post-merge` corre `sdlc save` en **cada merge**, así que deja un esqueleto con las cinco secciones narrativas en `_(pendiente de redactar)_` y con marca de tiempo **posterior** a la del checkpoint que alguien acababa de redactar. `resume` elegía por fecha, así que entregaba ese. Medido en un repo consumidor el 2026-08-24: **35 checkpoints en un día, 34 esqueletos y 1 redactado**.

@@ -107,6 +107,19 @@ tools:
       (index.md, guide/new-benchmark.md para el formato de tareas, sleep/README.md).
       `skillopt-sleep` revisa sesiones de agente y PREPARA actualizaciones de skill para
       adopcion humana, que es exactamente el gate en serie que exige el ADR 025.
+      EL DISPARADOR NO ES SKILLOPT: es `sdlc skill-lesson --record`, que ya trae este
+      motor. Registra el incidente cuando pasa y sube un contador si se repite; a las 2
+      apariciones deja de ser incidente y es un patron promovible. Sin ese registro no
+      hay material que optimizar, y medido en un consumidor real ese ledger estuvo un
+      mes vacio porque el comando no figuraba en la ayuda del CLI.
+    dataBoundary: >-
+      `skillopt-sleep` con backend `mock` no llama a ningun proveedor, pero con un backend
+      REAL envia extractos truncados de las transcripciones cosechadas al proveedor elegido,
+      para mining, replay, juicio y reflexion. La redaccion de secretos que hace es
+      defense-in-depth declarada, NO una garantia. El flujo revisable que el propio upstream
+      documenta —cosechar a un fichero de tareas, inspeccionarlo y redactarlo, marcarlo
+      `"reviewed": true`, y solo entonces reproducirlo— es obligatorio en cualquier repo
+      con datos regulados o credenciales en su historial de sesiones.
     notUsedFor: >-
       Editar directamente `.github/skills/` ni sus mirrors. Sus ediciones entran como propuesta
       bajo openspec/changes/ y las aprueba una persona: SkillOpt acepta por metrica automatica y
@@ -160,9 +173,20 @@ tools:
     install: null
     manual: >-
       Correr `pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1`.
+      `pwsh`, no `powershell`: Windows PowerShell 5.1 falla en ese script y el error
+      hace creer que el repo esta roto cuando solo se uso el interprete equivocado.
       NO se automatiza a proposito: permitir un interprete (pwsh, node) en la allowlist
       la convierte en permiso para ejecutar cualquier archivo del repo, que es lo contrario
       de lo que una allowlist hace.
+      Coleccion curada multi-entorno adicional: https://github.com/vercel-labs/agent-skills
+      (CLI en vercel-labs/skills), consumida por manifiesto en el repo destino.
+    trampa: >-
+      EL AGENTE NO LEE LA CANONICA. Claude Code carga `.claude/skills/`, Codex y Copilot
+      `.agents/skills/`, Windsurf `.windsurf/skills/`. Editar `.github/skills/x/SKILL.md`
+      NO surte efecto hasta re-ejecutar el bootstrap: el registro de skills sigue
+      mostrando la version anterior y se depura un comportamiento que ya no esta escrito.
+      Desde 2.2.0 `sdlc doctor` lo detecta como `skill-mirror-stale`, comparando cada
+      mirror contra su canonica local.
     notUsedFor: Reemplazar las skills internas protegidas (commit, enrich-us, openspec-*, contexto-proyecto).
 
   - id: caveman
