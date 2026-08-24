@@ -411,9 +411,19 @@ const pmDefault = makeRepo("pm-default");
 const detectedDefault = detectPackageManager(pmDefault);
 assert.equal(detectedDefault.name, "pnpm");
 assert.equal(detectedDefault.source, "default");
+// CORREGIDO EN 2.2.1. Esta asercion fijaba `["pnpm","run",<script>,"--if-present"]`,
+// que es la forma ROTA: detras del nombre del script, pnpm deja de leer el flag
+// como suyo y se lo pasa al script. La asercion de npm, doce lineas mas arriba,
+// ya exigia el orden correcto — las dos convivian en el mismo fichero fijando
+// convenciones opuestas.
+//
+// El defecto salio en un consumidor real: `validate:openspec` es
+// `openspec validate --all`, recibia `--all "--if-present"` y moria con
+// `unknown option`; `sdlc verdict` lo contaba como BLOCKING y devolvia
+// NOT-READY con los 18 validadores en verde.
 assert.deepEqual(detectedDefault.runScript("validate:drift"), [
   "corepack",
-  ["pnpm", "run", "validate:drift", "--if-present"]
+  ["pnpm", "run", "--if-present", "validate:drift"]
 ]);
 
 // tools-doctor reporta el package manager detectado en vez de exigir pnpm.
