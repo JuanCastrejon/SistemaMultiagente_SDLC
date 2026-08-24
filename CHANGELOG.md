@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added — `seed_only`: los ficheros que el motor escribe una vez y después son del host
+
+Medido en un consumidor con un mes de operación: `sdlc doctor` devolvía **161 hallazgos, 81 de ellos `managed-file-override-stale`**. Y `upgrade --dry-run` bloqueaba sobre nueve ficheros que el host **tiene que editar para operar** — `current-slice.md`, `open-risks.md`, `active-slices.yaml`, `phase-status.yaml`, `AGENTS.md`, `indice-operativo.md`, `docs/agents/domain.md`, `.graphifyignore`, `spec-boundary-allowlist.yaml`.
+
+El coste no es el ruido: **un control cuyas alertas nadie puede cerrar enseña a ignorar `doctor` entero**. En ese mismo consumidor había un `managed-file-drift` real sobre `quality-contract.yaml` —el único fichero con riesgo de clobber— enterrado bajo los inertes.
+
+`templates/manifest.yaml` acepta ahora `seed_only: true` por entrada. Una semilla se escribe **al instalar si no existe**; después `upgrade` no la toca nunca y `doctor` no compara su sha. Su ausencia sí se dice, a nivel **info** (`seed-file-missing`): borrarla puede ser legítimo, pero sin `phase-status.yaml` no hay `resume`, y callarlo sería peor que el ruido que se acaba de quitar. Un `deleted: true` en `overrides.yaml` la hace definitiva — y ahora eso vale también en `install`, que antes recreaba lo que `upgrade` sí respetaba.
+
+La fuente de verdad es el manifiesto de plantillas que viaja con el motor, **no** el `install-manifest.json` del consumidor: así un repo ya instalado hereda la categoría en cuanto actualiza, sin migración y sin reinstalar.
+
+### Fixed — un mirror de skill se compara con su canónica local, no con la plantilla del motor
+
+Tras `seed_only` quedaban 71 stale, y **66 eran mirrors**: 22 skills × 3 entornos (`.claude/`, `.agents/`, `.windsurf/`). Un mirror es función **pura** de su canónica local, pero `doctor` lo comparaba contra la plantilla del motor — que mide otra cosa: si la canónica del consumidor sigue siendo la que el motor entregó. Para un consumidor que gobierna sus propias skills, eso es stale permanente que su bootstrap renueva en cada corrida.
+
+La comparación correcta añade además una señal que no existía: **Claude Code carga `.claude/skills/`, no la canónica**. Editar `.github/skills/x/SKILL.md` sin regenerar los mirrors deja al agente ejecutando la versión anterior de la skill que el repo cree tener. Eso es `skill-mirror-stale`, con el nombre de la skill y la ruta contra la que se comparó.
+
+Se compara el **cuerpo**, nunca el pie de procedencia: el motor hashea sobre LF normalizado y el bootstrap de un consumidor real hasheaba con CRLF, lo que marcaba stale a tres mirrors byte a byte correctos. Y aun coincidiendo, comparar el pie mediría lo que el mirror **declara de sí mismo** en lugar de lo que contiene.
+
+**Efecto agregado sobre el consumidor medido: 161 → 81 hallazgos**, con `managed-file-override-stale` de 81 a 5, sin perder ningún hallazgo real (los 4 `managed-file-drift` siguen ahí). Regresión en `tests/seed-only.test.mjs` — 8 casos, incluido el que comprueba que un fichero `managed` **sigue** reportando drift: cambiar un control inútil por uno ciego habría sido peor.
+
 ## [2.1.1] — 2026-08-20
 
 ### Fixed — el CLI ya no puede terminar sin decir qué pasó

@@ -89,6 +89,11 @@ Candidatos inmediatos, medidos: `current-slice.md`, `open-risks.md`,
 
 **Efecto esperado**: 157 hallazgos → ~85, y los que queden son accionables.
 
+> **Implementado y medido el 2026-08-24.** El efecto agregado acertó —161 → **81**—
+> pero **la atribución de esta sección era falsa**, y la corrección está en la §6.
+> `seed_only` por sí solo bajó de 161 a 150: **10 hallazgos, no 72**. Los 66
+> restantes eran otra cosa.
+
 ---
 
 ## 2. Contrato de etiquetas: hoy hay tres notaciones
@@ -179,3 +184,60 @@ Buscar el término de un repo en el otro mide **si coinciden los nombres**, no s
 existe la capacidad. El hallazgo real —tres notaciones incompatibles— es más grave
 que la ausencia que creí encontrar, y solo apareció al comparar los ficheros en
 lugar de buscar una cadena.
+
+---
+
+## 6. Corrección de la §1: los 72 stale no eran los ficheros de estado
+
+*Añadido el 2026-08-24, al implementar la propuesta 1 y medir el resultado.*
+
+La §1 diagnosticó **72 `managed-file-override-stale`** y los atribuyó a los ficheros
+de estado vivo del host —`current-slice.md`, `open-risks.md`, `active-slices.yaml`,
+`phase-status.yaml`, `AGENTS.md`, `indice-operativo.md`—. Los seis ejemplos eran
+miembros reales de la lista. **La cifra no era suya.**
+
+Medido el 2026-08-24 con `sdlc doctor --json` sobre el mismo consumidor:
+
+| Paso | Total | `override-stale` |
+|---|---|---|
+| Antes | 161 | 81 |
+| Con `seed_only` | 150 | 71 |
+| Con `seed_only` + mirrors derivados | **81** | **5** |
+
+**`seed_only` cerró 10 hallazgos, no 72.** De los 71 que quedaban, **66 eran mirrors
+de skills**: 22 skills × 3 entornos (`.claude/`, `.agents/`, `.windsurf/`).
+
+### Por qué los mirrors salían stale, y qué se hizo
+
+Un mirror es función **pura** de su canónica local: `buildSkillMirror(nombre,
+canónica)`. Pero `doctor` lo comparaba contra la **plantilla del motor**, que mide
+otra cosa: si la canónica del consumidor sigue siendo la que el motor entregó. Para
+un consumidor que gobierna sus propias skills —el caso que el framework promueve—
+eso es stale permanente, y cada corrida de su bootstrap lo renovaba.
+
+La comparación correcta contra la canónica **local** no solo quita 66 hallazgos:
+añade una señal que no existía y que muerde. **Claude Code carga `.claude/skills/`,
+no la canónica.** Editar `.github/skills/x/SKILL.md` sin regenerar los mirrors deja
+al agente ejecutando la versión anterior de la skill que el repo cree tener, y hasta
+ahora nada lo decía. Es `skill-mirror-stale`.
+
+### Un falso positivo por el camino, que vale la pena registrar
+
+La primera versión comparaba el mirror **entero**, pie de procedencia incluido
+(`<!-- sdlc-source-sha256: … -->`). Marcó stale a tres mirrors byte a byte
+correctos: el motor hashea sobre LF normalizado y el script de bootstrap del
+consumidor hasheaba el fichero tal cual, con CRLF en Windows.
+
+Se compara el **cuerpo**. Aunque los hashes coincidieran, comparar el pie mediría lo
+que el mirror **declara de sí mismo** en vez de lo que contiene — la misma clase de
+check que este motor ya rechaza para la narrativa de un checkpoint.
+
+### El patrón, otra vez
+
+La §5 registra una afirmación corregida por buscar el término de un repo en el otro.
+Esta es la misma forma en su variante numérica: **una cifra correcta (72 stale) y una
+lista correcta (esos ficheros están stale), unidas por una causa que no se comprobó.**
+Bastaba agrupar los 81 paths por prefijo — tres comandos, menos de un minuto — y la
+respuesta habría salido el primer día.
+
+Cifra medida sobre una base, atribuida a otra.
