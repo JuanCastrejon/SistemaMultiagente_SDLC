@@ -5,9 +5,25 @@
 Las etiquetas de eje que publica el framework usan **dos puntos**, siempre:
 `sdlc:F3`, `readiness:L2`, `surface:backend`, `rework:F9:regression`.
 
-**No hay variante con guion.** `readiness-L2` no es la misma etiqueta que
-`readiness:L2` — es una etiqueta que no existe, y `gh issue edit --add-label` la
-crea silenciosamente como una tercera taxonomía paralela.
+**Dentro de este contrato no hay variante con guion.** `readiness-L2` no es la misma
+etiqueta que `readiness:L2`: son dos etiquetas distintas, y `gh issue edit --add-label`
+no avisa de la diferencia.
+
+**Ojo con generalizar eso al repo entero.** Este documento describe la taxonomía que el
+framework publica; **no describe las etiquetas que existen en tu GitHub**. Medido en un
+consumidor real el 2026-08-24: sus etiquetas vivas eran `readiness-L1/L2/L3` **con
+guion**, ninguna de las de eje del framework existía, y este mismo párrafo —que entonces
+decía «no hay variante con guion», a secas— era **falso sobre ese repo**.
+
+La regla que sobrevive a las dos taxonomías:
+
+```bash
+gh label list --limit 100
+```
+
+Comprobar **antes** de usar, y **nunca** `gh label create` para que un documento tenga
+razón. Si tu repo ya tiene una notación propia, la suya gana y este documento se adapta:
+lo que no puede haber es una tercera.
 
 Esto no es un detalle de estilo. Medido en un consumidor real: su flujo declaraba
 como salida obligatoria de F3 unas etiquetas —`readiness-Lx`, con guion— que **no
