@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [2.2.2] — 2026-08-24
+
+### Fixed — `tools-doctor` no veia tres de las herramientas que el propio inventario declara
+
+La lista de sondas estaba hardcodeada y `external-tools.yaml` solo servia para **describir** lo que ya habia fallado. Una herramienta declarada sin sonda propia **no se reportaba nunca**: ni `ok`, ni `warning`, ni `missing`.
+
+Medido en un consumidor real: el inventario declaraba **12** herramientas y el doctor reportaba **9**. `gh`, `codex` y `skillopt` estaban declaradas y eran invisibles. Y la cabecera del propio inventario afirmaba que *«`sdlc tools-doctor` y `sdlc tools-install` leen este archivo»* — cierto de `tools-install`, y solo a medias del doctor.
+
+Ahora el doctor sondea tambien lo que el inventario declara, usando `detectPath` cuando la entrada lo trae. **Sin `detectPath` no se inventa un veredicto**: se reporta `unknown` con la razon, que es lo que se sabe. Un CLI global o un paquete de pip no tienen huella en el repo, y decir `ok` de lo que no se midio seria peor que no listarlo.
+
+**`unknown` no cuenta como hallazgo.** Es ausencia de medicion, no un problema: convertirlo en warning habria añadido tres avisos permanentes que nadie puede cerrar a cada consumidor — el patron que este harness existe para evitar. Sigue visible en `tools`, que es donde se mira el inventario.
+
+En el consumidor medido: 11 herramientas reportadas → **14**, con **0 findings** nuevos.
+
+### Fixed — la plantilla de etiquetas afirmaba algo falso sobre sus consumidores
+
+`templates/docs/agents/triage-labels.md` decia, a secas, que **no existe** la variante con guion (`readiness-L2`). Es cierto de la taxonomia que publica el framework; **es falso del repo de un consumidor** — medido el 2026-08-24: sus etiquetas vivas eran `readiness-L1/L2/L3` con guion, y ninguna de las de eje del framework existia.
+
+El parrafo distingue ahora entre *el contrato* y *las etiquetas que existen en tu GitHub*, y deja la regla que sobrevive a las dos taxonomias: `gh label list` **antes** de usar, y nunca `gh label create` para que un documento tenga razon.
+
 ## [2.2.1] — 2026-08-24
 
 ### Fixed — `--if-present` se le estaba pasando al script, no a pnpm
