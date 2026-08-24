@@ -90,8 +90,8 @@ function fileAgeHours(filePath) {
   return Math.round(((Date.now() - fs.statSync(filePath).mtimeMs) / 36_000) / 100) / 100;
 }
 
-function latestFile(root, extension = ".md") {
-  if (!pathExists(root)) return null;
+function filesByRecency(root, extension = ".md") {
+  if (!pathExists(root)) return [];
   const files = [];
   const walk = (current) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -106,7 +106,58 @@ function latestFile(root, extension = ".md") {
   walk(root);
   return files
     .map((file) => ({ file, mtime: fs.statSync(file).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime)[0]?.file ?? null;
+    .sort((a, b) => b.mtime - a.mtime)
+    .map((entry) => entry.file);
+}
+
+function latestFile(root, extension = ".md") {
+  return filesByRecency(root, extension)[0] ?? null;
+}
+
+/**
+ * No todos los checkpoints del vault valen lo mismo, y el mas reciente casi
+ * nunca es el que sirve.
+ *
+ * El hook `post-merge` corre `sdlc save` en CADA merge, asi que deja un
+ * esqueleto con las cinco secciones narrativas en `_(pendiente de redactar)_`
+ * y con marca de tiempo POSTERIOR a la del checkpoint que alguien acababa de
+ * redactar. Medido en un repo consumidor el 2026-08-24: 35 checkpoints ese dia,
+ * 34 esqueletos y 1 redactado.
+ *
+ * El defecto no era no saber distinguirlos: `analyzeCheckpointNarrative` ya
+ * existia y `resume` ya imprimia "sin redactar". Era que la distincion no se
+ * usaba para ELEGIR, asi que la deteccion informaba de un problema que el
+ * mismo comando seguia cometiendo. Aqui se usa.
+ *
+ * `usable` = el mas reciente con la narrativa completa. `skipped` = los
+ * esqueletos que quedaron por encima de el.
+ */
+function classifyCheckpoints(root) {
+  const files = filesByRecency(root);
+  const skipped = [];
+  for (const file of files) {
+    const body = readTextIfExists(file);
+    if (body && analyzeCheckpointNarrative(body).complete) {
+      return { latest: files[0] ?? null, usable: file, skipped };
+    }
+    skipped.push(file);
+  }
+  return { latest: files[0] ?? null, usable: null, skipped };
+}
+
+function vaultSection(memory) {
+  const checkpoints = classifyCheckpoints(memory.checkpointsDir);
+  return {
+    configPath: memory.configPath,
+    root: memory.vaultRoot,
+    exists: pathExists(memory.vaultRoot),
+    latestCheckpoint: checkpoints.latest ?? latestFile(path.join(memory.projectRoot, "logs")),
+    // El que de verdad se puede retomar. Se expone aparte en vez de pisar
+    // `latestCheckpoint` porque las dos cosas son distintas y ambas importan:
+    // una dice que hay que redactar, la otra donde esta el contexto.
+    usableCheckpoint: checkpoints.usable,
+    skeletonsSinceUsable: checkpoints.usable ? checkpoints.skipped.length : 0
+  };
 }
 
 function preview(text, max = 900) {
@@ -252,12 +303,7 @@ function collectRuntime(target) {
       manifestAgeHours: fileAgeHours(graphManifest),
       reportAgeHours: fileAgeHours(graphReport)
     },
-    vault: {
-      configPath: memory.configPath,
-      root: memory.vaultRoot,
-      exists: pathExists(memory.vaultRoot),
-      latestCheckpoint: latestFile(memory.checkpointsDir) ?? latestFile(path.join(memory.projectRoot, "logs"))
-    }
+    vault: vaultSection(memory)
   };
 }
 
@@ -347,6 +393,11 @@ export function commandResume(options) {
     // continuidad: es `git log` con encabezados. Se dice aqui, donde alguien
     // decide si puede retomar sin la conversacion.
     latestCheckpointNarrative: checkpointNarrativeOf(runtime.vault.latestCheckpoint),
+    // El que hay que LEER para retomar. Cuando coincide con el mas reciente no
+    // hay nada que explicar; cuando no, el mas reciente es un esqueleto del
+    // hook y entregarlo era el defecto.
+    usableCheckpoint: runtime.vault.usableCheckpoint,
+    skeletonsSinceUsable: runtime.vault.skeletonsSinceUsable,
     readinessStatus: "unknown",
     promotionStatus: "draft-local",
     nextCommand: blockedByPhaseGate ? `Completar evidencia/artefactos de ${phaseGate.phase} con ${phaseGate.owner}.` : runtime.state.phase === "definition" ? "/enrich-us o Continua con analista-requisitos-migracion" : "Continua",
@@ -370,14 +421,7 @@ export function commandResume(options) {
           `- slice-id: ${result.sliceId}`,
           `- phase: ${result.phase}`,
           `- branch: ${result.branch ?? "unknown"}`,
-          `- latest-checkpoint: ${result.latestCheckpoint ?? "none"}`,
-          ...(result.latestCheckpointNarrative && !result.latestCheckpointNarrative.complete
-            ? [
-                `- checkpoint-narrativa: **sin redactar** (${result.latestCheckpointNarrative.pending.length} secciones: ${result.latestCheckpointNarrative.pending.join(", ")})`
-              ]
-            : result.latestCheckpointNarrative
-              ? ["- checkpoint-narrativa: redactada"]
-              : []),
+          ...checkpointLines(result),
           `- next-command: ${result.nextCommand}`,
           `- phase-gate: ${phaseGate?.status ?? "unknown"}`,
           "",
@@ -401,18 +445,23 @@ export function commandResume(options) {
  * pide con huecos explicitos en vez de omitirla.
  */
 function collectCheckpointContext(target, memory) {
-  const context = { supersedes: null, commits: [], commitCount: null, head: null, uncommitted: null, evidencePhases: [] };
+  const context = { supersedes: null, supersededSkeletons: [], commits: [], commitCount: null, head: null, uncommitted: null, evidencePhases: [] };
 
-  // Checkpoint anterior = el ultimo por nombre (llevan timestamp por delante).
-  try {
-    const previous = fs
-      .readdirSync(memory.checkpointsDir)
-      .filter((name) => name.endsWith(".md"))
-      .sort();
-    if (previous.length > 0) context.supersedes = previous[previous.length - 1];
-  } catch {
-    // sin checkpoints todavia: primer save del repo
-  }
+  // Checkpoint anterior = el ultimo REDACTADO, no el ultimo fichero.
+  //
+  // Encadenar contra el ultimo fichero hacia que cada esqueleto del hook
+  // `post-merge` declarase `supersedes` sobre el esqueleto anterior: una
+  // cadena de ficheros vacios que se sustituyen entre si. Peor aun, la ventana
+  // de commits se cerraba en el ultimo MERGE en vez de en el ultimo trabajo
+  // redactado, asi que el checkpoint bueno solo listaba los commits del ultimo
+  // rato en vez de los de la sesion.
+  const checkpoints = classifyCheckpoints(memory.checkpointsDir);
+  const previous = checkpoints.usable ?? checkpoints.latest;
+  if (previous) context.supersedes = path.basename(previous);
+  // Los esqueletos que quedaron por encima del redactado: se declaran para que
+  // quien retome sepa que esos ficheros ya no hay que abrirlos. Si NO hay
+  // ninguno redactado, la lista seria "todo el vault" y no significaria nada.
+  if (checkpoints.usable) context.supersededSkeletons = checkpoints.skipped.map((file) => path.basename(file));
 
   const head = runCommand("git", ["rev-parse", "--short", "HEAD"], target, 5000);
   if (head.ok) context.head = head.stdout.trim();
@@ -471,7 +520,17 @@ export function commandSave(options) {
   const memory = resolveMemoryConfig(target);
   const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 12);
   const sliceSlug = runtime.state.sliceId === "unknown" ? "unknown" : runtime.state.sliceId.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  const checkpointPath = path.join(memory.checkpointsDir, `${timestamp}-slice-${sliceSlug}.md`);
+  // Un esqueleto por merge no es continuidad: es ruido que ademas empuja al
+  // bueno hacia atras en el orden por fecha. Medido en un repo consumidor el
+  // 2026-08-24: 35 checkpoints en un dia, 34 de ellos esqueletos del hook.
+  //
+  // Para eventos AUTOMATICOS, si el ultimo checkpoint sigue siendo un esqueleto
+  // intacto, se refresca ESE fichero en vez de crear otro: el vault acumula
+  // como mucho un pendiente a la vez, y sus datos factuales quedan al dia.
+  // `--event manual` —o sea `/save`— siempre crea uno nuevo: ahi hay alguien a
+  // punto de redactarlo.
+  const reused = event === "manual" ? null : reusablePendingCheckpoint(memory.checkpointsDir);
+  const checkpointPath = reused ?? path.join(memory.checkpointsDir, `${timestamp}-slice-${sliceSlug}.md`);
   const diffStat = runCommand("git", ["diff", "--stat"], target, 5000);
   const enriched = collectCheckpointContext(target, memory);
   const content = [
@@ -484,6 +543,9 @@ export function commandSave(options) {
     `branch: ${runtime.git.branch ?? "unknown"}`,
     "promotion_status: draft-local",
     ...(enriched.supersedes ? [`supersedes: ${enriched.supersedes}`] : []),
+    ...(enriched.supersededSkeletons.length > 0
+      ? ["superseded_skeletons:", ...enriched.supersededSkeletons.map((name) => `  - ${name}`)]
+      : []),
     ...(enriched.commitCount !== null ? [`commits_since_previous: ${enriched.commitCount}`] : []),
     "---",
     "",
@@ -588,6 +650,8 @@ export function commandSave(options) {
       dry_run: noMutate,
       event,
       checkpoint: checkpointPath,
+      // `true` = se refresco el esqueleto pendiente en vez de apilar otro.
+      refreshedPending: Boolean(reused),
       narrative,
       ...(narrative.complete
         ? {}
@@ -603,10 +667,79 @@ export function commandSave(options) {
 
 const NARRATIVE_PLACEHOLDER = "_(pendiente de redactar)_";
 
+/**
+ * Las secciones narrativas que el CLI deja con hueco al crear un checkpoint.
+ *
+ * Es un espejo de la plantilla de `commandSave`, y por eso hay un test que
+ * compara esta lista contra la salida real de `sdlc save`: si alguien agrega o
+ * renombra una seccion en la plantilla y no aqui, el espejo se rompe en el
+ * test y no en produccion. Sin esa atadura, `reusablePendingCheckpoint` dejaria
+ * de reconocer un esqueleto intacto y volveria a apilar ficheros en silencio.
+ */
+export const CLI_NARRATIVE_SECTIONS = [
+  "Alcance y gobernanza",
+  "Skills y fuentes usadas",
+  "Decisiones y trabajo realizado",
+  "Verificacion",
+  "Pendientes y siguiente accion"
+];
+
+/**
+ * El ultimo checkpoint, si y solo si es un esqueleto que NADIE ha tocado.
+ *
+ * "Intacto" se mide contra el CUERPO: las cinco secciones narrativas siguen en
+ * el placeholder. Si el agente redacto aunque sea una, devuelve `null` y se
+ * crea un fichero nuevo — perder media redaccion es mucho peor que un
+ * checkpoint de mas.
+ */
+function reusablePendingCheckpoint(root) {
+  const latest = filesByRecency(root)[0];
+  if (!latest) return null;
+  const body = readTextIfExists(latest);
+  if (!body) return null;
+  // Solo se refresca lo que escribio el propio CLI. Un fichero que alguien
+  // dejo ahi a mano no se sobreescribe nunca.
+  if (!/^generated_by:\s*sdlc-save\s*$/m.test(body)) return null;
+  const { pending } = analyzeCheckpointNarrative(body);
+  return CLI_NARRATIVE_SECTIONS.every((section) => pending.includes(section)) ? latest : null;
+}
+
 function checkpointNarrativeOf(checkpointPath) {
   if (!checkpointPath) return null;
   const body = readTextIfExists(checkpointPath);
   return body ? analyzeCheckpointNarrative(body) : null;
+}
+
+/**
+ * Las lineas de checkpoint del `resume --markdown`.
+ *
+ * Tres casos, y el del medio es el que motivo el cambio:
+ *
+ *   1. El mas reciente ES el redactado: una linea, como siempre.
+ *   2. El mas reciente es un esqueleto y hay uno redactado detras: se nombra
+ *      PRIMERO el redactado, porque es el que hay que abrir, y se dice cuantos
+ *      esqueletos se saltaron para llegar a el.
+ *   3. No hay ninguno redactado: no se disimula. Que el vault tenga ficheros
+ *      no significa que tenga continuidad.
+ */
+function checkpointLines(result) {
+  if (!result.latestCheckpoint) return ["- latest-checkpoint: none"];
+  if (result.usableCheckpoint === result.latestCheckpoint) {
+    return [`- latest-checkpoint: ${result.latestCheckpoint}`, "- checkpoint-narrativa: redactada"];
+  }
+  if (result.usableCheckpoint) {
+    return [
+      `- checkpoint-utilizable: ${result.usableCheckpoint}`,
+      `- checkpoint-mas-reciente: ${result.latestCheckpoint} — esqueleto sin redactar, NO es el que hay que leer`,
+      `- esqueletos por encima del utilizable: ${result.skeletonsSinceUsable}`
+    ];
+  }
+  const pending = result.latestCheckpointNarrative?.pending ?? [];
+  return [
+    `- latest-checkpoint: ${result.latestCheckpoint}`,
+    `- checkpoint-narrativa: **sin redactar**${pending.length ? ` (${pending.length} secciones: ${pending.join(", ")})` : ""}`,
+    "- checkpoint-utilizable: **ninguno** — ningun checkpoint del vault tiene la narrativa redactada"
+  ];
 }
 
 /**
