@@ -68,6 +68,25 @@ Se compara el **cuerpo**, nunca el pie de procedencia: el motor hashea sobre LF 
 
 **Efecto agregado sobre el consumidor medido: 161 → 81 hallazgos**, con `managed-file-override-stale` de 81 a 5, sin perder ningún hallazgo real (los 4 `managed-file-drift` siguen ahí). Regresión en `tests/seed-only.test.mjs` — 8 casos, incluido el que comprueba que un fichero `managed` **sigue** reportando drift: cambiar un control inútil por uno ciego habría sido peor.
 
+### Fixed — `resume` entregaba el checkpoint que el hook acababa de vaciar
+
+El hook `post-merge` corre `sdlc save` en **cada merge**, así que deja un esqueleto con las cinco secciones narrativas en `_(pendiente de redactar)_` y con marca de tiempo **posterior** a la del checkpoint que alguien acababa de redactar. `resume` elegía por fecha, así que entregaba ese. Medido en un repo consumidor el 2026-08-24: **35 checkpoints en un día, 34 esqueletos y 1 redactado**.
+
+Lo que hace este defecto distinto de un bug normal: la detección **ya existía**. `analyzeCheckpointNarrative` sabía distinguir un esqueleto de un checkpoint redactado, y `resume` incluso imprimía `checkpoint-narrativa: sin redactar`. Lo que no hacía nadie era **usar esa señal para elegir**, así que el comando informaba del problema que él mismo seguía cometiendo. La guía del repo consumidor lo había resuelto pidiéndole a la persona que "siguiera buscando hacia atrás" — trabajo manual para algo que el CLI ya tenía medido.
+
+- **`resume` distingue el más reciente del utilizable.** `usableCheckpoint` es el más reciente con la narrativa completa; `latestCheckpoint` sigue siendo el más reciente a secas y no se toca (campo aditivo, no rompe consumidores de `--json`). En `--markdown` el utilizable va **primero** y el otro sale etiquetado `esqueleto sin redactar, NO es el que hay que leer`, con el número de esqueletos que hubo que saltar.
+- **Sin ningún checkpoint redactado no se disimula**: `checkpoint-utilizable: **ninguno**`. Que el vault tenga ficheros no significa que tenga continuidad.
+- **`save --event post-merge` deja de apilar.** Si el último checkpoint sigue siendo un esqueleto **intacto** generado por el propio CLI, se refresca ese fichero en vez de crear otro: el vault acumula como mucho un pendiente a la vez y sus datos factuales quedan al día. Basta con que el agente haya redactado **una** sección para que no se toque — perder media redacción es peor que un fichero de más. `--event manual` (o sea `/save`) siempre crea uno nuevo. El payload lo declara en `refreshedPending`.
+- **`supersedes` apunta al último REDACTADO, no al último fichero.** Encadenar contra el último fichero producía una cadena de esqueletos que se sustituían entre sí, y además cerraba la ventana de `git log --since` en el último **merge** en vez de en el último trabajo redactado: el checkpoint bueno solo listaba los commits del último rato. Los esqueletos que quedan por encima se declaran en `superseded_skeletons:` para que quien retome sepa que esos ya no hay que abrirlos.
+
+### Fixed — el loop de skills vivas existía y no aparecía en la ayuda
+
+`skill-lesson`, `skill-eval`, `skill-propose` y `tools-install` funcionaban y **no figuraban en el `Uso:`** del CLI. Consecuencia medida en un repo consumidor: un mes de operación con **cero lecciones registradas** y un disparador propio escrito a mano bajo la creencia de que el motor no traía ninguno. Un comando que existe, funciona y no se anuncia es un control que no se dispara.
+
+El listado los incluye, y `skill-lesson` trae además su forma completa (`--record`, `--list`, `--promote`, `--reject`) y la restricción que hereda del ADR 025 del consumidor: promover escribe una **propuesta** bajo `openspec/changes/` y nunca toca `.github/skills/`.
+
+Regresión en `tests/checkpoint-selection.test.mjs`, incluida en `npm test`. El test ata además `CLI_NARRATIVE_SECTIONS` contra la salida real de `sdlc save`: si alguien renombra una sección de la plantilla y no la lista, el reconocimiento de esqueletos dejaría de funcionar en silencio.
+
 ## [2.1.1] — 2026-08-20
 
 ### Fixed — el CLI ya no puede terminar sin decir qué pasó
