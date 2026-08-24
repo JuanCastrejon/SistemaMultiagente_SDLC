@@ -1662,6 +1662,44 @@ export function commandToolsDoctor(options) {
         : { status: "ok" };
     })
   ];
+
+  // Las herramientas del inventario que NO tienen sonda propia arriba.
+  //
+  // Hasta 2.2.2 la lista de sondas estaba hardcodeada y el inventario solo
+  // servia para DESCRIBIR lo que ya habia fallado. Consecuencia medida en un
+  // consumidor: `external-tools.yaml` declaraba 12 herramientas y `tools-doctor`
+  // reportaba 9 de ellas. `gh`, `codex` y `skillopt` no salian NUNCA — ni ok, ni
+  // warning, ni missing. Estaban declaradas y eran invisibles.
+  //
+  // Y la cabecera del propio inventario afirmaba que "`sdlc tools-doctor` y
+  // `sdlc tools-install` leen este archivo". Era cierto de `tools-install` y
+  // solo a medias de `tools-doctor`.
+  //
+  // Se sondea por `detectPath` cuando la entrada lo declara. Sin `detectPath` no
+  // se inventa un veredicto: se reporta `unknown`, que es lo que se sabe. Decir
+  // `ok` de lo que no se midio seria peor que no listarla.
+  const inventario = describeTools(target);
+  if (inventario.ok) {
+    const yaSondadas = new Set(tools.map((tool) => tool.name));
+    for (const [id, meta] of inventario.byId) {
+      if (yaSondadas.has(id)) continue;
+      tools.push(
+        checkTool(id, () => {
+          if (!meta.detectPath) {
+            return {
+              status: "unknown",
+              detail: "declarada en external-tools.yaml sin `detectPath`: no hay forma de sondearla desde aqui."
+            };
+          }
+          const absoluta = path.join(target, meta.detectPath);
+          return pathExists(absoluta)
+            ? { status: "ok", detectPath: meta.detectPath }
+            : { status: "missing", detail: `no existe ${meta.detectPath}` };
+        })
+      );
+    }
+  }
+
   const required =
     profile === "full"
       ? new Set(["package-manager", "openspec", "autoskills", "party-mode"])
@@ -1672,8 +1710,13 @@ export function commandToolsDoctor(options) {
   // "opcional" le hacia falta ni donde buscarla. El inventario
   // (external-tools.yaml) es la fuente unica de esa informacion.
   const described = describeTools(target);
+  // `unknown` NO es hallazgo. Es ausencia de medicion: la herramienta esta
+  // declarada y no hay forma de sondearla desde el repo (un CLI global, un
+  // paquete de pip). Convertirla en warning añadiria tres avisos permanentes que
+  // nadie puede cerrar a cada consumidor — el patron que este harness existe
+  // para evitar. Sigue visible en `tools`, que es donde se mira el inventario.
   const findings = tools
-    .filter((tool) => tool.status !== "ok")
+    .filter((tool) => tool.status !== "ok" && tool.status !== "unknown")
     .map((tool) => {
       const meta = described.ok ? described.byId.get(tool.name) : null;
       return {
