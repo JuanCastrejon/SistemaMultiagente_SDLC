@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-08-24
+
+### Fixed — `--if-present` se le estaba pasando al script, no a pnpm
+
+La rama pnpm construia `pnpm run <script> --if-present`. **Detras del nombre del script, pnpm deja de leerlo como bandera suya y se lo reenvia al script.** La rama npm ya lo ponia delante; las dos formas llevaban meses divergiendo sin que nada las mirara juntas.
+
+El sintoma no se parece a la causa. En un consumidor real `validate:openspec` es `openspec validate --all`, asi que recibia `--all "--if-present"` y moria con `error: unknown option --if-present`. **`sdlc verdict` contaba ese fallo como BLOCKING y devolvia `NOT-READY` sobre un repo con sus 18 validadores en verde.**
+
+Lo caro no es el falso rojo: es que un veredicto equivocado se lee como problema del repo evaluado y no de quien lo invoca, y manda a buscar donde no hay nada. En ese consumidor el efecto real fue que `verdict` **no se pudo cablear al gate local** — el paso quedo fuera y su tarea sin cerrar.
+
+Regresion en `tests/run-script-flags.test.mjs`, que compara la forma de invocacion de pnpm y npm **entre si**: la asimetria es justo lo que nadie mira dos veces.
+
 ## [2.2.0] — 2026-08-24
 
 **`sdlc doctor` pasa de 161 hallazgos a 81 en un consumidor real**, y de 81 `managed-file-override-stale` a 4, sin perder ninguno de los reales. Los que quedan son accionables uno por uno.
