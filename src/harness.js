@@ -99,11 +99,24 @@ function firstLine(value) {
 //   3. pnpm as historical default
 // ---------------------------------------------------------------------------
 
-const PACKAGE_MANAGERS = {
+// Exportado para que el test pueda comparar la forma de invocacion de cada
+// gestor entre si: la asimetria pnpm/npm de `--if-present` vivio meses porque
+// nada las miraba juntas.
+export const PACKAGE_MANAGERS = {
   pnpm: {
     name: "pnpm",
     versionCommand: ["corepack", ["pnpm", "--version"]],
-    runScript: (script) => ["corepack", ["pnpm", "run", script, "--if-present"]]
+    // `--if-present` ANTES del nombre del script, igual que en la rama npm de
+    // abajo. Detras, pnpm deja de leerlo como bandera suya y se lo pasa AL
+    // SCRIPT como argumento.
+    //
+    // El sintoma no se parece a la causa: en un consumidor real,
+    // `validate:openspec` es `openspec validate --all`, asi que recibia
+    // `--all "--if-present"` y salia con `error: unknown option '--if-present'`.
+    // `sdlc verdict` lo contaba como fallo BLOCKING y devolvia NOT-READY sobre
+    // un repo con los 18 validadores en verde. Lo caro no es el falso rojo: es
+    // que se lee como problema del repo evaluado y no de quien lo invoca.
+    runScript: (script) => ["corepack", ["pnpm", "run", "--if-present", script]]
   },
   npm: {
     name: "npm",
