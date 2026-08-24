@@ -109,7 +109,25 @@ function validateManifest(manifest) {
     if (entry.modes && !Array.isArray(entry.modes)) {
       throw new Error(`templates/manifest.yaml: modes debe ser lista en ${entry.target}`);
     }
+    if ("seed_only" in entry && typeof entry.seed_only !== "boolean") {
+      throw new Error(`templates/manifest.yaml: seed_only debe ser booleano en ${entry.target}`);
+    }
   }
+}
+
+/**
+ * Los targets marcados `seed_only: true`: el motor los escribe al instalar y
+ * despues son del host.
+ *
+ * La fuente de verdad es ESTE manifiesto, que viaja con el motor, y NO el
+ * `install-manifest.json` del consumidor. Es deliberado: asi un consumidor ya
+ * instalado hereda la categoria en cuanto actualiza el motor, sin migracion y
+ * sin tener que reinstalar. Leerlo del manifiesto instalado habria dejado a
+ * los 72 hallazgos inertes exactamente donde estaban hasta que alguien
+ * reinstalara.
+ */
+export function seedOnlyTargets() {
+  return new Set(loadManifest().templates.filter((entry) => entry.seed_only === true).map((entry) => entry.target));
 }
 
 export function interpolate(content, context) {

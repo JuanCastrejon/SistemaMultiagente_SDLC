@@ -17,7 +17,8 @@ import {
   writeJson,
   writeText
 } from "./file-utils.js";
-import { buildManagedFiles, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
+import { buildManagedFiles, buildSkillMirror, buildSkillMirrorBody, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
+import { seedOnlyTargets } from "./template-loader.js";
 import { applyMigrations, migrationsToRun, SUPPORTED_VERSIONS } from "./migrations.js";
 import {
   commandContinua,
@@ -330,7 +331,115 @@ function writeManifest(target, manifest) {
   writeText(paths.checksum, `${sha256FileNormalized(paths.manifest)}\n`);
 }
 
+// ---------------------------------------------------------------------------
+// Semillas (`seed_only`) — ver la cabecera de templates/manifest.yaml
+//
+// El motor escribe el fichero al instalar y despues es del host. Tres puntos
+// del codigo tienen que respetarlo, y los tres estaban acoplados al mismo
+// supuesto —"todo lo que instalo sigue siendo mio"— que producia los 72
+// hallazgos irresolubles:
+//
+//   detectConflicts     -> una semilla nunca es conflicto de upgrade
+//   writeManagedFiles   -> una semilla que ya existe NO se sobreescribe
+//   collectDrift        -> de una semilla no se compara el sha
+//
+// Se resuelve una sola vez por proceso: `loadManifest()` lee y parsea el YAML,
+// y estas tres rutas se llaman dentro de bucles sobre ~280 ficheros.
+let seedOnlyCache = null;
+function seedOnlySet() {
+  if (seedOnlyCache === null) seedOnlyCache = seedOnlyTargets();
+  return seedOnlyCache;
+}
+
+// ---------------------------------------------------------------------------
+// Mirrors de skills: derivados, no plantillas
+//
+// Un mirror (`.claude|.agents|.windsurf/skills/<x>/SKILL.md`) es funcion PURA
+// de su canonica local: `buildSkillMirror(nombre, canonica)`. Compararlo contra
+// la plantilla del motor mide otra cosa —si la canonica del consumidor sigue
+// siendo la del motor— y para un consumidor que gobierna sus propias skills eso
+// es stale permanente.
+//
+// Medido: de los 71 `managed-file-override-stale` que quedaban en un consumidor
+// real tras introducir `seed_only`, **66 eran mirrors** — 22 skills x 3
+// entornos. Cada corrida del bootstrap del consumidor los regeneraba y los
+// volvia a marcar.
+//
+// La comparacion correcta contra la canonica LOCAL no solo quita ruido: añade
+// una señal que no existia y que muerde de verdad. Claude Code carga
+// `.claude/skills/`, no la canonica; editar `.github/skills/x/SKILL.md` sin
+// re-ejecutar el bootstrap deja al agente leyendo la version vieja, y hasta
+// ahora nada lo decia.
+const MIRROR_RE = /^\.(claude|agents|windsurf)\/skills\/([^/]+)\/SKILL\.md$/;
+
+// Se compara el CUERPO, nunca el pie de procedencia.
+//
+// El pie (`<!-- sdlc-source-sha256: ... -->`) lo escribe quien genera el
+// mirror, y no todos hashean igual: el motor normaliza a LF, y el script de
+// bootstrap de un consumidor real hasheaba el fichero tal cual, con CRLF en
+// Windows. Comparar el pie marcaba stale a tres mirrors byte a byte correctos.
+//
+// Y aunque los hashes coincidieran, comparar el pie mediria lo que el mirror
+// DECLARA de si mismo en vez de lo que contiene — que es la clase de check que
+// este mismo motor rechaza para la narrativa de un checkpoint.
+function stripMirrorFooter(text) {
+  return normalizeLF(text)
+    .split("\n")
+    // `[a-z0-9-]`, no `[a-z-]`: las dos lineas que importan son
+    // `sdlc-source-sha256` y `sdlc-body-sha256`, y sin los digitos el filtro
+    // dejaba pasar justo las dos que producen el falso positivo.
+    .filter((line) => !/^<!--\s*sdlc-[a-z0-9-]+:/.test(line.trim()))
+    .join("\n")
+    .trimEnd();
+}
+
+/**
+ * Reescribe cada mirror desde la canonica que quedo EN DISCO.
+ *
+ * Se corre despues del pase de escritura, no durante, y esa es toda la gracia:
+ * en ese momento la canonica ya es la definitiva —la del motor si el consumidor
+ * acepto la plantilla nueva, la suya si mantuvo su override— y el mirror deriva
+ * de esa. Derivar antes obligaria a adivinar cual de las dos gana.
+ *
+ * Tambien se actualiza `files`, que es de donde sale el manifiesto: si el
+ * manifiesto guardara el mirror del motor mientras en disco esta el derivado de
+ * la canonica local, quedaria un sha que no corresponde a ningun fichero.
+ */
+function regenerateSkillMirrors(target, files) {
+  for (const relativePath of Object.keys(files)) {
+    const match = MIRROR_RE.exec(relativePath);
+    if (!match) continue;
+    const skillName = match[2];
+    const canonical = readTextIfExists(path.join(target, `.github/skills/${skillName}/SKILL.md`));
+    if (canonical === null) continue;
+    const derived = buildSkillMirror(skillName, normalizeLF(canonical));
+    files[relativePath] = derived;
+    writeText(path.join(target, relativePath), derived);
+  }
+}
+
+function skillMirrorState(target, relativePath) {
+  const match = MIRROR_RE.exec(relativePath);
+  if (!match) return null;
+  const skillName = match[2];
+  const canonicalPath = `.github/skills/${skillName}/SKILL.md`;
+  const canonical = readTextIfExists(path.join(target, canonicalPath));
+  // Sin canonica local no hay derivacion posible: se deja que las reglas
+  // normales de fichero gestionado decidan, en vez de inventar un veredicto.
+  if (canonical === null) return null;
+  const actual = readTextIfExists(path.join(target, relativePath));
+  const expected = buildSkillMirrorBody(skillName, normalizeLF(canonical));
+  return {
+    path: relativePath,
+    skill: skillName,
+    source: canonicalPath,
+    matches: actual !== null && stripMirrorFooter(actual) === stripMirrorFooter(expected),
+    exists: actual !== null
+  };
+}
+
 function buildManifest(config, files, previous = {}) {
+  const seeds = seedOnlySet();
   return {
     manifestVersion: 1,
     frameworkVersion: config.frameworkVersion,
@@ -343,7 +452,11 @@ function buildManifest(config, files, previous = {}) {
     managedFiles: Object.entries(files)
       .map(([filePath, content]) => ({
         path: filePath,
-        sha256: sha256Text(content)
+        sha256: sha256Text(content),
+        // Informativo: el sha de una semilla es el de la PLANTILLA, no el del
+        // fichero en disco, y nadie debe compararlo. Se marca para que leer el
+        // manifiesto a mano no induzca a hacerlo.
+        ...(seeds.has(filePath) ? { seedOnly: true } : {})
       }))
       .sort((left, right) => left.path.localeCompare(right.path))
   };
@@ -367,8 +480,20 @@ const CONFLICT_REASON = Object.freeze({
 function detectConflicts(target, files, manifest) {
   const managed = getManagedPathSet(manifest);
   const overrides = overrideIndex(target);
+  const seeds = seedOnlySet();
   const conflicts = [];
   for (const [relativePath, content] of Object.entries(files)) {
+    // Una semilla no puede bloquear un upgrade: el motor no va a escribirla.
+    // Esto es lo que quitaba de en medio los nueve `status: conflict` que un
+    // consumidor vivo tenia SIEMPRE, por editar lo que tiene que editar.
+    if (seeds.has(relativePath)) continue;
+    // Un mirror TAMPOCO bloquea, por una razon distinta: es un DERIVADO. No hay
+    // nada que fusionar en el, porque su contenido se recalcula desde la
+    // canonica que quede en disco al final del upgrade. Reportarlo como
+    // "modificado localmente" pedia decidir sobre un fichero que nadie escribe
+    // a mano — y en un consumidor que gobierna sus skills eran 12 de 23
+    // conflictos, todos falsos.
+    if (MIRROR_RE.test(relativePath)) continue;
     const absolute = path.join(target, relativePath);
     if (!pathExists(absolute)) {
       // Un archivo gestionado que el consumidor borro a proposito no debe
@@ -470,14 +595,27 @@ function createBackup(target, relativePaths, reason) {
 }
 
 function writeManagedFiles(target, files, config, previousManifest = null, skipWrite = new Set()) {
+  const seeds = seedOnlySet();
+  // Solo se consulta si hay semillas que escribir. Una semilla que el host
+  // borro Y declaro con `deleted: true` no debe reaparecer, y esa decision
+  // tiene que valer tanto en `upgrade` —que ya barria tombstones— como en un
+  // `install` repetido, que no lo hacia.
+  const overrides = seeds.size > 0 ? overrideIndex(target) : new Map();
   for (const [relativePath, content] of Object.entries(files)) {
     if (skipWrite.has(relativePath)) {
       // Divergencia local aceptada: el archivo del consumidor se conserva tal
       // cual y solo se registra su hash en el manifiesto.
       continue;
     }
-    writeText(path.join(target, relativePath), content);
+    const absolute = path.join(target, relativePath);
+    // Una semilla se escribe solo si NO existe. Vale tanto para `upgrade` como
+    // para un `install` repetido: en los dos casos, el fichero que hay en disco
+    // es el del host y sobreescribirlo es el clobber que esta categoria existe
+    // para impedir.
+    if (seeds.has(relativePath) && (pathExists(absolute) || overrides.get(relativePath)?.deleted)) continue;
+    writeText(absolute, content);
   }
+  regenerateSkillMirrors(target, files);
   const manifest = buildManifest(config, files, previousManifest ?? {});
   writeManifest(target, manifest);
   return manifest;
@@ -694,10 +832,27 @@ function collectDrift(target, config, manifest) {
   const overridden = [];
   const staleOverrides = [];
   const overrides = overrideIndex(target);
+  const seeds = seedOnlySet();
+  const seedsMissing = [];
+  const staleMirrors = [];
   for (const [relativePath, content] of Object.entries(files)) {
     const absolute = path.join(target, relativePath);
     const existing = readTextIfExists(absolute);
     const override = overrides.get(relativePath);
+    const mirror = skillMirrorState(target, relativePath);
+    if (mirror) {
+      // Se juzga contra la canonica local, no contra la plantilla del motor.
+      if (!mirror.matches) staleMirrors.push(mirror);
+      continue;
+    }
+    if (seeds.has(relativePath)) {
+      // De una semilla NO se compara el sha: el fichero es del host y su
+      // contenido no tiene por que parecerse a la plantilla. Lo unico que se
+      // sigue diciendo es que desaparecio, y a nivel info: puede ser legitimo,
+      // pero `phase-status.yaml` ausente rompe `resume` y callarlo seria peor.
+      if (existing === null && !override?.deleted) seedsMissing.push(relativePath);
+      continue;
+    }
     if (existing === null) {
       // Una eliminacion aceptada (`overrides.yaml` con `deleted: true`, que
       // 2.0.3 introdujo del lado de `upgrade`) no es un archivo que falte:
@@ -770,7 +925,7 @@ function collectDrift(target, config, manifest) {
       existsOnDisk: pathExists(path.join(target, relativePath))
     });
   }
-  return { files, drift, missing, unmanaged, overridden, staleOverrides, orphanOverrides };
+  return { files, drift, missing, unmanaged, overridden, staleOverrides, orphanOverrides, seedsMissing, staleMirrors };
 }
 
 function checkCommand(command, args = ["--version"]) {
@@ -1007,6 +1162,32 @@ async function commandDoctor(options) {
     }
     for (const entry of drift.orphanOverrides ?? []) {
       findings.push({ level: "warning", code: "managed-file-override-orphan", ...entry });
+    }
+    // Semilla que ya no esta. INFO, no error: borrarla puede ser legitimo. Lo
+    // que no puede es desaparecer en silencio, porque varias sostienen
+    // comandos —sin `phase-status.yaml` no hay `resume`—.
+    // Un mirror que ya no deriva de su canonica. AVISO, y con el comando que
+    // lo arregla: mientras siga asi, el agente que lea `.claude/skills/` esta
+    // ejecutando una version anterior de la skill que el repo cree tener.
+    for (const entry of drift.staleMirrors ?? []) {
+      findings.push({
+        level: "warning",
+        code: "skill-mirror-stale",
+        path: entry.path,
+        skill: entry.skill,
+        source: entry.source,
+        message: entry.exists
+          ? `el mirror no coincide con ${entry.source}: el agente que lo lea usa la version vieja. Re-generar los mirrors`
+          : `falta el mirror de ${entry.skill}: ese entorno no ve la skill`
+      });
+    }
+    for (const filePath of drift.seedsMissing ?? []) {
+      findings.push({
+        level: "info",
+        code: "seed-file-missing",
+        path: filePath,
+        message: `semilla ausente; el proximo install/upgrade la vuelve a escribir. Para que no reaparezca, declararla en overrides.yaml con deleted: true`
+      });
     }
   }
   findings.push(...collectDoctorEnhancements(target, config));
@@ -1875,7 +2056,7 @@ function commandHelp() {
     exitCode: EXIT_OK,
     payload: {
       status: "ok",
-      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] [--record] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         El arbol se lee de git EN EL COMMIT firmado, no del working tree: la firma se puede volver a\n         verificar mas adelante en lugar de caducar con el commit siguiente.\n         --require-fresh bloquea ademas si el arbol de --head-ref ya no es el aprobado (signoff-stale).\n         --create rechaza firmar con cambios sin commitear en las superficies, salvo --allow-dirty.\n         Ninguna superficie que resuelva a cero archivos puede firmarse ni verificarse (signoff-empty-subject).\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>] [--bootstrap-package-json]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\n         --bootstrap-package-json crea un package.json minimo cuando el repo no tiene ninguno\n         (raiz plana, sin build). Sin esa bandera, adopt sigue exigiendo uno previo.\ninstall: [--mode greenfield|legacy] [--project-name <n>] [--dry-run] [--with-tools <ids|all>]\n         Al terminar OFRECE las herramientas externas (obligatorias y opcionales) con el repo\n         de cada una y su comando. Sin --with-tools no instala ninguna: sigue apto para CI.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable."
+      message: "Uso: sdlc <init|install|upgrade|rollback|doctor|diff|prune-backups|migrate-config|session-start|resume|save|continua|memory-sync|validate-runtime|phase-gate|governance-check|tools-doctor|tools-install|pr-body-check|verdict|status|quality-gate|quality-baseline|coverage-diff|signoff|acceptance-verify|red-proof-verify|change-close|adopt|quality-docs|skill-lesson|skill-eval|skill-propose|hooks install> [--target <repo>] [--json]\nSi --target se omite, se usa el directorio actual (process.cwd()).\nverdict: veredicto READY/NOT-READY ordenado fail-fast [--write --slice --phase]\nstatus:  snapshot go/no-go agregado [--markdown --write --exit-code]\nupgrade: [--to-version <v>] [--dry-run] [--accept-managed <paths,coma>] [--accept-all-managed]\n         Los archivos aceptados conservan su version local y quedan registrados en .sdlc/overrides.yaml.\nquality-gate: --slice <id> --phase <F> <--run | --from-evidence> [--exit-code]\n         --run ejecuta los probes de quality-contract.yaml y anexa la evidencia medida.\n         --from-evidence solo adjudica lo ya escrito y se marca advisory.\nquality-baseline: --promote --slice <id> [--phase F15] [--source ci|local] [--allow-local]\n         Mueve la linea base de los gates ratchet a la evidencia de una fase ya escrita.\n         Sin --source ci exige --allow-local explicito.\ncoverage-diff: [--base-ref <ref>] [--coverage-final <ruta>] [--summary <ruta>]\n         Cruza git diff contra coverage-final.json y escribe `changed.pct/total` en coverage-summary.json.\n         Se encadena despues del test runner, antes de quality-gate --run.\nsignoff: --slice <id> --phase <F> <--create [--signing-key <id>] [--allow-dirty] [--record] | --verify --commit <sha> [--head-ref <ref>] [--require-fresh]>\n         El sujeto (slice+phase+tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado.\n         El arbol se lee de git EN EL COMMIT firmado, no del working tree: la firma se puede volver a\n         verificar mas adelante en lugar de caducar con el commit siguiente.\n         --require-fresh bloquea ademas si el arbol de --head-ref ya no es el aprobado (signoff-stale).\n         --create rechaza firmar con cambios sin commitear en las superficies, salvo --allow-dirty.\n         Ninguna superficie que resuelva a cero archivos puede firmarse ni verificarse (signoff-empty-subject).\n         --verify exige config.governance.maintainers no vacio: sin maintainers ninguna firma es valida.\nacceptance-verify: --change <slug>\n         Verifica openspec/changes/<slug>/acceptance/*.feature.md: cada escenario debe traer sc_id\n         cuyo hash coincida con (capability, requirement, titulo) actuales.\nred-proof-verify: --slice <id> [--phase F5] --report <ruta> --format <formato>\n         Todo escenario en scenario_traceability con status:red exige que el reporte declare\n         outcome:assertion-failed. Un error colateral (import roto, throw arbitrario) no da credito.\n         ADVISORY, no autoritativo: no consume red_proof_run_id ni red_proof_sha, asi que\n         adjudica un reporte que produce el propio evaluado. `ok` = no se detecto trampa,\n         no 'el rojo quedo demostrado'. Opt-in: ningun workflow lo invoca por defecto.\nchange-close: --change <slug> [--slice <id>] [--integration-branch <rama>]\n         Ninguna tarea de tasks.md puede quedar sin marcar; una tarea de merge marcada [x]\n         exige que HEAD sea antepasado real de la rama de integracion; F13/F14 deben estar en ok.\nadopt: [--project-name <nombre>] [--bootstrap-package-json]\n         Aditivo puro: nunca sobreescribe lo que ya existe. Agrega sistema-multiagente-sdlc como\n         devDependency (nunca npm link), .sdlc/config.json minimo, quality-contract.yaml,\n         phase-contract.yaml y su schema, solo los que falten.\n         --bootstrap-package-json crea un package.json minimo cuando el repo no tiene ninguno\n         (raiz plana, sin build). Sin esa bandera, adopt sigue exigiendo uno previo.\ninstall: [--mode greenfield|legacy] [--project-name <n>] [--dry-run] [--with-tools <ids|all>]\n         Al terminar OFRECE las herramientas externas (obligatorias y opcionales) con el repo\n         de cada una y su comando. Sin --with-tools no instala ninguna: sigue apto para CI.\ntools-install: [--tool <id>] [--apply]\n         Cruza el inventario external-tools.yaml con lo que tools-doctor detecta y arma un plan.\n         DRY-RUN por defecto: sin --apply no ejecuta nada, solo imprime que correria.\n         Separa lo instalable de lo que exige un paso manual (una persona), y nunca corre\n         durante `sdlc install`. Los comandos son argv, no cadenas de shell, y su ejecutable\n         debe estar en la allowlist del inventario.\nquality-docs: [--out docs/quality-gates.md] [--dry-run] [--check]\n         Regenera la doc de tiers/superficies/probes/gates desde quality-contract.yaml y\n         phase-contract.yaml. No se edita a mano: se sobreescribe en cada corrida.\n         --check no escribe: compara la doc comiteada con el contrato actual y sale 2 si\n         divergen. Es el modo para CI; sin el, una doc desactualizada es indetectable.\nskill-lesson: [--record --type <error|blocker|repetition> --title <t> --correction <t> [--skill <id>]]\n              [--list] [--promote <id> --change <slug>] [--reject <id> --reason <t>]\n         El DISPARADOR del loop de skills vivas: registra el incidente cuando pasa, no cuando\n         alguien se acuerda. La misma huella repetida sube un contador; a las 2 veces deja de\n         ser un incidente y es un patron promovible. `--promote` escribe una PROPUESTA bajo\n         openspec/changes/ y nunca toca .github/skills/; aprobar sigue siendo humano.\nskill-eval: <skill> [--json]  Puntua una skill contra sus golden tasks (evals/golden-tasks.yaml).\nskill-propose: --skill <skill> --change <change> --intent \"<que cambiar>\"\n         Emite la propuesta de edicion. Solo escribe bajo openspec/changes/<change>/."
     }
   };
 }
