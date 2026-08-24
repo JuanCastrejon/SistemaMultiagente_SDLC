@@ -185,7 +185,7 @@ tools:
       `.agents/skills/`, Windsurf `.windsurf/skills/`. Editar `.github/skills/x/SKILL.md`
       NO surte efecto hasta re-ejecutar el bootstrap: el registro de skills sigue
       mostrando la version anterior y se depura un comportamiento que ya no esta escrito.
-      Desde 2.1.2 `sdlc doctor` lo detecta como `skill-mirror-stale`, comparando cada
+      Desde 2.2.0 `sdlc doctor` lo detecta como `skill-mirror-stale`, comparando cada
       mirror contra su canonica local.
     notUsedFor: Reemplazar las skills internas protegidas (commit, enrich-us, openspec-*, contexto-proyecto).
 

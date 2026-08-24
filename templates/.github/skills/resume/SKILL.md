@@ -36,7 +36,7 @@ no la lee.
 - `skeletonsSinceUsable` — cuántos se saltaron para llegar al bueno.
 
 En `--markdown`, el utilizable va **primero** y el otro sale etiquetado. Si la salida
-no trae `usableCheckpoint`, esa máquina corre una versión anterior a 2.1.2 y el
+no trae `usableCheckpoint`, esa máquina corre una versión anterior a 2.2.0 y el
 filtrado hay que hacerlo a mano: **buscar hacia atrás** hasta el primero sin
 placeholders.
 

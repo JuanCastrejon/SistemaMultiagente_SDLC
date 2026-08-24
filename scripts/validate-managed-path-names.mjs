@@ -29,7 +29,7 @@ import { loadManifest } from "../src/template-loader.js";
 //
 // La primera version de este validador cubria tambien `docs/`, `scripts/` y
 // `openspec/schemas/`, y marco ~50 ficheros legitimos del motor. Eso es
-// exactamente el fallo que la version 2.1.2 acaba de corregir en `doctor`: un
+// exactamente el fallo que la version 2.2.0 acaba de corregir en `doctor`: un
 // control cuyas alertas nadie puede cerrar enseña a ignorar el control. Cubrir
 // mas no es proteger mas.
 //

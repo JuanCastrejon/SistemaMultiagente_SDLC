@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-08-24
+
+**`sdlc doctor` pasa de 161 hallazgos a 81 en un consumidor real**, y de 81 `managed-file-override-stale` a 4, sin perder ninguno de los reales. Los que quedan son accionables uno por uno.
+
+Minor y no patch: hay un campo nuevo de manifiesto (`seed_only`), dos códigos de hallazgo nuevos (`seed-file-missing`, `skill-mirror-stale`), campos nuevos en el payload de `resume` (`usableCheckpoint`, `skeletonsSinceUsable`) y un cambio de comportamiento en `save --event post-merge`, que deja de apilar. Todo compatible hacia atrás: ningún consumidor tiene que hacer nada, y la migración `2.2.0` está vacía a propósito.
+
 ### Changed — `save`, `resume` y `continua` dejan de ser stubs de 18 líneas
 
 Las tres se entregaban con el comando y tres reglas genéricas. Todo lo que un consumidor aprende a golpes —los esqueletos que el hook deja en cada merge, cuál de los cinco ficheros del vault es el bueno, qué hace retomable un checkpoint— vivía en sus checkpoints, que es justo lo que nadie carga solo. Cada repo nuevo volvía a tropezar con lo mismo.
