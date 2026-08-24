@@ -50,6 +50,14 @@ Un `target` en esos dos espacios necesita una de tres: nombre namespaced (`sdlc-
 
 De auditar las 280 rutas salieron dos cosas: **`CLAUDE.md` seguía gestionado** —donde un repo con Claude Code acumula sus reglas de gobierno— y pasa a semilla; y `openspec/specs/business-production-readiness/` **es la misma forma que `project-phases`**, así que queda como riesgo aceptado y escrito en las exenciones, porque renombrarla exige migrar a los consumidores instalados.
 
+### Fixed — un mirror de skill tampoco bloquea el `upgrade`: es un derivado, no una plantilla que fusionar
+
+Tercera puerta del mismo defecto. `doctor` ya trataba el mirror como derivado, pero `detectConflicts` —quien decide si `upgrade` bloquea— seguía comparándolo contra la versión del motor. Medido en el mismo consumidor: **12 de 23 conflictos eran mirrors, todos falsos**. No hay nada que fusionar en un fichero que se recalcula.
+
+Los mirrors se regeneran **al final** del pase de escritura, desde la canónica que quedó en disco: la del motor si el consumidor aceptó la plantilla nueva, la suya si mantuvo su override. Derivar antes obligaría a adivinar cuál de las dos gana. El manifiesto guarda ese mismo contenido — un sha que no corresponde a ningún fichero es peor que no tenerlo.
+
+**`upgrade --dry-run` sobre el consumidor: 23 conflictos → 8**, y los 8 son ficheros que de verdad personalizó.
+
 ### Fixed — un mirror de skill se compara con su canónica local, no con la plantilla del motor
 
 Tras `seed_only` quedaban 71 stale, y **66 eran mirrors**: 22 skills × 3 entornos (`.claude/`, `.agents/`, `.windsurf/`). Un mirror es función **pura** de su canónica local, pero `doctor` lo comparaba contra la plantilla del motor — que mide otra cosa: si la canónica del consumidor sigue siendo la que el motor entregó. Para un consumidor que gobierna sus propias skills, eso es stale permanente que su bootstrap renueva en cada corrida.

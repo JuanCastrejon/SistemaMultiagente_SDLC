@@ -261,3 +261,49 @@ console.log("mirror sin regenerar se reporta: PASS");
 }
 
 console.log("mirror: el pie no decide: PASS");
+
+// --- 9. un mirror no bloquea el upgrade, y se regenera al final -----------
+// Tercera puerta del mismo defecto. `doctor` ya trataba el mirror como
+// derivado, pero `detectConflicts` —que es quien decide si `upgrade` bloquea—
+// seguia comparandolo contra la version del motor. Medido en un consumidor
+// real: 12 de 23 conflictos eran mirrors, todos falsos. No hay nada que
+// fusionar en un fichero que se recalcula.
+{
+  const target = newRepo("upgrade-mirror");
+  const canonica = path.join(target, CANONICA);
+  const mirror = path.join(target, MIRROR);
+  const propia = `${fs.readFileSync(canonica, "utf8").trimEnd()}\n\n## Regla propia del host\n`;
+  fs.writeFileSync(canonica, propia, "utf8");
+
+  const seco = sdlc(target, ["upgrade", "--dry-run"]);
+  const rutas = (seco.conflicts ?? []).map((c) => c.path);
+  assert.ok(!rutas.includes(MIRROR), `el mirror no puede bloquear: ${rutas.join(", ")}`);
+  assert.ok(rutas.includes(CANONICA), "la canonica editada SI es un conflicto real, y se sigue reportando");
+
+  // Se acepta la divergencia de la canonica: el mirror tiene que seguir a la
+  // canonica LOCAL, no a la del motor.
+  sdlc(target, ["upgrade", "--accept-managed", CANONICA]);
+  const { buildSkillMirror } = await import("../src/render.js");
+  assert.equal(
+    fs.readFileSync(mirror, "utf8").replace(/\r\n?/g, "\n"),
+    buildSkillMirror("backend-audit", fs.readFileSync(canonica, "utf8").replace(/\r\n?/g, "\n")),
+    "tras el upgrade el mirror deriva de la canonica que quedo en disco"
+  );
+
+  // Y el manifiesto guarda ese mismo contenido: un sha que no corresponda a
+  // ningun fichero es peor que no tenerlo.
+  const manifest = JSON.parse(fs.readFileSync(path.join(target, ".sdlc", "install-manifest.json"), "utf8"));
+  const entrada = manifest.managedFiles.find((e) => e.path === MIRROR);
+  const { createHash } = await import("node:crypto");
+  const shaEnDisco = createHash("sha256").update(fs.readFileSync(mirror, "utf8").replace(/\r\n?/g, "\n")).digest("hex");
+  assert.equal(entrada?.sha256, shaEnDisco, "el manifiesto describe el fichero que hay, no el que el motor traia");
+
+  // Y `doctor` queda limpio para las tres rutas derivadas.
+  const doctor = sdlc(target, ["doctor"]);
+  for (const root of [".claude", ".agents", ".windsurf"]) {
+    const ruta = `${root}/skills/backend-audit/SKILL.md`;
+    assert.deepEqual(hallazgosDe(doctor, ruta), [], `${ruta}: ${JSON.stringify(hallazgosDe(doctor, ruta))}`);
+  }
+}
+
+console.log("mirror no bloquea upgrade y se regenera: PASS");

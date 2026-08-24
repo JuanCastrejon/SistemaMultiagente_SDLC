@@ -17,7 +17,7 @@ import {
   writeJson,
   writeText
 } from "./file-utils.js";
-import { buildManagedFiles, buildSkillMirrorBody, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
+import { buildManagedFiles, buildSkillMirror, buildSkillMirrorBody, defaultConfig, FRAMEWORK_VERSION, validateConfigShape } from "./render.js";
 import { seedOnlyTargets } from "./template-loader.js";
 import { applyMigrations, migrationsToRun, SUPPORTED_VERSIONS } from "./migrations.js";
 import {
@@ -393,6 +393,31 @@ function stripMirrorFooter(text) {
     .trimEnd();
 }
 
+/**
+ * Reescribe cada mirror desde la canonica que quedo EN DISCO.
+ *
+ * Se corre despues del pase de escritura, no durante, y esa es toda la gracia:
+ * en ese momento la canonica ya es la definitiva —la del motor si el consumidor
+ * acepto la plantilla nueva, la suya si mantuvo su override— y el mirror deriva
+ * de esa. Derivar antes obligaria a adivinar cual de las dos gana.
+ *
+ * Tambien se actualiza `files`, que es de donde sale el manifiesto: si el
+ * manifiesto guardara el mirror del motor mientras en disco esta el derivado de
+ * la canonica local, quedaria un sha que no corresponde a ningun fichero.
+ */
+function regenerateSkillMirrors(target, files) {
+  for (const relativePath of Object.keys(files)) {
+    const match = MIRROR_RE.exec(relativePath);
+    if (!match) continue;
+    const skillName = match[2];
+    const canonical = readTextIfExists(path.join(target, `.github/skills/${skillName}/SKILL.md`));
+    if (canonical === null) continue;
+    const derived = buildSkillMirror(skillName, normalizeLF(canonical));
+    files[relativePath] = derived;
+    writeText(path.join(target, relativePath), derived);
+  }
+}
+
 function skillMirrorState(target, relativePath) {
   const match = MIRROR_RE.exec(relativePath);
   if (!match) return null;
@@ -462,6 +487,13 @@ function detectConflicts(target, files, manifest) {
     // Esto es lo que quitaba de en medio los nueve `status: conflict` que un
     // consumidor vivo tenia SIEMPRE, por editar lo que tiene que editar.
     if (seeds.has(relativePath)) continue;
+    // Un mirror TAMPOCO bloquea, por una razon distinta: es un DERIVADO. No hay
+    // nada que fusionar en el, porque su contenido se recalcula desde la
+    // canonica que quede en disco al final del upgrade. Reportarlo como
+    // "modificado localmente" pedia decidir sobre un fichero que nadie escribe
+    // a mano — y en un consumidor que gobierna sus skills eran 12 de 23
+    // conflictos, todos falsos.
+    if (MIRROR_RE.test(relativePath)) continue;
     const absolute = path.join(target, relativePath);
     if (!pathExists(absolute)) {
       // Un archivo gestionado que el consumidor borro a proposito no debe
@@ -583,6 +615,7 @@ function writeManagedFiles(target, files, config, previousManifest = null, skipW
     if (seeds.has(relativePath) && (pathExists(absolute) || overrides.get(relativePath)?.deleted)) continue;
     writeText(absolute, content);
   }
+  regenerateSkillMirrors(target, files);
   const manifest = buildManifest(config, files, previousManifest ?? {});
   writeManifest(target, manifest);
   return manifest;
