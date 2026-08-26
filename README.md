@@ -1,886 +1,1174 @@
 # SistemaMultiagente_SDLC
 
-Framework SDLC asistido por IA con governance enterprise, SDD y enfoque brownfield-first.
+**A governed, verifiable SDLC harness for AI-assisted software development.**
 
-> BMAD orquesta; SistemaMultiagente_SDLC orquesta y verifica.
+An open-source framework for installing, running, and verifying a multi-agent SDLC in greenfield and brownfield/legacy environments.
 
-## Por qué
+> **BMAD orchestrates; SistemaMultiagente_SDLC orchestrates and verifies.**
 
-Este proyecto instala un SDLC multi-agente gobernado en repos greenfield o legacy. Combina personas de agente reutilizables, flujos OpenSpec/SDD, phase gates, migraciones, validadores, rollback y memoria persistente opcional.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![npm](https://img.shields.io/npm/v/sistema-multiagente-sdlc.svg)](https://www.npmjs.com/package/sistema-multiagente-sdlc)
+[![GitHub](https://img.shields.io/github/stars/JuanCastrejon/SistemaMultiagente_SDLC?style=social)](https://github.com/JuanCastrejon/SistemaMultiagente_SDLC)
 
-El modelo operativo es SDD waterfall por slice y ágil por release: cada slice tiene gates explícitos de requisitos, readiness, diseño, implementación, verificación y archivo, mientras los releases permanecen iterativos.
+---
 
-Desde `1.8.0`, esos gates dejan de ser declarativos y pasan a **medirse**: contrato de calidad con umbrales por superficie, cobertura de las líneas que cambiaron, frontera de especificación que el propio PR no puede desactivar, firma humana verificable por commit firmado y un árbitro en CI que vuelve a medir lo que el harness local calculó. Ver [Gauntlet de calidad verificable](#gauntlet-de-calidad-verificable-180).
+## Why this matters for AI-assisted software development
 
-## Inicio rápido
+AI coding agents can dramatically reduce the cost of implementing software, but generating code is not the same as producing software that is safe, traceable, reviewable and ready to release.
 
-Flujo con paquete publicado (>=1.2.1):
+The central problem this project addresses is:
 
-```powershell
-# Desde la raíz del repo destino (cwd = repo).
-# --target es opcional desde v1.2.1: si se omite, se usa el directorio actual.
-npx sistema-multiagente-sdlc init --mode greenfield --project-name "Mi Proyecto"
+> **How do we allow coding agents to move faster without allowing the agent to become the authority that decides whether its own work is correct?**
 
-# Smoke previo sin escribir nada:
-npx sistema-multiagente-sdlc init --mode greenfield --project-name "Mi Proyecto" --dry-run --json
+SistemaMultiagente_SDLC treats agents as participants in an engineering process, not as the final authority.
+
+The framework surrounds agent-driven implementation with:
+
+- explicit requirements and specifications;
+- phase contracts;
+- human approval gates;
+- deterministic validators;
+- quality contracts and measurable thresholds;
+- changed-line coverage;
+- specification-boundary protection;
+- signed human attestations;
+- independent CI arbitration;
+- regression tests;
+- reproducible evidence;
+- brownfield adoption controls;
+- optional security and external-tool integrations.
+
+The goal is not to prevent agents from making changes.
+
+The goal is to make those changes **measurable, auditable and governable**.
+
+---
+
+## The core idea
+
+A conventional agent workflow often looks like:
+
+```text
+Prompt
+  ↓
+Agent
+  ↓
+Code
+  ↓
+"Looks good"
 ```
 
-Para v1.2.0 (compatibilidad), el comando equivalente requería `--target` explícito:
+SistemaMultiagente_SDLC turns that into:
 
-```powershell
-npx sistema-multiagente-sdlc@1.2.0 init --target . --mode greenfield --project-name "Mi Proyecto"
+```text
+Requirements
+     ↓
+Specification
+     ↓
+Human gate
+     ↓
+Agent execution
+     ↓
+Implementation
+     ↓
+Automated evidence
+     ↓
+Quality gates
+     ↓
+Independent CI arbitration
+     ↓
+Human signoff
+     ↓
+Release
 ```
 
-Flujo de desarrollo local:
+The distinction is deliberate:
+
+> **The agent produces changes. The harness produces evidence.**
+
+The harness therefore does not depend on an agent correctly claiming that its own work is complete.
+
+---
+
+## What the project is
+
+SistemaMultiagente_SDLC is an installable Node.js CLI and SDLC harness for AI-assisted software development.
+
+It provides a reusable engineering layer that can be installed into existing repositories or used to bootstrap new projects.
+
+The published package is:
+
+```text
+sistema-multiagente-sdlc
+```
+
+CLI:
+
+```text
+sdlc
+```
+
+The project is distributed under the MIT license.
+
+---
+
+## What problem it solves
+
+AI-assisted development creates several engineering problems that become more important as agents gain more autonomy.
+
+### 1. Specification drift
+
+An agent may modify the implementation and simultaneously modify the criteria used to evaluate that implementation.
+
+The framework therefore protects the specification boundary.
+
+### 2. Self-evaluation
+
+An agent should not be the sole authority for declaring its own work correct.
+
+The framework separates:
+
+```text
+execution
+```
+
+from:
+
+```text
+verification
+```
+
+and allows CI to independently recompute evidence.
+
+### 3. Brownfield risk
+
+Installing an AI workflow into an existing repository can accidentally overwrite project conventions, configuration or governance.
+
+The `adopt` workflow is designed to add the harness without blindly replacing existing repository content.
+
+### 4. Non-reproducible quality claims
+
+"Tests passed" is not always enough.
+
+The framework records structured evidence and evaluates explicit quality contracts.
+
+### 5. Governance bypass
+
+If an agent can simply modify the gate, lower the threshold or edit the workflow that evaluates it, the gate is not actually a gate.
+
+The framework therefore treats governance itself as a protected surface.
+
+---
+
+## Evidence and project status
+
+The project is intentionally public and actively developed.
+
+Current repository characteristics:
+
+| Property | Status |
+| --- | --- |
+| License | MIT |
+| Package | `sistema-multiagente-sdlc` |
+| Current release | `2.2.2` |
+| Distribution | Public npm package |
+| CLI | `sdlc` |
+| Runtime | Node.js |
+| Minimum Node.js | `22.13+` |
+| Package manager | pnpm 11.3.0 |
+| Repository | GitHub |
+| Development model | Open source / public |
+| Primary maintainer | Juan Castrejon |
+
+The project is still in an early adoption stage. It is **not presented as a widely adopted framework**.
+
+The focus at this stage is technical maturity, reproducibility and validation through real repository maintenance rather than inflated adoption claims.
+
+Recent releases have been driven by operational findings from using the harness against real consumer repositories.
+
+Examples include:
+
+- reducing false findings in `tools-doctor`;
+- treating derived skill mirrors differently from canonical files;
+- fixing package-manager flag propagation in `verdict`;
+- improving checkpoint selection in `resume`;
+- making release and validation behavior reproducible;
+- adding regression tests for each discovered failure mode.
+
+The project therefore treats maintenance itself as a source of engineering evidence.
+
+---
+
+## Architecture
+
+The framework is intentionally layered.
+
+```text
+┌──────────────────────────────────────────────────────┐
+│                    Human Governance                  │
+│                                                      │
+│ Requirements · Specification · Signoff · Ownership   │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│                 SDLC Orchestration                   │
+│                                                      │
+│ F0-F17 · phase contracts · slices · agents           │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│                   Agent Runtime                      │
+│                                                      │
+│ Codex · Claude Code · IDE agents · external tools    │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│                 Verification Layer                   │
+│                                                      │
+│ validators · quality gates · coverage · governance   │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│                 Independent CI                        │
+│                                                      │
+│ re-measure · arbitrate · hard-block                 │
+└──────────────────────────────────────────────────────┘
+```
+
+The important architectural boundary is:
+
+```text
+Agent → proposes / implements
+Harness → measures
+CI → arbitrates
+Human → authorizes
+```
+
+---
+
+## Quick start
+
+### Install into a new project
+
+From the root of the target repository:
+
+```powershell
+npx sistema-multiagente-sdlc init `
+  --mode greenfield `
+  --project-name "Mi Proyecto"
+```
+
+Dry run:
+
+```powershell
+npx sistema-multiagente-sdlc init `
+  --mode greenfield `
+  --project-name "Mi Proyecto" `
+  --dry-run `
+  --json
+```
+
+### Adopt an existing repository
+
+For brownfield repositories:
+
+```powershell
+sdlc adopt --target .
+```
+
+Diagnostic:
+
+```powershell
+sdlc doctor --target . --json
+```
+
+---
+
+## Development setup
 
 ```powershell
 git clone https://github.com/JuanCastrejon/SistemaMultiagente_SDLC.git
 cd SistemaMultiagente_SDLC
+
 corepack prepare pnpm@11.3.0 --activate
 pnpm install --frozen-lockfile
+
 pnpm run validate
 pnpm test
-node ./bin/sdlc.js install --target ../mi-proyecto --mode greenfield --project-name "Mi Proyecto"
 ```
 
-Legacy/brownfield:
+The project requires Node.js `>=22.13`.
 
-```powershell
-node ./bin/sdlc.js install --target ../proyecto-legacy --mode legacy --project-name "Proyecto Legacy"
-node ./bin/sdlc.js doctor --target ../proyecto-legacy --json
-```
+---
 
-## Runtime Multiagente
+## Runtime multiagente
 
-Desde `1.4.0`, `sdlc` incluye comandos ejecutables para continuidad cross-IDE. El runtime primario es Node; los wrappers PowerShell solo existen para ergonomía Windows.
+The `sdlc` runtime provides continuity across agent environments.
 
 ```powershell
 sdlc session-start --target . --json
+
 sdlc resume --target . --markdown
+
 sdlc save --target . --event manual --json
+
 sdlc continua --target . --platform codex --json
+
 sdlc memory-sync --target . --mode health --json
+
 sdlc validate-runtime --target . --json
-sdlc hooks install --target . --post-merge-checkpoint --json
 ```
 
-Reglas base:
+The runtime is designed around explicit state rather than relying exclusively on conversational memory.
 
-- `session-start` crea `.sdlc/session.json` con healthcheck de Headroom, CodeGraph, Graphify, caveman, vault y slice actual.
-- `resume` es solo lectura y recompone contexto en orden repo → CodeGraph → Graphify → vault.
-- `save` escribe checkpoints locales en el vault; no promueve GitHub Issues, OpenSpec ni PRs sin gate humano.
-- `hooks install --post-merge-checkpoint` instala un hook local `post-merge` que ejecuta `sdlc save --event post-merge`.
-- `memory-sync --mode nightly --apply` importa chats y exporta Graphify al vault; no crea checkpoints automáticos.
+For example:
 
-## Harness Ejecutable F0-F17
+- `session-start` creates session state and performs health checks;
+- `resume` reconstructs context;
+- `save` creates checkpoints;
+- `memory-sync` manages optional external memory;
+- `continua` provides agent continuity across supported environments.
 
-Desde `1.5.0`, el flujo F0-F17 tiene contrato ejecutable y evidencia por fase.
+---
+
+## Executable F0-F17 harness
+
+The SDLC is represented as executable phases rather than only documentation.
+
+Example:
 
 ```powershell
-sdlc phase-gate --target . --phase F5 --slice <slice> --json
+sdlc phase-gate `
+  --target . `
+  --phase F5 `
+  --slice <slice> `
+  --json
+```
+
+Governance:
+
+```powershell
 sdlc governance-check --target . --json
-sdlc tools-doctor --target . --profile full --json
-sdlc pr-body-check --repo . --pr <number> --json
 ```
 
-Reglas base:
-
-- `phase-contract.yaml` declara owner, participantes, entradas, salidas, gate humano y siguiente fase.
-- `.github/agent-state/evidence/<slice>/<phase>.yaml` registra evidencia trazable cuando la fase lo exige.
-- `governance-check` compara el bloque `SDLC_SHARED_RULES` entre IDEs y valida mirrors de skills.
-- `tools-doctor --profile full` reporta el stack de harness completo: OpenSpec, Graphify, CodeGraph, Obsidian, Headroom, Caveman, autoskills, Vercel skills, party-mode y el package manager del repo consumidor.
-
-### Package manager del consumidor
-
-`verdict`, `tools-doctor` y `scripts/validate-local-gate.ps1` detectan el package manager del repo destino en este orden: campo `packageManager` de `package.json`, lockfile presente (`pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `package-lock.json`) y `pnpm` como default histórico. Un consumidor con `npm workspaces` ya no falla con `pnpm: missing`; el tool se reporta como `package-manager` con el manager detectado y su origen.
-
-## Governance Engineering — Enforcement Duro (1.7.0)
-
-Desde `1.7.0`, el engine expone primitivas para convertir gobernanza advisory en enforcement duro (ADR-0006). Ver arquitectura completa en ADR-024/ADR-025 del repo consumidor.
-
-### Veredicto ordenado + status go/no-go
+External tooling:
 
 ```powershell
-# Veredicto READY/NOT-READY (fail-fast sobre validators del consumidor)
-sdlc verdict --target . --json
-sdlc verdict --target . --write --slice <slice> --phase <F> --json
-
-# Snapshot go/no-go (governance + tools + phase-gate)
-sdlc status --target . --markdown --write
-sdlc status --target . --exit-code   # CI hard-block si no-go
+sdlc tools-doctor `
+  --target . `
+  --profile full `
+  --json
 ```
 
-- `verdict`: corre los scripts `validate:*` del consumidor en orden fail-fast; clasifica cada uno como BLOCKING/WARNING; emite un único `{verdict: "READY"|"NOT-READY"}` con exit 0/2.
-- `status`: agrega `governance-check` + `tools-doctor` + `phase-gate` en un snapshot Markdown. Con `--exit-code` devuelve exit no-cero cuando cualquier componente está en error/blocked.
-- `phase-gate --exit-code`: hard-block cuando la fase del slice activo está "blocked" (sin el flag, modo informativo — exit 0).
-
-### Skills vivas — eval + propuesta gated
+Pull request validation:
 
 ```powershell
-# Score del canónico contra golden tasks en .github/skills/<skill>/evals/*.yaml
-sdlc skill-eval --target . --skill enrich-us --json
-
-# Propuesta de edición (solo escribe bajo openspec/changes/<change>/)
-sdlc skill-propose --target . --skill enrich-us --change <change> --intent "descripción"
+sdlc pr-body-check `
+  --repo . `
+  --pr <number> `
+  --json
 ```
 
-- `skill-eval`: carga golden tasks YAML del consumidor; scoring determinístico (presencia de campos); emite score numérico por task y global.
-- `skill-propose`: genera `proposed-skill-diff.md` + `skill-eval-report.yaml` solo bajo `openspec/changes/<change>/`; nunca muta `.github/skills/` directamente (el hook deny del consumidor lo bloquearía de todos modos).
-- `schemas/skill-eval.schema.json`: schema JSON Schema draft-07 para sets de golden tasks.
+Each phase can declare:
 
-### Flujo de gate humano completo
+- owner;
+- participants;
+- inputs;
+- outputs;
+- human gate;
+- next phase;
+- required evidence.
+
+Evidence is stored in structured form under:
 
 ```text
-sdlc verdict → READY/NOT-READY
-sdlc status --markdown --write → status.md
-Adjuntar status.md al bloque [validation] del Issue → gate humano F4/F13 firma contra el número
+.github/agent-state/evidence/
 ```
 
-## Gauntlet de calidad verificable (1.8.0)
+---
 
-Desde `1.8.0`, el framework implementa el ADR 0007: en vez de revisar línea por línea el código que genera un agente, se le rodea de restricciones automáticas **verificables**. La tesis viene de Robert C. Martin, con una corrección importante: Martin no elimina la revisión humana, la **reubica** — se deja de revisar implementación y tests, y se sigue revisando y firmando la especificación *antes* de que se genere código.
+## Governance enforcement
 
-Dos reglas gobiernan todo lo de abajo:
+The framework does not treat governance as documentation only.
 
-- **Ningún *umbral* nace en `block`.** Los umbrales entran en `observe`, pasan a `ratchet` contra una línea base y solo después bloquean. Dos excepciones deliberadas, porque no son umbrales sino ausencias: un gate que la fase **declara** y no se mide es violación en cualquier modo (prometer una medición y no hacerla no es un aviso), y el guard de frontera bloquea si no puede resolver la base contra la que comparar.
-- **El evaluado no firma su propio veredicto.** El harness local calcula lo mismo que CI, pero se autodeclara `advisory`; el árbitro es el workflow, que vuelve a medir en una máquina que el agente no controla.
+It provides executable controls for:
 
-  Ese arbitraje **no es automático por instalar el workflow**: exige dos controles de plataforma que el framework no puede imponer — marcar el check como *required* en la rama protegida, y restringir vía CODEOWNERS quién edita `.github/workflows/`. Sin ambos, el árbitro es editable por el evaluado y no arbitra nada. El propio workflow lo documenta en su cabecera.
+```text
+requirements
+    ↓
+phase contracts
+    ↓
+governance checks
+    ↓
+quality gates
+    ↓
+human signoff
+    ↓
+CI arbitration
+```
 
-### Contrato de calidad
-
-`quality-contract.yaml` declara tiers, superficies, probes, umbrales por tier y **denominador mínimo** de cada gate. El motor solo adjudica: no sabe que existe Vitest ni Stryker. Los adapters de formato viven en el consumidor.
+The main commands include:
 
 ```powershell
-# Ejecuta los probes declarados, anexa la evidencia medida y adjudica
-sdlc quality-gate --slice <id> --phase <F> --run --exit-code --json
+sdlc verdict --target . --json
 
-# Solo adjudica lo ya escrito (se marca advisory)
-sdlc quality-gate --slice <id> --phase <F> --from-evidence
+sdlc status --target . --markdown --write
 
-# Mueve la línea base de los gates ratchet a evidencia YA escrita, nunca a un número a mano
-sdlc quality-baseline --promote --slice <id> --source ci
+sdlc status --target . --exit-code
 
-# Cobertura de las LÍNEAS CAMBIADAS, no del repo entero (se encadena tras el test runner)
-sdlc coverage-diff --base-ref origin/develop
+sdlc phase-gate --exit-code
 ```
 
-El `min_denominator` es lo que separa un gate que juzga de uno vacuo: «0 violaciones permitidas» y «0 violaciones permitidas, y solo cuenta si se escanearon ≥10 módulos» son controles distintos.
+`verdict` evaluates consumer validation scripts and produces:
 
-### Frontera de especificación
+```text
+READY
+```
 
-`scripts/validate-spec-boundary.mjs` bloquea cuando el diff toca specs, contratos, workflows o configuración de herramientas sin excepción aprobada. Sin este candado, la ruta más barata para pasar cualquier gate es reescribir el criterio.
+or:
 
-En CI se ejecuta la copia del guard que vive en la rama de integración —no la del checkout del PR— y su allowlist se lee de la base vía `git show`: una excepción creada en el mismo PR no autoriza nada hasta estar mergeada.
+```text
+NOT-READY
+```
 
-Desde 2.0.0 cada excepción del allowlist apunta a una **atestación firmada de verdad** (`attestation_commit` verificable, `approved_by` en `governance.maintainers`, `expires_at` vigente), y verificar una firma SSH exige `gpg.ssh.allowedSignersFile` — una config que un runner de CI no tiene. La solución: las claves **públicas** de los maintainers viajan en el repo, en `.sdlc/allowed_signers`, y el guard las usa solo. Es seguro por construcción: lo que se verifica —el commit de la atestación— viene fijado por la allowlist de la base; cambiar este archivo solo puede *negar* validaciones legítimas, nunca fabricarlas.
+`status` combines governance, tools and phase state into a go/no-go snapshot.
 
-Una salvedad honesta: si la rama base todavía no tiene el script (bootstrap, primera adopción), el workflow avisa y cae a la copia del checkout. Mientras dure esa ventana el guard sí es editable por el PR, y se cierra sola en cuanto el guard existe en la base.
+---
 
-### Firma humana verificable y cierre
+## Quality gates
+
+Since `1.8.0`, the framework includes a measurable quality-gate model.
+
+The core principle is:
+
+> **Do not make quality claims that cannot be independently measured.**
+
+Quality contracts can define:
+
+- tiers;
+- surfaces;
+- probes;
+- thresholds;
+- minimum denominators;
+- evidence requirements;
+- baseline behavior.
+
+Example:
 
 ```powershell
-# El sujeto (slice + fase + tree_hash de las superficies) se recomputa siempre, nunca se recibe declarado
-# `--record` enlaza la firma con la evidencia de su fase. SIN el, el commit firmado existe pero la
-# evidencia sigue apuntando a la anterior y el gate sigue bloqueando: es el paso que falta, no un extra.
-sdlc signoff --slice <id> --phase <F> --create --record
-sdlc signoff --slice <id> --phase <F> --verify --commit <sha>
-
-# Cada escenario Gherkin trae un sc_id cuyo hash debe coincidir con (capability, requirement, título)
-sdlc acceptance-verify --change <slug>
-
-# Ninguna tarea sin marcar; una tarea de merge marcada exige que HEAD sea antepasado real
-sdlc change-close --change <slug> --integration-branch develop
+sdlc quality-gate `
+  --slice <id> `
+  --phase <F> `
+  --run `
+  --exit-code `
+  --json
 ```
 
-Con un solo maintainer, GitHub prohíbe auto-aprobar un PR propio: `platform-review` es insatisfacible, así que la firma se verifica por **commit firmado** en vez de por review de plataforma (`governance.threatModel: single-maintainer`).
-
-> Desde 2.0.0 el sujeto se ancla al **commit firmado** y `--create --record` enlaza la firma con la evidencia de su fase. Ver [Firma humana: emitir, enlazar y auditar](#firma-humana-emitir-enlazar-y-auditar).
-
-### Documentación generada, no escrita
+Evidence-only adjudication:
 
 ```powershell
-sdlc quality-docs --out docs/quality-gates.md   # regenera desde los contratos
-sdlc quality-docs --check                       # CI: exit 2 si la doc comiteada divergió
+sdlc quality-gate `
+  --slice <id> `
+  --phase <F> `
+  --from-evidence
 ```
 
-Mentir en esa doc exigiría editar el propio contrato que los gates evalúan. `--check` no escribe: compara y falla, para que una doc desactualizada no pase inadvertida. Es **opt-in**: el workflow que entrega el framework no lo invoca, así que cablearlo a CI es decisión del consumidor (regla de adopción).
-
-### Adopción de un consumidor maduro
-
-`sdlc install` asume un scaffold completo. Un repo con historia propia no quiere que eso le reescriba nada encima:
+Baseline promotion:
 
 ```powershell
-sdlc adopt --target .    # aditivo: no pisa archivos existentes
+sdlc quality-baseline `
+  --promote `
+  --slice <id> `
+  --source ci
 ```
 
-Agrega la devDependency versionada (**nunca `npm link`**), un `.sdlc/config.json` mínimo **sin inventar superficies**, y el contrato de fases con su schema — solo los que falten. Correrlo dos veces es seguro.
-
-Con una excepción explícita, que es el punto de la pieza: si la dependencia ya está declarada como `file:` o `link:`, **sí** edita `package.json` para reemplazarla por una versión real. Un árbitro que apunta a un working tree local no arbitra nada, así que ese estado no se conserva. Cuando la rama de integración es ambigua (típico en gitflow: `origin/HEAD` apunta a `main` mientras se integra en `develop`), el payload lo dice en vez de elegir en silencio.
-
-### Prueba de rojo — advisory, y lo declara
+Changed-line coverage:
 
 ```powershell
-sdlc red-proof-verify --slice <id> --report reports/red-proof.json --format vitest-json
+sdlc coverage-diff `
+  --base-ref origin/develop
 ```
 
-Todo escenario en `status: red` exige que el reporte declare `outcome: assertion-failed`: un error colateral (import roto, `throw` arbitrario) no da crédito, porque demuestra que algo se rompió, no que el escenario esté bien especificado.
+---
 
-Es **opt-in y no autoritativo**, y el payload lo declara (`authoritative: false`, `proofStrength: "heuristic"`, `limitations`). No consume aún procedencia de CI, así que adjudica un reporte que produce el propio evaluado: `ok` significa «no se detectó trampa», nunca «el rojo quedó demostrado». Ningún workflow lo invoca por defecto.
+## The specification boundary
 
-## Qué cambia en 2.0.0
+One of the most important controls in the framework is the specification boundary.
 
-Las rupturas son **trece**, casi todas salidas de **operar** el framework en un consumidor real y no de leer el código. Están repetidas en `migrations/2.0.0/up.mjs`, que deja constancia escrita en `.sdlc/migrations/` del repo actualizado.
+The problem is simple:
 
-> El [ADR 0008](docs/adr/0008-modelo-de-riesgos-de-autorizacion.md) ya está implementado; sus cinco rupturas son las últimas de la tabla. Se declararon **al implementarlas**, no antes: anunciar una ruptura que el código no ejerce ya se hizo aquí dos veces.
-
-| Ruptura | Qué implica al actualizar |
-| --- | --- |
-| El sujeto de la firma cambia de formato | Las atestaciones anteriores **no verifican**. Hay que volver a firmar (`sdlc signoff … --create --record`). `doctor` y `upgrade` las nombran una por una. |
-| `install` deja de escribir superficies y stack de ejemplo | Un repo recién instalado sale en **error** en `doctor` hasta declarar sus superficies reales. Es deliberado: ver abajo. |
-| `.github/agents/surface-traceability.json` se genera desde `config.surfaces` | Cambia de forma (`tier` en lugar de `repoSurface`). Nada del framework lo lee; revísalo si lo consumes a mano. |
-| El hash de árbol pasa de 256 MiB a **64 MiB** por llamada | Un repo cuyo `git ls-tree -r -z` supere ese tamaño empieza a devolver `tree-ref-unreadable` en `signoff` y en el phase-gate, donde antes funcionaba. Son ~715 000 archivos en un solo árbol, así que no alcanza a un repo normal — pero es silencioso para un monorepo grande. |
-| Toda excepción de la allowlist deja de autorizar hasta completarse | `approved_by` debe ser un `signer` de `governance.maintainers`, `attestation_commit` debe verificar como commit firmado por un mantenedor, y `expires_at` debe estar vigente. Antes solo se leía `path` y las otras tres reglas eran decorativas. |
-| El guard exige base REMOTA calificada (`refs/remotes/…`) | Un tag o rama local llamado `origin/<rama>` ya no sirve como base: secuestraba la comparación entera. |
-| El workflow ya no cae a la copia del checkout | Si la rama de integración no trae el guard, falla con `spec-boundary-guard-ausente-en-base` en vez de ejecutar el script que el evaluado controla. |
-| El alcance del guard crece | Configs de gate por nombre a cualquier profundidad, `**` que cruza barras de verdad, autoprotección por sufijo de ruta, rutas NUL-delimitadas y rechazo de patrones patológicos. Puede bloquear lo que antes pasaba. |
-| Toda superficie sin clasificar exige atestación firmada | `tier` deja de gobernar la autorización. Cuatro riesgos por superficie deciden la firma, y ausente no es `false`. Aplica a F4/F13/F14. |
-| El sujeto de la atestación pasa a v2 | Gana `contract_sha256` y `phase_contract_sha256`. Las firmas anteriores no verifican, y la firma deja de valer si la política cambia después de firmar. |
-| `phase-gate` exige rama de integración remota | Leída de `gitFlow.integrationBranch`. Sin ella bloquea; pedir otra base es `authz-base-mismatch`. En CI, `fetch-depth: 0`. |
-| `upgrade` termina en `action-required` con el eje pendiente | Y `doctor` lo reporta, con severidades distintas por comando. |
-| El workflow gestionado gana un paso de autorización | Sin él, el eje se adjudicaba solo donde el evaluado ejecuta. |
-
-### El instalador ya no finge configuración
-
-Hasta 1.8.2, `install` escribía superficies de ejemplo (`apps/api`, `apps/web`) y cinco `<BACKEND_STACK>`. En un repo con otro layout **eso no era un ejemplo: era configuración activa**, con dos consecuencias que tardaron semanas en verse en un consumidor real:
-
-- todos los gates sobre esas superficies eran vacuos (`surface-path-unresolved`), y
-- el sujeto de la firma humana se calculaba sobre el **árbol vacío**, así que una atestación resultaba criptográficamente válida y semánticamente hueca: atestaba la nada.
-
-Ahora `install` escribe `surfaces: []` y `stack` en `null`, y el estado a medio configurar se ve desde el primer minuto. **El framework no sabe nada del repo donde cae**: instala las bases y quien instala remata la configuración. Esa es la diferencia entre un repo sin configurar y uno que *parece* configurado.
-
-## Configuración después de instalar
-
-Cinco cosas que el instalador **no puede adivinar** y sin las cuales el árbitro no mide nada. `sdlc doctor` las reclama todas.
-
-### 1. Superficies reales
-
-```jsonc
-// .sdlc/config.json
-"surfaces": [
-  { "id": "extension", "path": ".", "owner": "web-agent", "tier": "core", "hasUi": true }
-]
+```text
+Agent changes implementation
+        +
+Agent changes the rules evaluating implementation
+        =
+Gate bypass
 ```
 
-`id` es identidad persistente y `path` tiene que existir en disco. Ojo con esto: las superficies se declaran **dos veces** —aquí y en `quality-contract.yaml`— y el árbitro y la firma leen **solo el contrato**. Corregir una sola de las dos no arregla nada, y por eso `checkSurfaces` reporta `surface-declaration-divergent` cuando divergen.
+The framework therefore protects specifications, contracts, workflows and tool configuration.
 
-### 2. Stack real, o `null`
+The guard:
 
-`null` significa «este proyecto no tiene esa superficie» y es un valor legítimo. Lo que no se admite es un placeholder sin sustituir: `doctor` reporta `config-stack-placeholder` como error.
+```text
+scripts/validate-spec-boundary.mjs
+```
 
-### 3. Qué se puede medir y qué no
+detects protected changes and requires explicit authorization.
 
-Aquí es donde la mayoría de repos se atascan, y el framework tiene una respuesta explícita. Los umbrales por tier que trae el contrato de fábrica:
+In CI, the integration branch is treated as the source of authority rather than allowing the pull request to redefine its own evaluation criteria.
 
-| Gate | Fase | Métrica | core | standard | shell | Modo inicial |
-| --- | --- | --- | --- | --- | --- | --- |
-| `F8.changed-lines-coverage` | F8 | cobertura de **líneas cambiadas** | **90 %** | **80 %** | **0 %** | `ratchet` |
-| `F9.mutation-survivors` | F9 | mutantes supervivientes | 0 | 0 | 0 | `observe` |
-| `F9.no-coverage-mutants` | F9 | mutantes sin cobertura | 0 | 0 | 0 | `observe` |
-| `F10.dependency-violations` | F10 | violaciones de dependencias | 0 | 0 | 0 | `ratchet` |
-| `F10.dependency-cycles` | F10 | ciclos de dependencias | 0 | 0 | 0 | `ratchet` |
+---
 
-La cobertura es de **líneas cambiadas**, no del repo entero: un repo con 12 % histórico no queda bloqueado, pero lo que toque hoy sí responde por sí mismo.
+## Human signoff
 
-**El denominador mínimo es parte del umbral, no un detalle.** «0 violaciones» y «0 violaciones sobre ≥10 módulos escaneados» son controles distintos: el primero lo cumple un repo vacío. Los de fábrica:
+Automated verification does not replace human responsibility.
 
-| Gate | Denominador | Mínimo | Qué evita |
-| --- | --- | --- | --- |
-| `F8.changed-lines-coverage` | `coverage.changed_lines_total` | **1** | Que un PR sin líneas nuevas dé 100 % |
-| `F9.mutation-survivors` | `mutation.total` | **1** | Que «0 supervivientes» sea «0 mutantes generados» |
-| `F9.no-coverage-mutants` | `mutation.total` | **1** | Igual que el anterior |
-| `F10.dependency-violations` | `dependencies.modules_scanned` | **10** | Que «0 violaciones» sea «0 módulos escaneados» |
-| `F10.dependency-cycles` | `dependencies.modules_scanned` | **10** | Igual que el anterior |
+The framework supports signed attestations tied to the evidence being approved.
 
-Por debajo del mínimo el gate no pasa ni falla: se marca como no concluyente.
+```powershell
+sdlc signoff `
+  --slice <id> `
+  --phase <F> `
+  --create `
+  --record
+```
 
-**La escalera de adopción (ADR 0007): ningún control nace en `block`.**
+Verification:
 
-| Modo | Qué hace | Cuándo se usa |
+```powershell
+sdlc signoff `
+  --slice <id> `
+  --phase <F> `
+  --verify `
+  --commit <sha>
+```
+
+The attestation is bound to the relevant subject rather than merely to a working-tree state.
+
+This is particularly important for single-maintainer repositories where a platform review cannot be treated as an independent approval.
+
+---
+
+## Independent CI arbitration
+
+A local agent must not be able to declare its own result authoritative.
+
+The framework therefore distinguishes:
+
+```text
+Local harness
+    ↓
+advisory evidence
+    ↓
+CI
+    ↓
+independent re-measurement
+    ↓
+authoritative gate
+```
+
+The CI workflow should be configured as a required branch-protection check, and changes to the workflow should be appropriately protected through repository governance.
+
+The framework documents these requirements because a workflow that can be freely edited by the evaluated agent is not an independent arbiter.
+
+---
+
+## Security
+
+Security is treated as part of the engineering lifecycle rather than as an afterthought.
+
+The framework already protects several high-value surfaces:
+
+- specifications;
+- governance configuration;
+- workflows;
+- signed attestations;
+- external-tool execution;
+- managed files;
+- release behavior;
+- agent-generated changes.
+
+External tool installation is deliberately opt-in.
+
+Commands are represented as argument lists rather than arbitrary shell strings, and executable names are restricted to an explicit allowlist.
+
+The project also distinguishes between:
+
+```text
+diagnostic
+advisory
+blocking
+authoritative
+```
+
+results instead of treating every automated signal as equivalent.
+
+---
+
+## Codex Security
+
+AI-assisted development increases the importance of security verification because agents can modify code, configuration and automation at high speed.
+
+SistemaMultiagente_SDLC is designed to provide a verification layer around that activity.
+
+Codex Security can complement this architecture by providing security analysis of:
+
+- the harness itself;
+- changes produced during agent-assisted development;
+- repository configuration;
+- workflows;
+- code paths modified by agents;
+- security regressions introduced during maintenance.
+
+The intended integration model is:
+
+```text
+Agent change
+     ↓
+SDLC quality gates
+     ↓
+Security analysis
+     ↓
+Evidence
+     ↓
+CI arbitration
+     ↓
+Human authorization
+```
+
+The goal is not merely to scan the repository.
+
+The goal is to evaluate whether security verification can become a **first-class, reproducible quality signal inside a governed agentic SDLC**.
+
+---
+
+## API-assisted maintenance
+
+The OpenAI API can be used to support repetitive maintenance and evaluation work around the project.
+
+Potential workloads include:
+
+- pull request analysis;
+- issue triage;
+- test generation;
+- regression analysis;
+- skill evaluation;
+- documentation maintenance;
+- release preparation;
+- repository-level evaluations;
+- security-related analysis;
+- reproducible benchmark runs.
+
+The important constraint is that generated output remains subject to the same verification and governance mechanisms as other changes.
+
+---
+
+## Reproducible evaluation
+
+A major goal of the project is to measure the effect of governance rather than assuming that more agent autonomy automatically produces better software.
+
+The long-term evaluation model is:
+
+```text
+Baseline
+AI-assisted development
+        │
+        ▼
+    measurements
+        │
+        ▼
+Governed agentic development
+SistemaMultiagente_SDLC
+        │
+        ▼
+    measurements
+        │
+        ▼
+      compare
+```
+
+Potential metrics include:
+
+- validation failures;
+- regressions;
+- quality-gate failures;
+- changed-line coverage;
+- security findings;
+- specification violations;
+- human intervention points;
+- false-positive gates;
+- time to diagnose failures;
+- time to release;
+- rollback frequency.
+
+The project deliberately prefers reproducible measurements over subjective claims of agent quality.
+
+---
+
+## Real-world maintenance evidence
+
+The framework is developed by operating it, not only by designing it.
+
+Recent releases have included fixes discovered from real maintenance scenarios.
+
+Examples:
+
+### `tools-doctor`
+
+A mismatch between declared tools and actual probes caused tools declared in the inventory to remain invisible to diagnostics.
+
+The fix made the inventory the source of discovery and added regression coverage.
+
+### `verdict`
+
+A package-manager flag was being passed to the underlying validation script instead of to pnpm.
+
+The observable symptom was a false `NOT-READY` result even though the consumer's validators were green.
+
+The fix included a regression test comparing the npm and pnpm invocation paths.
+
+### `resume`
+
+Checkpoint selection could prefer a newer generated skeleton over the latest usable checkpoint.
+
+The runtime now distinguishes usable checkpoints from post-merge skeletons.
+
+### `upgrade`
+
+Derived skill mirrors are treated as derived artifacts instead of independent sources of truth, reducing false conflicts while preserving real customizations.
+
+These cases are important because they demonstrate the intended development loop:
+
+```text
+Observed failure
+      ↓
+Root-cause analysis
+      ↓
+Harness change
+      ↓
+Regression test
+      ↓
+Release
+      ↓
+Re-measure
+```
+
+---
+
+## Skills
+
+The framework supports evaluation and gated proposals for agent skills.
+
+Evaluate a skill:
+
+```powershell
+sdlc skill-eval `
+  --target . `
+  --skill enrich-us `
+  --json
+```
+
+Propose an update:
+
+```powershell
+sdlc skill-propose `
+  --target . `
+  --skill enrich-us `
+  --change <change> `
+  --intent "descripción"
+```
+
+The proposal flow does not directly overwrite the canonical skill.
+
+Instead it produces an auditable proposal under:
+
+```text
+openspec/changes/
+```
+
+This preserves the distinction between:
+
+```text
+agent suggestion
+```
+
+and:
+
+```text
+approved repository state
+```
+
+---
+
+## Brownfield adoption
+
+Greenfield and brownfield projects have different risks.
+
+### Greenfield
+
+```powershell
+sdlc install `
+  --target ../mi-proyecto `
+  --mode greenfield `
+  --project-name "Mi Proyecto"
+```
+
+### Legacy / brownfield
+
+```powershell
+sdlc install `
+  --target ../proyecto-legacy `
+  --mode legacy `
+  --project-name "Proyecto Legacy"
+```
+
+For mature repositories:
+
+```powershell
+sdlc adopt --target .
+```
+
+The adoption model is additive and avoids treating an existing repository as an empty scaffold.
+
+---
+
+## Modes
+
+| Mode | Use case | Behavior |
 | --- | --- | --- |
-| `observe` | Mide y reporta. Nunca bloquea. | Entrada obligatoria de todo gate nuevo |
-| `ratchet` | Bloquea solo si **empeora** respecto de la línea base | Cuando ya hay baseline promovido |
-| `block` | Bloquea contra el umbral absoluto | Solo cuando el repo ya lo cumple de forma estable |
+| `greenfield` | New project | SDD + governance bootstrap |
+| `legacy` | Existing system | Brownfield discovery + migration-oriented flow |
 
-`enforcement: observe` en la cabecera del contrato es el interruptor global; un gate en `ratchet` con línea base vacía se comporta como `observe` puro. La línea base se mueve con `sdlc quality-baseline --promote`, que exige `--source ci` o un `--allow-local` explícito.
+---
 
-**Cada probe declara su propio presupuesto y su política de ausencia:**
+## Agent model
 
-| Probe | Métricas | Timeout | Si no emite reporte |
-| --- | --- | --- | --- |
-| `coverage` | `coverage.*` | 120 s | `warn` |
-| `deps` | `dependencies.*` | 60 s | `warn` |
-| `mutation` | `mutation.*` | 3600 s (1 h) | `skip` |
+The framework separates agent responsibilities.
 
-`when_absent: warn` avisa pero no bloquea; `skip` lo omite en silencio, que es lo correcto para mutación, cuyo coste no siempre se paga en cada corrida. `applies_when.min_subjects` evita lanzar el probe cuando no hay nada que mutar. Y `command` es el **nombre de un script de `package.json`**, no una línea de shell: el engine lo invoca con el package manager detectado y rechaza cualquier token con metacaracteres.
-
-**Si tu repo no puede medir alguno de esos, declara el probe no disponible con motivo escrito:**
-
-```yaml
-# quality-contract.yaml
-probes:
-  - id: coverage
-    command: validate:coverage
-    unavailable:
-      reason: sin runner de tests; montarlo es un slice propio, no un ajuste
-      since: "2026-08-13"
-```
-
-Con eso, **todos** los gates que dependen de sus métricas salen `not-applicable` con ese motivo, en un bucket propio que no entra en el veredicto. La distinción es el punto entero: *no medido* e *incumplido* son cosas distintas, y un check rojo permanente que las confunde enseña a ignorar la señal. Tres contenciones para que no sea una puerta trasera:
-
-- sin `reason` escrito **no hay exención** y el gate se sigue adjudicando;
-- si la métrica aparece de todas formas, **manda el número medido** y se avisa de que la declaración sobra;
-- los gates de otras familias siguen bloqueando: la exención no se propaga.
-
-### 4. Preparación de firma
-
-```powershell
-sdlc tools-doctor --json   # el probe `commit-signing` dice qué falta
-```
-
-Comprueba `governance.maintainers`, `user.signingkey`, `gpg.format` y —con SSH— que `gpg.ssh.allowedSignersFile` exista. Antes, un consumidor descubría que no podía atestar nada **en el momento en que un gate humano se lo pedía**, con la fase ya bloqueada.
-
-Dos detalles que cuestan una tarde si nadie los dice:
-
-- **`%GS` no tiene el mismo formato en GPG y en SSH.** Con GPG es el UID completo (`Nombre <email>`); con `gpg.format=ssh` es el **principal** de `allowed_signers`, normalmente el email solo. Se aceptan las dos formas, y el error muestra el `%GS` realmente observado.
-- **Autorizar por email no autoriza una clave.** Con SSH, `allowed_signers` ya ata identidad a clave; con GPG, `%GS` es el UID que la propia clave declara, así que cualquiera puede fabricar una con tu email. Declara `fingerprint` y manda sobre el nombre:
-
-```jsonc
-"governance": {
-  "maintainers": [
-    { "signer": "juan@example.com", "fingerprint": "SHA256:…", "role": "human-review" }
-  ]
-}
-```
-
-El resultado de la verificación trae `identityBinding: "fingerprint" | "principal"` para que se sepa cuál de las dos garantías hay delante.
-
-Y un paso más que el doctor no puede dar por ti: **comita las claves públicas en `.sdlc/allowed_signers`** (el formato de `allowed_signers` de SSH, una línea por mantenedor). Sin ese archivo, la verificación de firmas —y con ella la validación de cada excepción del allowlist— solo funciona en tu máquina, donde tu `gpg.ssh.allowedSignersFile` existe; un runner o un clon fresco no pueden validar nada. La clave pública no es un secreto: es el material que hay que distribuir, igual que una clave GPG en un keyserver.
-
-### 5. Estado por slice
-
-`phase-status.yaml` admite un mapa `slices:` además del puntero global. Con varios slices en vuelo, el puntero solo describe uno y el árbitro quedaba ciego a los demás:
-
-```yaml
-current_slice: "slice-en-curso"   # lo que lee el workflow
-current_phase: "F8"
-
-slices:                            # lo que `sdlc status` adjudica entero
-  slice-en-curso:  { phase: "F8" }
-  otro-slice:      { phase: "F4" }
-```
-
-Es aditivo: un `phase-status.yaml` sin el mapa se comporta exactamente como antes.
-
-### 6. Límites del runtime (normalmente no hay que tocarlos)
-
-El framework lanza procesos externos —`git` sobre todo— y captura su salida. Esos límites viven en `src/file-utils.js` y **no están en ningún archivo de configuración a propósito**: cambiarlos mal rompe la propiedad que sostiene toda la verificación. Se documentan porque un repo muy grande puede necesitar subirlos.
-
-| Constante | Valor | Qué acota |
-| --- | --- | --- |
-| `CAPTURE_CEILING_BYTES` | 256 MiB | Techo de diseño: memoria retenida con el pool caliente al completo |
-| `TREE_HASH_MAX_BUFFER` | **64 MiB** | Tope por llamada del hash de árbol. Es `CAPTURE_CEILING_BYTES / 4` |
-| `AUDIT_CONCURRENCY` | 4 | Atestaciones verificadas a la vez (`src/harness.js`) |
-| `maxBuffer` (por llamada) | 1 MiB por defecto | Salida capturada de un proceso. **Un solo presupuesto entre `stdout` y `stderr`**, igual que `spawnSync` |
-| `MAX_CONCURRENT_CAPTURES` | 4 (**derivado**) | `CAPTURE_CEILING_BYTES / TREE_HASH_MAX_BUFFER`. Si subes el tope por captura, baja solo |
-| `killGraceMs` | 2 s (máx. **5 s**) | Gracia entre el `SIGTERM` al grupo de procesos y el `SIGKILL` |
-
-**La regla que explica los números:** el pico de memoria retenida es *(tope por llamada) × (capturas en vuelo)*. Con 64 MiB por llamada y 4 en vuelo, eso da exactamente el techo de 256 MiB.
-
-`CAPTURE_CEILING_BYTES` **es un límite aplicado**, no solo de diseño. La admisión reserva los **bytes declarados** de cada captura y encola en FIFO estricto cuando no caben. Dos rondas hicieron falta para llegar aquí:
-
-- la ronda 8 encontró que no había ningún tope y cinco capturas de 63 MiB retenían 315 MiB (pico de 497 MiB de RSS);
-- la ronda 9 encontró que **contar capturas tampoco bastaba**, porque el tope por captura es configurable: con el escape de 128 MiB documentado más abajo, cuatro cupos daban **512 MiB**, el doble del techo. Por eso `MAX_CONCURRENT_CAPTURES` ahora se **deriva** en vez de declararse.
-
-La reserva se decide **una vez, antes de arrancar el proceso, y solo sobre el tope declarado** — nunca sobre bytes ya recibidos. Esa línea es la que separa esto del presupuesto que se quitó en la ronda 7: aquél consultaba a mitad de la escritura, y por eso dos llamadas idénticas podían terminar distinto. Y el cupo se devuelve **cuando los buffers se sueltan de verdad**, no cuando la promesa resuelve: en un corte por desbordamiento la promesa resuelve de inmediato mientras el hijo sigue vivo, y liberar ahí admitía una segunda tanda encima de la primera.
-
-**Cuánto es 64 MiB en la práctica:** `git ls-tree -r -z` gasta ~94 bytes por entrada, así que da para ~715 000 archivos en un solo árbol. Esa media es de *este* repo; rutas más largas la suben y bajan el número de archivos que caben.
-
-> **Límite conocido, con escape parcial.** Si tu árbol pasa de 64 MiB, `signoff` y el phase-gate devuelven `tree-ref-unreadable`. `computeTreeHashAtRef` y `computeTreeHashAtRefAsync` no aceptan un parámetro por llamada —a propósito: eso dejaría abierto que alguien subiera solo una de las dos vías—, pero sí hay una variable de entorno: `SDLC_TREE_HASH_MAX_BUFFER_BYTES` se lee una sola vez y la comparten las dos. Un flag de CLI o un campo de `.sdlc/config.json` siguen pendientes de decisión de producto.
-
-```bash
-SDLC_TREE_HASH_MAX_BUFFER_BYTES=134217728 sdlc signoff --slice <id> --phase <F> --create --record
-```
-
-**Subir el tope reduce la concurrencia, no el techo.** Con 128 MiB por captura solo caben **dos** a la vez en los 256 MiB; con 256 MiB, una. Es intencional: el techo de memoria manda sobre el paralelismo. La variable exige un **entero positivo** que no supere el techo — `0.5` o un valor gigante se rechazan al arrancar, con el número delante. (`0.5` llegaba antes a publicar un tope de **cero bytes**, que hacía ilegible cualquier árbol.)
-
-Si algún día se expone como flag o config, tendrá que seguir siendo **el mismo número en las dos vías** — es lo único que garantiza que acepten y rechacen las mismas entradas.
-
-**`killGraceMs` está acotado arriba por seguridad, y el tope bajó en la ronda 8.** La escalada a `SIGKILL` identifica al grupo por *pgid*, y ese pgid solo sigue siendo el nuestro mientras la ventana sea corta. `pid_max` es un valor de wrap **configurable del kernel**, no una garantía de esta librería, así que un tope de 30 s no era defendible fuera de esta máquina — ahora son 5 s.
-
-## Firma humana: emitir, enlazar y auditar
-
-```powershell
-# Firma y ENLAZA con la evidencia de la fase en un solo paso
-sdlc signoff --slice <id> --phase <F> --create --record
-
-# Enlazar un commit que ya existe y ya está firmado (si el enlace falló antes)
-sdlc signoff --slice <id> --phase <F> --record --commit <sha>
-
-# Verificar, exigiendo además que el árbol aprobado siga siendo el actual
-sdlc signoff --slice <id> --phase <F> --verify --commit <sha> --require-fresh
-```
-
-Cinco propiedades que conviene entender antes de usarlo:
-
-- **Dice siempre qué pasó, con `--json` o sin él.** Hasta 2.1.0 la salida sin `--json` era **muda** — ni firma, ni bloqueo, ni motivo — y un gate silencioso se lee como ejecutado cuando no lo fue. Desde 2.1.1 la salida humana nombra si el commit de atestación se creó y con qué sha, si la evidencia quedó enlazada, y cuando bloquea, el `code` y el `detail`. Los fallos van por **stderr**; `--json` sigue saliendo por stdout, intacto.
-- **El sujeto se ancla al commit firmado, no al working tree.** Antes caducaba con el commit siguiente, así que no servía como registro de que una fase se aprobó. Que el árbol se haya movido después es otra pregunta: se responde con `fresh: false` y `--require-fresh`.
-- **`--record` verifica antes de escribir.** Si la firma no verifica, no escribe nada. `approved_by` se deriva del firmante que reporta git, nunca de una opción, y la referencia previa se conserva en `history`.
-- **Firmar el vacío es error duro.** Si ninguna superficie resuelve a archivos, `signoff-empty-subject`.
-- **No se firma con el árbol sucio.** El commit de atestación es vacío y firmaría el árbol de `HEAD`, no lo que tienes delante (`--allow-dirty` para saltarlo a sabiendas).
-
-### Auditoría de atestaciones
-
-`doctor` y `upgrade` re-verifican **todas** las atestaciones declaradas, no solo la de la fase en curso. Una firma que dejó de valer se descubría al llegar a su gate humano, con el trabajo ya hecho.
-
-| Veredicto | Qué significa | Efecto |
-| --- | --- | --- |
-| `invalid` | la firma existe y no vale | error en `doctor`, `action-required` en `upgrade` |
-| `unverifiable` | no hay con qué comprobarla (clon superficial, commit ausente) | aviso, pero **nunca** produce éxito |
-| `valid` | verificada | — |
-
-Un clon superficial no es culpa de nadie, así que su remedio no es «vuelve a firmar» sino traer la historia que falta — y el hallazgo lo dice. En cambio un repo sin maintainers **sí** es error: es configuración local que desactiva el verificador entero.
-
-**Coste medido** (superficie de 200 archivos, firmas válidas, mediana de tres corridas):
-
-| Atestaciones | En serie | Con pool de 4 |
-| --- | --- | --- |
-| 1 | 524 ms | 314 ms |
-| 5 | 2 490 ms | 616 ms |
-| 20 | 9 693 ms | 1 703 ms |
-| marginal | ~485 ms | **~67 ms** |
-
-El recorrido de la evidencia sin firmas cuesta ~30 ms: lo caro son los procesos de git, no leer YAML.
-
-## Modelo de riesgos de autorización (2.0.0, ADR 0008)
-
-Hasta 2.0.0 la firma humana colgaba de `tier`, y eso tenía una consecuencia
-perversa **medida**: para esquivar una firma bastaba con bajar el tier — y eso
-compraba además diez puntos menos de cobertura. La regla de gobernanza
-incentivaba degradar la calidad.
-
-Desde 2.0.0 son dos ejes separados: **`tier` mide, los riesgos autorizan.**
-
-```yaml
-# quality-contract.yaml — se genera desde config.surfaces
-surfaces:
-  - id: extension
-    path: .
-    tier: core                    # solo umbrales de calidad
-    money_path: false
-    regulated_data: false
-    security_critical: true       # <all_urls> + content script en cualquier origen
-    state_machine_critical: false
-```
-
-La obligación de firma desaparece **solo** si los cuatro riesgos están presentes,
-son booleanos válidos y los cuatro son `false`. Ausente, `null`, una cadena o un
-nombre mal escrito **obligan**: *no clasificado* no es *no aplica*, y un error de
-tecleo se paga con una firma de más, nunca con una de menos.
-
-Aplica a las fases con gate humano que tienen árbol que atestar —F4, F13 y F14—.
-En F2/F3 no hay código que firmar, y exigirlo allí produciría un bloqueo del que
-no se sale sin tocar la política que el control existe para proteger.
-
-### Qué se compara, y contra qué
-
-`phase-gate` es el **único** que adjudica. Compara la obligación efectiva entre
-la rama de integración y HEAD, superficie a superficie, emparejando por `id`:
-
-| Situación | ¿Downgrade? |
-| --- | --- |
-| `true → false` por reclasificación | sí |
-| La superficie desaparece | sí — la continuidad no se puede demostrar |
-| Split o merge de superficies | sí, por las bajas: producen el mismo diff que borrarlas |
-| El `path` se estrecha (`.` → `docs/`) | sí, baja parcial: la obligación queda intacta y el sujeto se vacía |
-| Rename con `id` estable | no por sí mismo |
-| Alta de una superficie nueva | no |
-| Se baja `governance.humanGate.policy` | sí, aunque ninguna superficie cambie |
-| Se baja el **override de otra fase** | sí, aunque la fase que se está gateando sea otra: nadie gatea todas las fases en cada corrida |
-| Se quita `human_gate` de una fase | sí — es la puerta que gobierna todo el modelo |
-| La fase con puerta **desaparece** del contrato | sí — borrar la fase que sostenía la puerta es quitar la puerta |
-| El contrato de fases de la BASE es ilegible | bloquea — no poder leer la obligación anterior no es no tener nada que comparar |
-
-La rama base sale de `gitFlow.integrationBranch` y se califica a
-`refs/remotes/origin/<rama>`, **no** de lo que proponga el PR: elegir la base es
-elegir qué downgrades son detectables. Un tag llamado `origin/develop` no sirve
-como base, a propósito. En CI hace falta `fetch-depth: 0`.
-
-### El sujeto de la atestación, v2
-
-```
-{ slice, phase, tree_hash, contract_sha256, phase_contract_sha256 }
-```
-
-Los dos hashes nuevos cierran dos huecos distintos. `contract_sha256` hace que
-**una firma deje de valer si la política cambia después de firmar**
-(`authz-contract-drift`) — y se compara contra HEAD, no solo contra el ref
-atestado, porque recomputar en el ref atestado da siempre el mismo número y la
-mutación posterior sería invisible por construcción.
-
-No es frescura: que el `tree_hash` se mueva sigue siendo un **aviso**, porque el
-código cambia todo el tiempo y eso no invalida una aprobación. La política no
-cambia todo el tiempo.
-
-`phase_contract_sha256` entra porque `phase.human_gate` es el AND exterior de
-todo el modelo y vivía en un archivo que el sujeto no cubría.
-
-Una atestación emitida con el sujeto anterior se reconoce como tal
-(`signoff-subject-v1`) en lugar de reportarse como un *mismatch* genérico: la
-acción a tomar es re-firmar, no investigar.
-
-### La política, y sus límites
-
-```yaml
-governance:
-  humanGate:
-    policy: declarative          # attestation | declarative | none
-    overrides:
-      F2: declarative
-```
-
-Por **repositorio**, con override por **fase**. Ni por superficie —una fase se
-firma una vez, y dos políticas sobre la misma fase no tendrían veredicto
-definido— ni por slice, que es una unidad de trabajo del evaluado.
-
-La política **solo decide donde el riesgo no obliga**. Donde obliga,
-`attestation` es obligatoria sin excepción configurable. Y `none` no se degrada a
-su versión laxa cuando no se sostiene —`surfaces: []`, o alguna superficie
-crítica—: se **rechaza**.
-
-### Dónde se adjudica
-
-| Hecho | `doctor` | `upgrade` | `phase-gate` | CI |
-| --- | --- | --- | --- | --- |
-| Superficie sin clasificar | error | acción requerida | **bloquea** | como el gate |
-| Downgrade BASE→HEAD | error | acción requerida | **bloquea** | como el gate |
-| Sujeto v1 o deriva de política | error | acción requerida | **bloquea** | como el gate |
-| BASE irresoluble | aviso | aviso | **bloquea** (con puerta) | **bloquea** |
-| Fase con puerta sin evidencia legible | — | — | **bloquea** | como el gate |
-| Archivo de evidencia ilegible | error | acción requerida | bloquea si hay puerta | como el gate |
-
-`doctor` corre donde se desarrolla y no está concediendo nada; el gate sí. Por
-eso una base irresoluble avisa en uno y bloquea en el otro.
-
-Las dos filas nuevas de abajo son la lección que costó cinco instancias
-aprender: **una comprobación no puede vivir detrás de la condición que existe
-para detectar**. La comprobación del signoff corría solo si el archivo de
-evidencia existía y parseaba — así que una fase con puerta y sin
-`evidence_required` pasaba el gate sin firma con solo borrar el archivo. Ahora
-la puerta **es** la exigencia: sin evidencia legible no hay firma que
-comprobar, y eso bloquea exista o no el archivo. Y la auditoría reporta la
-evidencia que no puede leer en vez de saltársela en silencio — corromper el
-YAML ya no es la forma barata de esconder una atestación podrida.
-
-Y el paso de autorización vive en el **workflow gestionado**: sin él, el eje
-quedaría adjudicado únicamente en la máquina del agente, y no habría evasión que
-inventar — bastaría no correr el comando.
-
-## Puente de Codex — preflight obligatorio
-
-Si delegas trabajo a Codex (ver `AGENTS.md`), ejecuta esto antes:
-
-```powershell
-node scripts/codex-session-check.mjs           # cuenta, plan, vencimiento
-node scripts/codex-session-check.mjs --probe   # además, una llamada real
-```
-
-Cubre tres modos de fallo que no se parecen entre sí y ninguno se ve hasta que algo se rompe a mitad de trabajo:
-
-1. **Sesión de otra cuenta** — la terminal sigue con la anterior aunque creas que cambiaste.
-2. **Credencial rechazada por el servidor** — está en disco y sin vencer, pero se inició sesión con otra cuenta desde otro sitio. `codex login status` responde «Logged in using ChatGPT» y sale `0` mientras la llamada real falla. Solo `--probe` lo detecta, y por eso es opt-in: gasta cuota.
-3. **Proceso con la credencial vieja en memoria** — un `codex` arrancado antes del último login. Se detecta comparando su arranque con la fecha de `auth.json`, y **la reparación es cerrar y reabrir la app**, no matar procesos: matarlos deja al puente sin su sesión compartida y el siguiente trabajo se cuelga sin escribir log.
-
-El preflight no imprime tokens ni el `account_id` completo, y el plan **avisa pero no bloquea**: ve el plan, no la cuota restante.
-
-## Modos
-
-| Modo | Cuándo usar | Qué agrega |
-| --- | --- | --- |
-| `greenfield` | repo nuevo o inicio limpio de producto | plantillas SDD greenfield y governance |
-| `legacy` | repo existente, migración o modernización brownfield | plantillas de research obligatorio y gates de descubrimiento legacy |
-
-## Agentes
-
-| Plano | Personas |
+| Plane | Examples |
 | --- | --- |
 | Control | `planificador-opus`, `orquestador-opus` |
-| Producto/coordinación | `product-owner-agent`, `project-manager-agent` |
-| Definición | `analista-requisitos`, `arquitecto-modular-clean`, `qa-test-architect-agent` |
-| Especialista | `api-nestjs`, `web-admin`, `mobile-sync`, `ux-designer-agent`, `tech-writer-agent` |
+| Product | `product-owner-agent`, `project-manager-agent` |
+| Definition | `analista-requisitos`, `arquitecto-modular-clean`, `qa-test-architect-agent` |
+| Specialists | `api-nestjs`, `web-admin`, `mobile-sync`, `ux-designer-agent`, `tech-writer-agent` |
 | Gate | `qa-security-review` |
 
-## Flujo de Fases
+Agents are participants in the SDLC.
+
+They are not intended to become the sole source of truth for repository correctness.
+
+---
+
+## SDLC phases
+
+The framework models an executable F0-F17 lifecycle.
 
 ```mermaid
 flowchart LR
-  F0["F0 Bootstrap"] --> F1["F1 Requisitos"]
-  F1 --> F2["F2 Revisión humana borrador"]
-  F2 --> F3["F3 Issue local"]
-  F3 --> F35["F3.5 Rama"]
-  F35 --> F4["F4 Handoff readiness"]
-  F4 --> F5["F5 Planificación SDD"]
-  F5 --> F6["F6 Handoff planificador"]
-  F6 --> F7["F7 Orquestación"]
-  F7 --> F8["F8 Implementación"]
-  F8 --> F9["F9 QA"]
-  F9 --> F10["F10 Seguridad"]
-  F10 --> F11["F11 Commit"]
-  F11 --> F12["F12 PR"]
-  F12 --> F13["F13 Gate humano"]
-  F13 --> F14["F14 Merge"]
-  F14 --> F15["F15 Verificación"]
-  F15 --> F16["F16 Archivo"]
-  F16 --> F17["F17 Docs + trazabilidad"]
+  F0["F0 Bootstrap"] --> F1["F1 Requirements"]
+  F1 --> F2["F2 Human Review"]
+  F2 --> F3["F3 Design"]
+  F3 --> F4["F4 Validation"]
+  F4 --> F5["F5 Implementation"]
+  F5 --> F6["F6 Verification"]
+  F6 --> F7["F7 Integration"]
+  F7 --> F8["F8 Release"]
+  F8 --> F9["F9 Migration"]
+  F9 --> F10["F10 Recovery"]
+  F10 --> F11["F11 Maintenance"]
+  F11 --> F12["F12 Evolution"]
+  F12 --> F13["F13 Human Gate"]
+  F13 --> F14["F14 Attestation"]
+  F14 --> F15["F15 Verification"]
+  F15 --> F16["F16 Archive"]
+  F16 --> F17["F17 Docs + Traceability"]
 ```
 
-## Validadores
+The exact phase contracts are stored in the repository and should be treated as executable governance rather than merely documentation.
 
-`pnpm run validate` ejecuta los validadores del framework:
+---
 
-- schema de config
-- sin rutas personales
-- sin bytes de control crudos
-- sanitización de plantillas
-- sin contenido gestionado inline
-- integridad del manifiesto
-- sin scripts placeholder
-- política de herramientas externas
-- precedencia de governance
-- consistencia del manifiesto de skills
-- schema de persona de agente
-- existencia de links en docs
-- consistencia de OpenSpec
-- existencia de referencias Mustache
-- schema de modelos
+## Validators
 
-## Herramientas Externas — inventario, diagnóstico e instalación
+The framework includes repository-level validation for areas such as:
 
-Las herramientas externas son opt-in, y ese era el problema: `tools-doctor` decía `tool-graphify: warning` con una ruta, y el usuario que instala no tenía forma de saber **cuál** de las opcionales le hacía falta ni **cómo** conseguirla sin ir a leer otro documento.
+- configuration schemas;
+- personal-path leakage;
+- template sanitization;
+- managed-content boundaries;
+- manifest integrity;
+- placeholder scripts;
+- external-tool policy;
+- governance precedence;
+- skill-manifest consistency;
+- agent persona schemas;
+- documentation links;
+- OpenSpec consistency;
+- template references;
+- model schemas;
+- label notation;
+- managed path names.
 
-`external-tools.yaml` es ahora la fuente única: propósito, si es requerida, perfil operativo elegible, comando de instalación (cuando existe) y cuándo **no** usarla. `tools-doctor` y `tools-install` leen de ahí.
+Run the complete validation suite:
 
 ```powershell
-sdlc tools-doctor --target . --json     # que falta, QUE ES y como conseguirlo
-sdlc tools-install --target .           # plan: dry-run, no ejecuta nada
-sdlc tools-install --target . --apply   # instala solo lo automatizable
-sdlc tools-install --tool graphify --apply
+pnpm run validate
 ```
 
-El plan separa tres grupos, porque mezclarlos era lo que impedía saber qué falta de verdad:
-
-| Grupo | Qué es |
-| --- | --- |
-| `installable` | hay comando declarado y la herramienta no está |
-| `manualOnly` | **no** hay instalación automatizable; el paso lo hace una persona (con la instrucción concreta) |
-| `satisfied` | ya está presente |
-
-### Cómo está acotada la ejecución
-
-Un inventario que declara comandos es una superficie de ejecución, así que:
-
-- Los comandos son **listas de argumentos**, nunca cadenas de shell. No hay shell que interprete `;`, `|` o backticks: un token raro es un argumento literal, no un comando.
-- El ejecutable debe estar en una **allowlist corta** (`npm`, `npx`, `pnpm`, `yarn`, `node`, `pip`, `pip3`, `pwsh`, `gh`, `corepack`). Una entrada con otro binario se rechaza **al cargar el inventario**, no al ejecutarlo. Si una herramienta necesita otra cosa, se declara como paso manual.
-- **Dry-run por defecto**: instalar software de terceros no puede ser un efecto secundario de pedir un diagnóstico.
-- Nada de esto corre durante `sdlc install`.
-
-Cuando una herramienta no tiene instalador automatizable, el inventario lo dice y entrega la instrucción manual. Inventar un comando que no existe sería peor que no tener ninguno.
-
-## Guía de instalación por herramienta
-
-Las herramientas externas son opt-in. El framework funciona sin ellas; al activarlas reducen reconstrucción de contexto, mejoran trazabilidad y ahorran tokens de forma significativa. Esta sección está dirigida al **agente que trabaja en el repo consumidor** para que pueda guiar al desarrollador correctamente.
-
-Ver detalles completos en `templates/docs/agents/external-tools-matrix.md`.
-
-| Herramienta | Requerida | Propósito |
-| --- | --- | --- |
-| OpenSpec | sí | SDD: specs, changes y archivo |
-| gh CLI | sí para GitHub | issues, PRs y releases |
-| headroom | no | proxy de contexto + ahorro de tokens en llamadas Anthropic |
-| Graphify | no | grafo semántico de docs para exploración cross-módulo |
-| CodeGraph | no | grafo estructural AST para navegación de código |
-| Obsidian | no | vault local para checkpoints y continuidad multi-sesión |
-| caveman | no | compresión de tokens en comunicación operativa |
-| autoskills | no | discovery de skills externas curadas |
-| vercel-labs/agent-skills | no | skills UI/deploy opcionales |
-
-### headroom (proxy de contexto)
-
-headroom actúa como proxy entre el agente y la API de Anthropic. Comprime payloads, aplica presupuestos de contexto y reduce costos en sesiones largas.
-
-**Instalación:**
+Run tests:
 
 ```powershell
-npm install -g headroom
-# o con npx sin instalar globalmente
-npx headroom proxy --no-telemetry
+pnpm test
 ```
 
-**Configuración en Claude Code** (`~/.claude/settings.json`):
+---
 
-```json
-{
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"
-  }
-}
-```
+## External tools
 
-**Arranque del proxy** (script incluido en `templates/scripts/`):
+External tools are optional.
+
+The framework maintains an inventory describing:
+
+- purpose;
+- whether the tool is required;
+- operational profile;
+- installation method;
+- manual installation requirements;
+- detection strategy.
+
+Diagnostics:
 
 ```powershell
-pwsh -NonInteractive -File scripts/headroom-start.ps1
-```
-
-**Autoarranque en Windows** (una sola vez por máquina — acción del usuario, no automatizable por el agente):
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Json
-pwsh -ExecutionPolicy Bypass -File scripts/register-headroom-task.ps1 -Apply
-Get-ScheduledTask -TaskName "<ProjectSlug>-Headroom-Autostart"
-```
-
-Sin esta tarea registrada, Codex y VS Code/Copilot no arrancan headroom automáticamente; Claude Code sí (via hook SessionStart en `~/.claude/settings.json`).
-
-**Regla crítica:** si el proxy falla tras los reintentos, **no limpiar `ANTHROPIC_BASE_URL`**. Eso causaría que el agente llame directamente a Anthropic sin que el usuario lo sepa. El script registra el fallo en `%APPDATA%\headroom\health-last-fail.txt` y termina con `exit 1` para que el error sea visible.
-
-### Graphify (grafo semántico de documentación)
-
-Graphify indexa `docs/`, `openspec/`, `.github/agents/`, `.github/skills/` y raíz como knowledge graph semántico. **No indexa código de producto** (`apps/`, `packages/`).
-
-```powershell
-pip install --user graphifyy
-graphify update .                    # re-extracción AST local, sin costo LLM
-graphify query "<tema>"              # búsqueda semántica
-graphify path "<A>" "<B>"           # relaciones entre nodos
-graphify explain "<nodo>"           # descripción expandida
-```
-
-Cuándo usar: onboarding al proyecto, análisis de arquitectura cross-módulo, research de prior art en paso 4.5 de `enrich-us`. **No usar en loops normales de implementación.**
-
-### CodeGraph (grafo estructural de código)
-
-CodeGraph construye un índice AST de todo el código de producto. Responde preguntas estructurales sub-milisegundo sin grep.
-
-```powershell
-codegraph init -i                    # construir índice
-codegraph status                     # verificar salud
-```
-
-Cuándo usar: "¿dónde está definida X?", "¿qué llama a Y?", "¿qué rompería si cambio Z?", firma de un símbolo, navegación cross-module en `apps/` y `packages/`. **No usar para docs ni semántica.**
-
-### Regla de ahorro de tokens: CodeGraph vs Graphify vs Grep
-
-Esta regla es crítica. Violarla duplica contexto y eleva costos 3x–8x en sesiones largas.
-
-| Pregunta | Herramienta correcta |
-|---|---|
-| Estructura de código (callers, callees, impacto, firma) | CodeGraph — siempre primero, sin fallback a grep |
-| Semántica cross-doc (docs, ADRs, specs, guides, agents) | Graphify si el grafo existe, sino docs raw |
-| Texto literal (strings de log, comentarios, contenido sin estructura) | Grep — solo si no aplican los anteriores |
-
-**Nunca ejecutar CodeGraph y Graphify para la misma consulta.** Son capas distintas con distinto scope.
-
-### caveman (compresión de tokens en conversación)
-
-caveman comprime solo los tokens de **output** del agente, no el razonamiento ni los payloads MCP. Útil para coordinación operativa entre agentes.
-
-```text
-/caveman lite    → modo conversacional comprimido (sin artículos, fragmentos OK)
-/caveman full    → máxima compresión (solo para coordinación interna)
-```
-
-Regla: caveman **solo en conversación operativa**. Off en documentación, commits, PRs y artefactos finales. Las decisiones durables van a OpenSpec, docs o `.github/agent-state/`.
-
-**party-mode** solo en fases F2 (Análisis), F3 (Diseño) y F4 (Validación). El costo multiagente (3x–8x tokens) solo se justifica en decisiones de diseño con trade-offs reales.
-
-### Skills multi-entorno (bootstrap)
-
-Después de instalar el framework, sincronizar las skills a todos los agentes:
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1
-```
-
-Esto copia las skills gobernadas desde `.github/skills/` a `.claude/skills/`, `.agents/skills/` y `.windsurf/skills/`. Si el manifiesto tiene entradas `crossMirrorSkills`, también copia skills entre carpetas de agente (por ejemplo, caveman ecosystem a Claude Code).
-
-Verificar con:
-
-```powershell
-pwsh -ExecutionPolicy Bypass -File scripts/bootstrap-agent-skills.ps1 -Json
 sdlc tools-doctor --target . --profile full --json
 ```
 
-## Comparativa BMAD
+Installation assistance:
 
-Comparativa lado a lado de los dos frameworks. La intención no es competir sino aclarar dónde se solapan y dónde cada uno se especializa. Datos de BMAD tomados de su README oficial v6 (`bmad-code-org/BMAD-METHOD`, npm `bmad-method`).
+```powershell
+sdlc tools-install --target . --profile full
+```
 
-| Característica | BMAD-METHOD v6 | SistemaMultiagente_SDLC v1.8.0 |
-| --- | --- | --- |
-| Licencia | MIT | MIT |
-| Runtime requisitos | Node ≥20.12, Python ≥3.10, `uv` | Node ≥22.13, PowerShell (pwsh/powershell), Git |
-| Comando de instalación | `npx bmad-method install` (interactivo) o `--yes --modules --tools` (CI) | `npx sistema-multiagente-sdlc init` (cwd default desde v1.2.1) |
-| Scope principal | Desarrollo ágil asistido por IA | SDLC asistido por IA con governance enterprise y SDD |
-| Flujos de trabajo | 34+ flujos ágiles (BMM core) | SDD waterfall por slice + ágil por release (fases F0-F17) |
-| Scale-adaptive | sí, automático (bug → enterprise) | scale hint activo desde v1.3.0 |
-| Agentes/personas | 12+ personas (PM, Arquitecto, Dev, UX, …) | 8 personas activas + roadmap extensible |
-| Modo party / colaboración | sí (múltiples personas en sesión) | roundtable opt-in planificado v1.3.0 |
-| CLI de ayuda / coach de siguiente paso | skill `bmad-help` | `sdlc doctor` (verificaciones de estado); `sdlc next` planificado v1.3.0 |
-| Módulos / ecosistema | BMM (core) + BMB (builder) + TEA (test architect) + BMGD (game dev) + CIS (creative) | basado en modos (`greenfield` / `legacy`) + packs extensibles planificados v2.0.0 |
-| Arquitectura de skills | sí (V6 + Sub-Agent inclusion + Cross-Platform Agent Team) | mirroring de skills a `.claude/`, `.agents/`, `.windsurf/` (`bootstrap-agent-skills.ps1`) con soporte `crossMirrorSkills` |
-| Constructor de agentes/flujos personalizados | BMad Builder v1 | personas `.agent.md` + validadores (`validate-agent-persona-schema`) |
-| Automatización del loop de desarrollo | en roadmap V6 | `phase-graph.yaml` + rework label-driven + lock TTL |
-| Brownfield-first | no | sí (modo legacy con research obligatorio antes de proposal) |
-| Validadores de governance | no es core | 15 validadores (config, personal-paths, no-control-bytes, template-sanitization, manifest-integrity, governance-precedence, …) |
-| Gates de calidad medidos | no es core | contrato declarativo con tiers, umbrales por superficie y denominador mínimo; árbitro en CI que vuelve a medir (ADR 0007) |
-| Cobertura de lo que cambió | n/d | `sdlc coverage-diff` cruza el diff de git contra el detalle de statements, no el porcentaje global |
-| Frontera de especificación | no es core | guard que bloquea editar specs/contratos sin excepción ya mergeada; en CI corre la copia de la rama base, no la del PR |
-| OpenSpec / SDD | no es core | integrado (capacidades canónicas en `openspec/specs/`) |
-| Readiness L1/L2/L3 + matriz NFR | no es core | integrado (spec `business-production-readiness`) |
-| Sistema de migración + rollback | no es core | backup automático + `sdlc upgrade --to-version` + `sdlc rollback --to <id>` |
-| Lock multi-agente | no es core | TTL `platform-context.json` lock |
-| Sanitización de paths/plantillas | no es core | `validate:no-personal-paths` + `validate:template-sanitization` |
-| Provenance (SLSA) | n/d explícito | sí, SLSA v1 + firmas vía OIDC GitHub (workflow `publish.yml`) |
-| Comunidad | Discord abierto, YouTube, X | GitHub Issues + Discussions (Discord no necesario) |
-| Marca registrada | BMad / BMAD-METHOD trademarks of BMad Code, LLC | sin restricción explícita más allá de MIT |
+Installing third-party software is not an implicit side effect of installing the SDLC harness.
 
-Lectura corta: BMAD lidera en amplitud ágil y comunidad (12+ personas, 34+ flujos, 5 módulos, Discord activo, Skills Architecture V6). SistemaMultiagente_SDLC lidera en governance + brownfield + SDD + validadores (15) + gates de calidad medidos con árbitro en CI + sistema de migración + readiness L1/L2/L3 + sanitización. Ambos pueden coexistir: BMAD orquesta; SistemaMultiagente_SDLC orquesta **y verifica**.
+---
+
+## Context and knowledge tools
+
+The project can integrate optional tools for different classes of context.
+
+### Graphify
+
+Semantic documentation knowledge graph.
+
+Used for:
+
+- onboarding;
+- architecture research;
+- documentation relationships;
+- semantic discovery.
+
+### CodeGraph
+
+Structural code graph.
+
+Used for:
+
+- symbol discovery;
+- call relationships;
+- dependency analysis;
+- structural navigation.
+
+### Headroom
+
+Optional context proxy for long-running agent sessions.
+
+### Obsidian
+
+Optional local knowledge/checkpoint storage.
+
+### Caveman
+
+Conversation-oriented token compression.
+
+### External skills
+
+Optional agent skills can be synchronized through the bootstrap process.
+
+The framework deliberately distinguishes between semantic context, structural code context and conversational context instead of using one tool for every query.
+
+---
+
+## Codex bridge
+
+If Codex is used as an execution environment, the repository provides a preflight mechanism.
+
+```powershell
+node scripts/codex-session-check.mjs
+```
+
+The purpose is to detect common environment/session problems before expensive agent work starts.
+
+The preflight does not print secrets or full account identifiers.
+
+See:
+
+```text
+AGENTS.md
+```
+
+for the repository-specific agent contract.
+
+---
+
+## BMAD relationship
+
+SistemaMultiagente_SDLC is not intended to claim that it replaces every agent orchestration framework.
+
+A useful distinction is:
+
+```text
+BMAD
+  ↓
+orchestration
+
+SistemaMultiagente_SDLC
+  ↓
+orchestration
++
+verification
++
+governance
++
+quality evidence
+```
+
+The projects can therefore coexist.
+
+The goal is not to compete on the number of agent personas or workflows.
+
+The goal is to provide a verifiable engineering boundary around agentic software development.
+
+---
+
+## Design principles
+
+The project is guided by several principles.
+
+### 1. Agents are not authorities
+
+An agent can propose and implement changes.
+
+It should not be the sole authority for deciding whether those changes are correct.
+
+### 2. Evidence beats claims
+
+A gate should consume measurable evidence rather than natural-language claims.
+
+### 3. Governance must be enforceable
+
+A governance rule that can be silently edited by the evaluated agent is not strong governance.
+
+### 4. Human approval remains meaningful
+
+Automation should reduce mechanical review work, not erase accountability.
+
+### 5. Brownfield is a first-class problem
+
+Existing repositories cannot safely be treated as blank scaffolds.
+
+### 6. Every important failure should become a regression
+
+Operational failures are inputs to the harness design.
+
+### 7. Security belongs inside the SDLC
+
+Security verification should participate in the same evidence and gate model as quality.
+
+### 8. Reproducibility matters
+
+The project should make it possible to compare different development strategies using observable measurements.
+
+---
 
 ## Roadmap
 
-v1.3.0:
+The roadmap focuses on making the harness increasingly useful as an OSS infrastructure layer for agentic development.
 
-- paridad bash para scripts críticos
-- `sdlc next`
-- scale adaptativo: bug, feature, epic, platform
-- extensiones de calibración
-- roundtable opt-in
-- sitio de documentación
-- matriz de instalación de regresión: agregar `macos-latest` (cobertura triple ubuntu + windows + macos)
-- bump `actions/checkout@v5` + `actions/setup-node@v5` con `node-version: 24`; deadline GitHub: Node 20 deprecated jun 2026, removido sep 2026
+Planned areas include:
 
-v2.0.0:
+- broader agent-runtime interoperability;
+- stronger security verification;
+- reproducible agent evaluations;
+- API-driven maintenance workflows;
+- improved brownfield adoption;
+- plugin APIs;
+- marketplace integration;
+- improved documentation;
+- internationalization;
+- contextual CLI help;
+- stronger evidence and benchmark reporting.
 
-- packs extensibles
-- API de plugins
-- registro marketplace
-- internacionalización en inglés
-- ayuda contextual interactiva
+The roadmap is intentionally subordinate to real maintenance findings: observed failures and consumer feedback should influence implementation priority.
 
-## Contribución
+---
 
-Leer `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` y `SECURITY.md`.
+## Contributing
 
-## Licencia
+Contributions are welcome.
+
+Before opening a change, read:
+
+- `CONTRIBUTING.md`
+- `CODE_OF_CONDUCT.md`
+- `SECURITY.md`
+- `AGENTS.md`
+
+For development:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm run validate
+pnpm test
+```
+
+Changes to governance, quality gates or security-sensitive paths should include appropriate regression coverage and evidence.
+
+---
+
+## Project philosophy
+
+The project is not an attempt to prove that agents can replace software engineers.
+
+It explores a narrower and more practical question:
+
+> **What engineering infrastructure is necessary for teams to safely increase the amount of software work performed by agents?**
+
+The answer explored here is:
+
+```text
+Specification
+    +
+Governance
+    +
+Agent execution
+    +
+Deterministic evidence
+    +
+Security
+    +
+Independent verification
+    +
+Human authorization
+```
+
+The long-term objective is to make that model reusable across repositories, agents and development environments.
+
+---
+
+## License
 
 MIT.
